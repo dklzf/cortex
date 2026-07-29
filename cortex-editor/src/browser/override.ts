@@ -829,6 +829,20 @@ export class CSSOverrideManager {
     }
   }
 
+  /** True when ANY override is applied anywhere on the page — user edits or
+   *  forced-state declarations, both of which land in the same `<style>`.
+   *
+   *  Callers use this to decide whether a plain `getComputedStyle` read can be
+   *  trusted as a SOURCE value: with zero overrides on the page, computed IS
+   *  source, so the detach/reattach read in `readSourceValue` (two forced style
+   *  recalcs) can be skipped. Deliberately page-wide rather than per-key — a
+   *  per-key check would miss an override on a PARENT leaking through an
+   *  inherited property (color, font-*), or a shorthand override
+   *  (`border-width`) leaking into a longhand read (`border-top-width`). */
+  hasAnyOverrides(): boolean {
+    return this.overrides.size > 0 || this.stateOverrides.size > 0
+  }
+
   /** Read the current override value for a source+property. Returns undefined if no override exists.
    *  Used by command creation to capture previousValue before applying a new edit. */
   get(source: string, property: string, pseudo?: '::before' | '::after'): string | undefined {

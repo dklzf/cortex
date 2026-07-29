@@ -332,9 +332,23 @@ export function Panel({
   const bodyRef = useRef<HTMLDivElement>(null)
   const prevElementRef = useRef<Element | null>(null)
 
-  // Tracks previous override values during a scrub gesture for undo command creation.
+  // Tracks the pre-gesture value per property during a scrub, under TWO distinct
+  // readings that used to be conflated into one string:
+  //
+  //   override — the UNDO TARGET. What `overrideManager.set` must restore to step
+  //     back exactly one gesture. This is the prior *override* when one exists,
+  //     so undo walks green → blue → red rather than jumping green → red.
+  //
+  //   baseline — the DIFF BASE, shipped as `PendingEdit.previousValue`. This must
+  //     be the TRUE SOURCE value, because the server resolves the Tailwind
+  //     old-token from it (staged-edits → edit-pipeline → rewriter). One string
+  //     serving both meant every chained edit recorded a staged intermediate the
+  //     file never contained: the rewriter looked for `text-blue-500` in a file
+  //     holding `text-red-500`, and `reconcile` compared live source against a
+  //     value that never existed, nagging the drift banner forever.
+  //
   // Key: source\0property\0pseudo (null-byte separated — source paths contain colons).
-  const scrubPreviousRef = useRef<Map<string, string>>(new Map())
+  const scrubPreviousRef = useRef<Map<string, { override: string; baseline: string }>>(new Map())
   // Tracks the last committed value per property to suppress phantom commits
   // from HMR re-render blur events (same value committed twice for the same property).
   const lastCommitValueRef = useRef<Map<string, string>>(new Map())
@@ -737,20 +751,33 @@ export function Panel({
 
     // Build PropertyChange[] from accumulated scrub previous values.
     // Filter out no-op changes where value didn't change.
+    //
+    // `PropertyChange.previousValue` carries the UNDO target. The DIFF BASE
+    // travels alongside in `baselineByKey` rather than widening PropertyChange,
+    // which `CompoundEditCommand` also consumes and has no diff-base semantics.
     const changes: PropertyChange[] = []
-    for (const [key, previousValue] of scrubPreviousRef.current) {
+    const baselineByKey = new Map<string, string>()
+    for (const [key, prev] of scrubPreviousRef.current) {
       const [s, p, ps] = key.split(SEP) as [string, string, string]
       const parsedPseudo = (ps || undefined) as '::before' | '::after' | undefined
       const currentValue = overrideManager.get(s, p, parsedPseudo) ?? ''
-      if (currentValue === previousValue) continue
+      // Compare against `override`, not `baseline`: this asks "did THIS gesture
+      // change anything", which is an override-space question. Comparing against
+      // baseline would swallow a legitimate re-edit back to the source value.
+      if (currentValue === prev.override) continue
       changes.push({
         source: s,
         property: p,
         value: currentValue,
-        previousValue,
+        previousValue: prev.override,
         pseudo: parsedPseudo,
       })
+      baselineByKey.set(key, prev.baseline)
     }
+
+    /** Rebuild a change's scrubPreviousRef key so its baseline can be looked up. */
+    const baselineFor = (c: PropertyChange): string =>
+      baselineByKey.get(`${c.source}${SEP}${c.property}${SEP}${c.pseudo ?? ''}`) ?? c.previousValue
 
     // Build PendingEdits up front. They are the single source of truth for both
     // (a) the initial buffer.append loop below, and (b) the PropertyEditCommand's
@@ -804,7 +831,8 @@ export function Panel({
             source: elSource,
             property: c.property,
             value: c.value,
-            previousValue: c.previousValue,
+            // The DIFF BASE, not the undo target — see scrubPreviousRef.
+            previousValue: baselineFor(c),
             // Use the change's own pseudo, not the closure-scoped `activePseudo`.
             pseudo: c.pseudo,
             scope: isShared ? 'all' : 'instance',
@@ -825,7 +853,8 @@ export function Panel({
         source,
         property: c.property,
         value: c.value,
-        previousValue: c.previousValue,
+        // The DIFF BASE, not the undo target — see scrubPreviousRef.
+        previousValue: baselineFor(c),
         // Use the change's own pseudo, not the closure-scoped `activePseudo`.
         // They're equal today via a useEffect that clears scrubPreviousRef on
         // pseudo change, but that invariant is action-at-a-distance — local
@@ -921,6 +950,37 @@ export function Panel({
     }
   }, [stageEditRef, buffer])
 
+  /** Capture the pre-gesture `{ override, baseline }` pair for one target, once
+   *  per key per gesture. ONE implementation deliberately shared by the primary
+   *  target and every fan-out target — these were twin inline blocks, and twins
+   *  that must stay identical eventually don't (Post-Fix Discipline rule 3).
+   *
+   *  `baseline` skips the expensive detached read when the page carries no
+   *  overrides at all, because computed IS source in that case. It does NOT
+   *  gate on "an override exists for THIS key" — that check misses a parent's
+   *  inherited-property override and shorthand-to-longhand leakage, which is
+   *  how a polluted baseline reaches a first-touch capture with no edit chain
+   *  at all (e.g. after a classOp whose server write failed). */
+  const capturePrevious = useCallback((
+    el: Element,
+    elSource: string,
+    property: string,
+    pseudo: '::before' | '::after' | undefined,
+    key: string,
+  ): void => {
+    if (scrubPreviousRef.current.has(key)) return
+    const existing = overrideManager.get(elSource, property, pseudo)
+    const override = existing
+      ?? (getComputedStyle(el, pseudo ?? null).getPropertyValue(property).trim() || '')
+    // No overrides anywhere ⟹ `existing` was undefined ⟹ `override` is the
+    // computed value, which is the source value. Reuse it rather than paying
+    // for a second read.
+    const baseline = overrideManager.hasAnyOverrides()
+      ? overrideManager.readSourceValue(el, property, pseudo ?? null).trim()
+      : override
+    scrubPreviousRef.current.set(key, { override, baseline })
+  }, [overrideManager])
+
   // Scrub phase: captures previousValue on first touch per property, applies override.
   // On commit (commitRender=true): delegates to commitScrub() for atomic command creation.
   const applyOverride = useCallback((property: string, value: string, commitRender: boolean) => {
@@ -953,19 +1013,11 @@ export function Panel({
       }
     }
 
-    // Capture previousValue BEFORE set() — only on first touch per property per gesture.
-    // If an override already exists, use that. Otherwise capture the computed style
-    // so undo can set it as a temporary override even after HMR has removed the
-    // original override and the CSS file has the new value.
-    if (!scrubPreviousRef.current.has(prevKey)) {
-      const existing = overrideManager.get(source, property, pseudo)
-      if (existing !== undefined) {
-        scrubPreviousRef.current.set(prevKey, existing)
-      } else {
-        const computed = getComputedStyle(element, pseudo ?? null).getPropertyValue(property).trim()
-        scrubPreviousRef.current.set(prevKey, computed || '')
-      }
-    }
+    // Capture BEFORE set() — only on first touch per property per gesture.
+    // `override` (undo target) prefers the existing override so undo steps back
+    // one gesture even after HMR removed the original override; `baseline`
+    // (diff base) is always the true source. See scrubPreviousRef's declaration.
+    capturePrevious(element, source, property, pseudo, prevKey)
 
     // Fan-out targets for this gesture, computed once per applyOverride call.
     // Multi-select alone: apply override to ALL selected elements.
@@ -1000,15 +1052,10 @@ export function Panel({
     for (const el of fanOutTargets) {
       const elSource = getElementEditTarget(el).source
       const elPrevKey = `${elSource}${SEP}${property}${SEP}${pseudo ?? ''}`
-      if (!scrubPreviousRef.current.has(elPrevKey)) {
-        const elExisting = overrideManager.get(elSource, property, pseudo)
-        if (elExisting !== undefined) {
-          scrubPreviousRef.current.set(elPrevKey, elExisting)
-        } else {
-          const computed = getComputedStyle(el, pseudo ?? null).getPropertyValue(property).trim()
-          scrubPreviousRef.current.set(elPrevKey, computed || '')
-        }
-      }
+      // Same helper as the primary capture above — `fanOutTargets` contains
+      // `element` in every branch, so this is usually a no-op re-visit, but
+      // sharing one implementation means the two can never drift apart.
+      capturePrevious(el, elSource, property, pseudo, elPrevKey)
       overrideManager.set(elSource, property, value, pseudo)
     }
 
@@ -1024,7 +1071,7 @@ export function Panel({
         })
       }
     }
-  }, [selectedElements, element, overrideManager, activePseudo, sharedInfo, editScope, commitScrub])
+  }, [selectedElements, element, overrideManager, activePseudo, sharedInfo, editScope, commitScrub, capturePrevious])
 
   const handleCommit = useCallback((c: SectionChange) => applyOverride(c.property, c.value, true), [applyOverride])
   const handleScrub = useCallback((c: SectionChange) => applyOverride(c.property, c.value, false), [applyOverride])

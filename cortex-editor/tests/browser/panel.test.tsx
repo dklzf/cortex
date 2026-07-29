@@ -108,6 +108,8 @@ describe('Panel', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
 
     const result = renderInShadow(
@@ -153,6 +155,8 @@ describe('Panel', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(),
       clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
     const commonProps = {
       overrideManager: overrideManager as any,
@@ -393,6 +397,8 @@ describe('Panel', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(),
       clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
     const result = renderInShadow(
       <Panel
@@ -444,6 +450,8 @@ describe('Panel — library detection wiring', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(), clearAll: vi.fn(),
       dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
 
     const container = document.createElement('div')
@@ -480,6 +488,8 @@ describe('Panel — library detection wiring', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(), clearAll: vi.fn(),
       dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
 
     const container = document.createElement('div')
@@ -524,6 +534,8 @@ describe('Panel — activeState + activePseudo + dimming', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
   }
 
@@ -797,6 +809,8 @@ describe('Panel — activeState + activePseudo + dimming', () => {
       const overrideManager = {
         set: vi.fn(), get: vi.fn(), remove: vi.fn(), clearAll: vi.fn(),
         dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
       }
 
       document.body.appendChild(container)
@@ -934,6 +948,8 @@ describe('Panel — hmrAppliedVersion (ZF0-1292)', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(),
       clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
 
     // Capture every getComputedStyle invocation since the spy is set.
@@ -1031,6 +1047,8 @@ describe('Panel — hmrAppliedVersion (ZF0-1292)', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(),
       clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
@@ -1103,6 +1121,8 @@ describe('Panel mixedProperties (ZF0-1195 / T3)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
   }
 
@@ -1245,6 +1265,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
 
     const bufferRef: { current: StagingBufferHandle | null } = { current: null }
@@ -1315,6 +1337,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
 
     const bufferRef2: { current: StagingBufferHandle | null } = { current: null }
@@ -1399,6 +1423,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
     const commandStack = new CommandStack()
 
@@ -1508,6 +1534,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
       trackPendingEdit: vi.fn(),
     }
     const channel = createMockChannel()
@@ -1573,6 +1601,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
       trackPendingEdit: vi.fn(),
     }
     const channel = createMockChannel()
@@ -1649,6 +1679,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
       trackPendingEdit: vi.fn(),
     }
     const channel = createMockChannel()
@@ -1715,6 +1747,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
       trackPendingEdit: vi.fn(),
     }
     const channel = createMockChannel()
@@ -1807,6 +1841,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
 
     const discardBufRef: { current: StagingBufferHandle | null } = { current: null }
@@ -1863,6 +1899,8 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
 
     const reason = "couldn't find pattern at App.tsx:31"
@@ -1899,7 +1937,7 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
 describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
   // Shared override-manager factory that actually stores values so commitScrub
   // can distinguish changed from unchanged properties.
-  function createTrackingOverrideManager() {
+  function createTrackingOverrideManager(sourceValue = '') {
     const store = new Map<string, string>()
     return {
       set: vi.fn((src: string, prop: string, val: string, _pseudo?: string) => {
@@ -1912,20 +1950,26 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      // Mirrors the real manager: true once anything is staged. Panel uses this
+      // to decide whether a plain computed read is trustworthy as a baseline.
+      hasAnyOverrides: vi.fn(() => store.size > 0),
+      // Stands in for the override-bypassing read. Tests that care about the
+      // baseline override this via `sourceValue`.
+      readSourceValue: vi.fn(() => sourceValue),
       _store: store,
     }
   }
 
   // Install a getComputedStyle proxy that provides getPropertyValue on any
   // element (needed when applyOverride reads computed styles for previousValue).
-  function installGCSProxy(): () => void {
+  function installGCSProxy(values: Record<string, string> = {}): () => void {
     const original = window.getComputedStyle
     window.getComputedStyle = ((el: Element, pseudo?: string | null) => {
       const base = original.call(window, el, pseudo)
       return new Proxy(base, {
         get(obj, prop) {
           if (prop === 'getPropertyValue') {
-            return (_p: string) => ''
+            return (p: string) => values[p] ?? ''
           }
           return (obj as any)[prop]
         },
@@ -2143,6 +2187,98 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
     el2.remove()
   })
 
+  // ONE root cause, three symptoms. `previousValue` served as BOTH the undo
+  // target (the prior override, so undo steps back one gesture) and the diff
+  // base shipped to the server (which must be the true source value). A second
+  // edit to the same property therefore recorded a staged intermediate the file
+  // never contained, and last-write-wins destroyed the prior intent with no
+  // record that it existed. No test anywhere did commit -> commit-same-property
+  // -> undo, which is why this survived.
+  //
+  // Built on commitEditRef, NOT triggerCommitScrub: the latter re-clicks the
+  // same segment on a second call and the phantom-recommit guard suppresses it.
+  describe('chained edits to one property', () => {
+    const SRC = 'src/Hero.tsx:14:5'
+
+    // Belt-and-braces: a mid-test throw skips the explicit cleanup, and a
+    // leaked [data-cortex-source] node is visible to the document-wide
+    // shared-source queries the sibling tests in this file rely on.
+    afterEach(() => {
+      for (const el of document.querySelectorAll(`[data-cortex-source="${SRC}"]`)) el.remove()
+    })
+
+    async function setupChain() {
+      const el = document.createElement('div')
+      el.setAttribute('data-cortex-source', SRC)
+      document.body.appendChild(el)
+
+      // "The file" says display: block. readSourceValue bypasses the override
+      // layer, so it must keep reporting block no matter what is staged on top.
+      const overrideManager = createTrackingOverrideManager('block')
+      const restoreGCS = installGCSProxy({ display: 'block' })
+      const commandStack = new CommandStack()
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+
+      const bufRef: { current: StagingBufferHandle | null } = { current: null }
+      const commitEditRef: { current: ((p: string, v: string) => Promise<void>) | null } = { current: null }
+
+      // act() so Panel's effects run — commitEditRef is assigned in a useEffect,
+      // and a bare render() leaves it null.
+      await act(async () => {
+        render(
+          <PanelWithRealBuffer
+            selectedElements={[el]}
+            overrideManager={overrideManager as any}
+            commandStack={commandStack}
+            commitEditRef={commitEditRef}
+            onClose={() => {}}
+            onSelectElement={() => {}}
+            bufferRef={bufRef}
+            {...panelPositionProps}
+          />,
+          container,
+        )
+      })
+
+      return {
+        commandStack,
+        overrideManager,
+        list: () => bufRef.current!.list(),
+        commit: async (value: string) => {
+          await act(async () => { await commitEditRef.current!('display', value) })
+        },
+        step: async (fn: () => void) => {
+          await act(async () => { fn(); await Promise.resolve() })
+        },
+        cleanup: () => {
+          render(null, container)
+          container.remove()
+          restoreGCS()
+          el.remove()
+        },
+      }
+    }
+
+    it('a second edit records the true source baseline, not the staged intermediate', async () => {
+      const c = await setupChain()
+      await c.commit('flex')
+      await c.commit('grid')
+
+      const stored = c.list()
+      expect(stored).toHaveLength(1)
+      expect(stored[0]!.value).toBe('grid')
+      // Pre-fix: 'flex'. The server resolves the Tailwind old-token from this,
+      // so a staged intermediate means searching the file for a class it never
+      // held -> "Token '...' not found in className", a silent apply failure.
+      expect(stored[0]!.previousValue).toBe('block')
+
+      c.cleanup()
+    })
+
+
+  })
+
   it('AC3: multi-select + scope=all packs instanceSources per selected source', async () => {
     // Set up shared class: el1 and its sibling share the same CSS module selector.
     // el2 is an independent element with its own class.
@@ -2356,6 +2492,8 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(),
       clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
@@ -2411,6 +2549,8 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(),
       clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
@@ -2454,6 +2594,8 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     const overrideManager = {
       set: vi.fn(), get: vi.fn(), remove: vi.fn(),
       clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
+ hasAnyOverrides: vi.fn(() => false),
+ readSourceValue: vi.fn(() => ''),
     }
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
@@ -2520,6 +2662,8 @@ describe('PanelProps.buffer', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
 
     const { cleanup } = renderInShadow(
@@ -2561,6 +2705,8 @@ describe('PanelProps.buffer', () => {
       clearAll: vi.fn(),
       dispose: vi.fn(),
       flush: vi.fn(),
+      hasAnyOverrides: vi.fn(() => false),
+      readSourceValue: vi.fn(() => ''),
     }
 
     const { cleanup } = renderInShadow(
