@@ -1,0 +1,29 @@
+cortex-editor/tests/browser/selection.test.ts
+  s_8a55f585a15622::t_20e376b8acad13 315-435
+cortex-editor/tests/browser/cortex-app.test.tsx
+  s_8a55f585a15622::t_20e376b8acad13 1854-1901
+cortex-editor/src/browser/selection.ts
+  s_8a55f585a15622::t_20e376b8acad13 34-35,40,42-48,51-53,55-64,69,71
+cortex-editor/tests/e2e/fixtures/basic.html
+  s_8a55f585a15622::t_20e376b8acad13 65-105
+cortex-editor/tests/e2e/helpers/fixture-server.ts
+  s_8a55f585a15622::t_20e376b8acad13 48-58
+cortex-editor/tests/e2e/svg-selection.spec.ts
+  s_8a55f585a15622::t_f136a366c9ba33 1-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "c80fc28ba6167d8bc1d37d8816645074c3cab7db",
+  "prompts": {},
+  "sessions": {
+    "s_8a55f585a15622": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74142dea-afb2-4fcd-848d-bf1a75541a59",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
