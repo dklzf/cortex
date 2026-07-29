@@ -1851,6 +1851,54 @@ describe('CortexApp — HMR file-list filter (ZF0-1292 follow-up)', () => {
     }, { timeout: WAIT_FOR_COMMIT_MS })
   })
 
+
+  // The highest-value test in the SVG-selection fix: it is the only one that
+  // proves the fix OUTLIVES A SAVE. Pre-fix, findSourceMatches filtered to
+  // HTMLElement, so captureSelectionMetadata recorded index === -1 for an SVG,
+  // reResolveSelection returned null, and CortexApp swapped the selection to
+  // null — unmounting the Panel on the next hot reload. A fix to the click
+  // path alone would have looked correct and then evaporated.
+  it('keeps an SVG selection alive across an hmr-applied cycle', async () => {
+    const sh = createShadowHost()
+    root = sh.root
+    shadow = sh.shadow
+    cleanupHost = sh.cleanup
+    const channel = createMockChannel()
+    render(<CortexApp channel={channel} shadowRoot={shadow} />, root)
+    await new Promise(r => setTimeout(r, 10))
+    channel._simulateMessage({ type: 'cortex' } as any)
+    await new Promise(r => setTimeout(r, 10))
+
+    const { _getCallbacks } = await import('../../src/browser/selection.js') as unknown as {
+      _getCallbacks: () => { selectCb: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void }
+    }
+    const { selectCb } = _getCallbacks()
+
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    icon.setAttribute('data-cortex-source', 'src/Icon.tsx:3:5')
+    icon.appendChild(document.createTextNode('icon'))
+    document.body.appendChild(icon)
+    mockGetBoundingClientRect(icon, { top: 50, left: 50, width: 24, height: 24 })
+
+    selectCb([icon], 'replace')
+    await vi.waitFor(() => {
+      expect(root.querySelector('.cortex-panel')).not.toBeNull()
+    }, { timeout: WAIT_FOR_COMMIT_MS })
+
+    channel._simulateMessage({ type: 'hmr-applied', files: ['src/Icon.tsx'] })
+    // Past the gated fan-out's longest scheduler (250ms + drift), same bound
+    // the sibling tests in this describe use.
+    await new Promise(r => setTimeout(r, 260))
+
+    expect(vi.mocked(reResolveSelection)).toHaveBeenCalled()
+    expect(vi.mocked(reResolveSelection).mock.results.some(r => r.value === icon)).toBe(true)
+    // Pre-fix: the Panel is gone — reResolveSelection returned null and
+    // CortexApp cleared the selection.
+    expect(root.querySelector('.cortex-panel')).not.toBeNull()
+
+    icon.remove()
+  })
+
 })
 
 // ── Task 12 — mcp-session-hello / Change 6 ────────────────────────────────

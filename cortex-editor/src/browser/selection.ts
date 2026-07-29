@@ -31,25 +31,44 @@ export function isOwnUI(event: Event): boolean {
  */
 export function initSelection(
   _shadowRoot: ShadowRoot,
-  onHover: (el: HTMLElement | null) => void,
-  onSelect: (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void,
+  onHover: (el: Element | null) => void,
+  onSelect: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void,
 ): SelectionHandle {
   let designMode = true
   let interceptClicks = true
 
-  function getTargetElement(event: MouseEvent): HTMLElement | null {
+  function getTargetElement(event: MouseEvent): Element | null {
     const el = document.elementFromPoint(event.clientX, event.clientY)
-    if (!el || !(el instanceof HTMLElement)) return null
+    // `Element`, not `HTMLElement`: `SVGElement extends Element`, so an
+    // `instanceof HTMLElement` guard rejected every SVG target. `handleClick`
+    // reads null as "backdrop" and clears the selection — so clicking an icon
+    // wiped your selection instead of selecting the icon. Inline SVG in the
+    // user's own JSX carries `data-cortex-source` (source-transform annotates
+    // every lowercase tag), so these are real, addressable targets.
+    if (!el) return null
     if (el.hasAttribute('data-cortex-host') || el.hasAttribute('data-cortex-root')) return null
     if (el === document.documentElement || el === document.body) return null
+    // Guards run on the ORIGINAL node, before SVG normalization below — an SVG's
+    // own <style>/<title>/<script> children are in NON_VISUAL_TAGS, and
+    // normalizing first would promote them to the enclosing icon and select it.
     if (isNonEditable(el)) return null
+    // Clicking a multi-path icon means "the icon", not "that one path". SVG
+    // shape hit-testing is sub-pixel: the same visual click lands on <path> or
+    // on the SVG viewport depending on where the geometry falls, so without
+    // normalization the selection is non-deterministic. It also keeps the
+    // overlay on the icon's box rather than one stroke's bbox, keeps box-model
+    // overrides effective, and preserves `class="lucide lucide-check"` as the
+    // agent-resolve hint. Inner shapes stay reachable via Panel child-navigation
+    // and the Layer Tree. `closest` includes self. HTML inside <foreignObject>
+    // is not an SVGElement, so it is deliberately left alone.
+    if (el instanceof SVGElement) return el.closest('svg') ?? el
     return el
   }
 
   // Sentinel value distinct from null — ensures first null dispatch is not deduped
-  let lastHovered: HTMLElement | null | undefined = undefined
+  let lastHovered: Element | null | undefined = undefined
 
-  function updateHover(el: HTMLElement | null): void {
+  function updateHover(el: Element | null): void {
     if (el === lastHovered) return
     lastHovered = el
     onHover(el)
