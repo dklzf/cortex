@@ -1,0 +1,21 @@
+cortex-editor/src/browser/hooks/useEditStagingBuffer.ts
+  s_8a55f585a15622::t_9b5e62cb0ead95 93-96,99
+cortex-editor/src/browser/override.ts
+  s_8a55f585a15622::t_bd8ac331037010 517-520,522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "4be8956daf4e221be8d65215954cea3f09dd10c1",
+  "prompts": {},
+  "sessions": {
+    "s_8a55f585a15622": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74142dea-afb2-4fcd-848d-bf1a75541a59",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
