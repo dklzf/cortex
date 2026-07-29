@@ -3,8 +3,11 @@ export interface SharedClassInfo {
   selector: string
   /** Path to the CSS module file */
   cssFilePath: string
-  /** All elements in the DOM that share this selector */
-  elements: HTMLElement[]
+  /** All elements in the DOM that share this selector. `Element[]`, not
+   *  `HTMLElement[]` — source-transform annotates SVG too, and the
+   *  `querySelectorAll<HTMLElement>` generic this replaced was a runtime lie:
+   *  SVG matches were already being returned and counted. */
+  elements: Element[]
   /** Count of elements sharing this selector */
   count: number
 }
@@ -41,7 +44,7 @@ export function parseCssMappingBrowser(raw: string): { cssFilePath: string; sele
  * Returns info about the most-shared selector, or null if no sharing detected
  * (i.e., all selectors appear on at most 1 element).
  */
-export function detectSharedClasses(element: HTMLElement): SharedClassInfo | null {
+export function detectSharedClasses(element: Element): SharedClassInfo | null {
   const raw = element.getAttribute('data-cortex-css')
   if (!raw) return null
 
@@ -49,12 +52,12 @@ export function detectSharedClasses(element: HTMLElement): SharedClassInfo | nul
   if (!parsed) return null
 
   // Query all annotated elements once
-  const allAnnotated = document.querySelectorAll<HTMLElement>('[data-cortex-css]')
+  const allAnnotated = document.querySelectorAll('[data-cortex-css]')
 
   let best: SharedClassInfo | null = null
 
   for (const selector of parsed.selectors) {
-    const matches: HTMLElement[] = []
+    const matches: Element[] = []
 
     for (const candidate of allAnnotated) {
       const candidateRaw = candidate.getAttribute('data-cortex-css')

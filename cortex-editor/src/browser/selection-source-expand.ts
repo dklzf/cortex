@@ -20,10 +20,10 @@
  * fan-out anyway, but the expander preserves them for selection-overlay
  * rendering and the `setSelection([], 'replace')` clear path.
  */
-export function expandSharedSource(elements: HTMLElement[]): HTMLElement[] {
+export function expandSharedSource(elements: Element[]): Element[] {
   if (elements.length === 0) return elements
-  const result: HTMLElement[] = []
-  const seen = new Set<HTMLElement>()
+  const result: Element[] = []
+  const seen = new Set<Element>()
   const seenSources = new Set<string>()
   for (const el of elements) {
     if (seen.has(el)) continue
@@ -47,9 +47,11 @@ export function expandSharedSource(elements: HTMLElement[]): HTMLElement[] {
     } catch {
       escaped = source.replace(/(["\\])/g, '\\$1')
     }
-    let matches: NodeListOf<HTMLElement>
+    // No `<HTMLElement>` generic: it was a compile-time lie. SVG siblings
+    // sharing a source already flowed through here at runtime.
+    let matches: NodeListOf<Element>
     try {
-      matches = document.querySelectorAll<HTMLElement>(`[data-cortex-source="${escaped}"]`)
+      matches = document.querySelectorAll(`[data-cortex-source="${escaped}"]`)
     } catch {
       // Malformed selector despite escape — clicked element already pushed above.
       continue

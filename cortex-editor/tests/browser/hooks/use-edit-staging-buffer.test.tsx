@@ -513,6 +513,35 @@ describe('useEditStagingBuffer', () => {
 
     setItemSpy.mockRestore()
   })
+
+  it('reconcile resolves an intent whose source is on an <svg>', async () => {
+    const { result, unmount } = renderHook(() => useEditStagingBuffer())
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('data-cortex-source', 'src/Icon.tsx:3:5')
+    svg.style.setProperty('color', 'blue')
+    document.body.appendChild(svg)
+
+    await act(() => {
+      result.current.append(makeEdit({
+        intentId: 'svg-intent',
+        source: 'src/Icon.tsx:3:5',
+        property: 'color',
+        previousValue: 'blue',
+      }))
+    })
+
+    const { divergent } = result.current.reconcile(['src/Icon.tsx'])
+    // Pre-fix: [svg-intent]. The source->element index was built with an
+    // HTMLElement-filtered walk, so the <svg> was never indexed, the lookup
+    // missed, and the `!el` branch reported a live element as
+    // "deleted / file refactored" on every HMR touching that file.
+    expect(divergent).toHaveLength(0)
+
+    svg.remove()
+    unmount()
+  })
+
 })
 
 describe('useEditStagingBuffer — sync emitter integration', () => {

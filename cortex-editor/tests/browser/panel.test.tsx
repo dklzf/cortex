@@ -289,6 +289,27 @@ describe('Panel', () => {
     expect(onSelectElement).toHaveBeenCalledWith(child)
   })
 
+  // Fails on main today with no type widening at all: `hasChildren` counts
+  // element.children unfiltered (so the button renders ENABLED), while
+  // handleSelectChild filtered the first child to HTMLElement (so clicking it
+  // did nothing). A div whose only child is an icon had a dead button.
+  it('select-child navigates into an SVG first child', () => {
+    const target = document.createElement('div')
+    target.setAttribute('data-cortex-source', 'src/Hero.tsx:14:5')
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    target.appendChild(icon)
+    document.body.appendChild(target)
+
+    const { root, onSelectElement } = setup(target)
+    const childBtn = root.querySelector('[data-group="elements"] [data-action="child"]') as HTMLButtonElement
+
+    expect(childBtn.disabled).toBe(false)
+    childBtn.click()
+    expect(onSelectElement).toHaveBeenCalledWith(icon) // pre-fix: never called
+
+    target.remove()
+  })
+
   it('enables the hover overlay toggle when a handler is present and exposes pressed state', () => {
     const onToggleHover = vi.fn()
     const { root } = setup(undefined, { hoverEnabled: false, onToggleHover })

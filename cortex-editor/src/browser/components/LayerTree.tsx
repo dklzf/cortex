@@ -4,7 +4,7 @@ import { getTreeLabel } from '../label.js'
 import { ChevronRight } from './icons.js'
 
 export interface TreeNode {
-  element: HTMLElement
+  element: Element
   label: string
   depth: number
   selected: boolean
@@ -18,44 +18,44 @@ export interface TreeNode {
  *
  *  Complexity: O(depth * max_siblings) — only visits nodes on the ancestor path
  *  and their siblings, never the full DOM tree. */
-export function buildScopedTree(element: HTMLElement | null): TreeNode | null {
+export function buildScopedTree(element: Element | null): TreeNode | null {
   if (!element) return null
   if (!element.isConnected || !document.body.contains(element)) return null
 
   // Walk from element up to body, collecting the ancestor chain (excluding body).
   // ancestors[0] is a direct child of body, ancestors[last] is the selected element.
-  const ancestors: HTMLElement[] = []
-  let current: HTMLElement | null = element
+  const ancestors: Element[] = []
+  let current: Element | null = element
   while (current && current !== document.body) {
     ancestors.unshift(current)
     current = current.parentElement
   }
 
-  function leafNode(c: HTMLElement, depth: number): TreeNode {
-    const childCount = Array.from(c.children).filter(ch => ch instanceof HTMLElement).length
+  function leafNode(c: Element, depth: number): TreeNode {
+    // No HTMLElement filter: it was type plumbing, not intent. It hid SVG
+    // children from the tree entirely while `hasChildren` elsewhere counted
+    // them — an expanded row with nothing under it.
+    const childCount = c.children.length
     return { element: c, label: getTreeLabel(c), depth, selected: false, expanded: false, hasChildren: childCount > 0, children: [] }
   }
 
-  function buildNode(el: HTMLElement, depth: number, isOnPath: boolean): TreeNode {
+  function buildNode(el: Element, depth: number, isOnPath: boolean): TreeNode {
     const isSelected = el === element
     // The ancestor at this depth in the chain (depth 0 = direct child of body)
-    const pathChild: HTMLElement | undefined = ancestors[depth]
+    const pathChild: Element | undefined = ancestors[depth]
 
     let children: TreeNode[] = []
     if (isSelected) {
       // Selected element: show direct children as leaf nodes
-      children = Array.from(el.children)
-        .filter((c): c is HTMLElement => c instanceof HTMLElement)
-        .map(c => leafNode(c, depth + 1))
+      children = Array.from(el.children).map(c => leafNode(c, depth + 1))
     } else if (isOnPath && pathChild) {
       // Ancestor on the path: show all element children at this level,
       // recurse into the one that's on the ancestor path
       children = Array.from(el.children)
-        .filter((c): c is HTMLElement => c instanceof HTMLElement)
         .map(c => c === pathChild ? buildNode(c, depth + 1, true) : leafNode(c, depth + 1))
     }
 
-    const childCount = Array.from(el.children).filter(c => c instanceof HTMLElement).length
+    const childCount = el.children.length
     return {
       element: el,
       label: getTreeLabel(el),
@@ -71,8 +71,8 @@ export function buildScopedTree(element: HTMLElement | null): TreeNode | null {
 }
 
 interface LayerTreeProps {
-  element: HTMLElement | null
-  onSelectElement: (el: HTMLElement, ev?: MouseEvent) => void
+  element: Element | null
+  onSelectElement: (el: Element, ev?: MouseEvent) => void
   height: number
   /** Counter that bumps on every HMR cycle. Forces `buildScopedTree` to
    *  rebuild when the selected element's DOM node is preserved but its
@@ -81,7 +81,7 @@ interface LayerTreeProps {
   hmrAppliedVersion?: number
 }
 
-function TreeNodeRow({ node, onSelectElement }: { node: TreeNode; onSelectElement: (el: HTMLElement, ev?: MouseEvent) => void }): JSX.Element {
+function TreeNodeRow({ node, onSelectElement }: { node: TreeNode; onSelectElement: (el: Element, ev?: MouseEvent) => void }): JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
   const hasChildren = node.hasChildren
   const showChildren = node.children.length > 0 && node.expanded && !collapsed

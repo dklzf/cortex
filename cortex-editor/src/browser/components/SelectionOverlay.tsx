@@ -6,7 +6,7 @@ import { onOverrideChange } from '../override-bus.js'
 import type { StateDeclarations, InteractionState } from '../state-detector.js'
 
 export interface SelectionOverlayProps {
-  element: HTMLElement | null
+  element: Element | null
   availableStates?: StateDeclarations
   activeState?: InteractionState
   onStateChange?: (state: InteractionState) => void

@@ -31,7 +31,7 @@ import { useDrag } from '../hooks/useDrag.js'
 import { useSnapToEdge } from '../hooks/useSnapToEdge.js'
 import { useCanvasZoom } from '../hooks/useCanvasZoom.js'
 import { useOutsideDismiss } from '../hooks/useOutsideDismiss.js'
-import { captureSelectionMetadata, reResolveSelection, shouldRefreshOnHMR, deepQuerySelectorAll } from '../selection-metadata.js'
+import { captureSelectionMetadata, reResolveSelection, shouldRefreshOnHMR, deepQueryAllElements } from '../selection-metadata.js'
 import type { SelectionMetadata } from '../selection-metadata.js'
 import { dismissTopmostPopover, hasOpenPopover } from '../popover-stack.js'
 import { markPageColorChips } from '../page-color-chips.js'
@@ -71,8 +71,8 @@ function isCortexHostMutation(record: MutationRecord): boolean {
  * disabled — preserved for future re-enablement.
  */
 export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps): JSX.Element | null {
-  const [hoveredElement, setHoveredElement] = useState<HTMLElement | null>(null)
-  const [selectedElements, setSelectedElementsState] = useState<HTMLElement[]>([])
+  const [hoveredElement, setHoveredElement] = useState<Element | null>(null)
+  const [selectedElements, setSelectedElementsState] = useState<Element[]>([])
   // Back-compat alias — primaryElement for all CSS parsing and existing callsites (ZF0-1195).
   const selectedElement = selectedElements[0] ?? null
   // Monotonic counter bumped on every `hmr-applied` message (ZF0-1292).
@@ -162,7 +162,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
 
   const [active, setActive] = useState(initialActive ?? false)
   const selectionRef = useRef<SelectionHandle | null>(null)
-  const selectedElementRef = useRef<HTMLElement | null>(null)
+  const selectedElementRef = useRef<Element | null>(null)
   selectedElementRef.current = selectedElement
   // Metadata captured at selection time — survives HMR node replacement
   // and drives the smart-fallback re-resolution (ZF0-1292 architecture
@@ -311,7 +311,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   // editing any one of them affects all N. Expanding selection up-front means
   // the UI shows the user the full set their edit will affect, instead of
   // letting them pick a subset that the override layer cannot honor.
-  const setSelection = useCallback((elements: HTMLElement[], action: 'replace' | 'add' | 'toggle' = 'replace'): void => {
+  const setSelection = useCallback((elements: Element[], action: 'replace' | 'add' | 'toggle' = 'replace'): void => {
     const expanded = expandSharedSource(elements)
     setSelectedElementsState(prev => {
       const next = applySelectionUpdate(prev, expanded, action)
@@ -324,7 +324,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
 
   // Legacy-compat shim — single element or null → setSelection([], 'replace') or setSelection([el], 'replace').
   // Used by the test bridge, HMR re-resolver, and escape/exit paths that set null.
-  const setSelectionWithMetadata = useCallback((el: HTMLElement | null): void => {
+  const setSelectionWithMetadata = useCallback((el: Element | null): void => {
     setSelection(el ? [el] : [], 'replace')
   }, [setSelection])
 
@@ -733,7 +733,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       // Build source → element index once (O(DOM)) to avoid O(intents × DOM) fan-out.
       // Same first-seen-wins + traversal-order semantics as buffer.reconcile internals.
       const elBySource = new Map<string, Element>()
-      for (const el of deepQuerySelectorAll('[data-cortex-source]')) {
+      for (const el of deepQueryAllElements('[data-cortex-source]')) {
         const src = el.getAttribute('data-cortex-source')
         if (src !== null && !elBySource.has(src)) elBySource.set(src, el)
       }
@@ -1196,7 +1196,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   }, [channel])
 
   const handleSelectElement = useCallback(
-    (el: HTMLElement | null) => setSelectionWithMetadata(el),
+    (el: Element | null) => setSelectionWithMetadata(el),
     [setSelectionWithMetadata],
   )
   const handleToggleHover = useCallback(() => setHoverEnabled(v => !v), [])

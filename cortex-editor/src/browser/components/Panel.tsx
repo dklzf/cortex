@@ -105,7 +105,7 @@ function pendingEditTargetFields(target: ElementEditTarget): Partial<PendingEdit
   }
 }
 
-function editSourcesForElements(elements: readonly HTMLElement[]): string[] {
+function editSourcesForElements(elements: readonly Element[]): string[] {
   return elements.map(el => getElementEditTarget(el).source)
 }
 
@@ -121,7 +121,7 @@ function ensureBlastRadiusStyle(): void {
 let highlightFrame = 0
 let clearFrame = 0
 
-function highlightSharedElements(info: SharedClassInfo | SharedSourceInfo, selected: HTMLElement | null): void {
+function highlightSharedElements(info: SharedClassInfo | SharedSourceInfo, selected: Element | null): void {
   ensureBlastRadiusStyle()
   cancelAnimationFrame(clearFrame)
   cancelAnimationFrame(highlightFrame)
@@ -188,11 +188,11 @@ export function hasTypographyContent(element: Element): boolean {
 export interface PanelProps {
   /** Selected elements; `selectedElements[0]` is the primary for all CSS parsing.
    *  Empty array means no selection. (ZF0-1195 / T3) */
-  selectedElements: HTMLElement[]
+  selectedElements: Element[]
   overrideManager: CSSOverrideManager
   onClose: () => void
-  onSelectElement: (el: HTMLElement | null) => void
-  onSelectElements?: (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void
+  onSelectElement: (el: Element | null) => void
+  onSelectElements?: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void
   swatches?: string[]
   /** Design-system text-component bundles (size + line-height + letter-spacing + weight).
    *  Resolved once per dev-server lifetime; `undefined` = not yet received; `[]` = none defined. */
@@ -330,7 +330,7 @@ export function Panel({
   // ALL hooks first — no conditional returns before hooks
   const [isEntering, setIsEntering] = useState(true)
   const bodyRef = useRef<HTMLDivElement>(null)
-  const prevElementRef = useRef<HTMLElement | null>(null)
+  const prevElementRef = useRef<Element | null>(null)
 
   // Tracks previous override values during a scrub gesture for undo command creation.
   // Key: source\0property\0pseudo (null-byte separated — source paths contain colons).
@@ -975,11 +975,11 @@ export function Panel({
     //   the live preview misses what `commitScrub`'s instanceSources will dispatch
     //   to the server, producing preview/apply divergence.
     // Single-select + scope='instance': apply to the primary element only.
-    const fanOutTargets: HTMLElement[] = (() => {
+    const fanOutTargets: Element[] = (() => {
       const isMulti = selectedElements.length > 1
       const isAll = sharedInfo && editScope === 'all'
       if (isMulti && isAll) {
-        const seen = new Set<HTMLElement>()
+        const seen = new Set<Element>()
         for (const sel of selectedElements) {
           if (!seen.has(sel)) seen.add(sel)
           try {
@@ -1428,8 +1428,11 @@ export function Panel({
 
   const handleSelectChild = useCallback(() => {
     if (!element) return
+    // No HTMLElement guard: `hasChildren` below counts `element.children`
+    // unfiltered, so a div whose only child is an SVG icon rendered an ENABLED
+    // button that silently did nothing when clicked.
     const firstChild = element.children[0]
-    if (firstChild instanceof HTMLElement) {
+    if (firstChild) {
       onSelectElement(firstChild)
     }
   }, [element, onSelectElement])

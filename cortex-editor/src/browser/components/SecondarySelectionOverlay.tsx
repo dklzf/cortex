@@ -5,7 +5,7 @@ import { onOverrideChange } from '../override-bus.js'
 
 export interface SecondarySelectionOverlayProps {
   /** A non-primary selected element (selectedElements[i] for i >= 1). */
-  element: HTMLElement
+  element: Element
   overlaysVisible?: boolean
   /** HMR cycle counter — re-initializes RAF loop. */
   hmrAppliedVersion?: number

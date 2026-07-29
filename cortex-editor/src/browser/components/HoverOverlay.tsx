@@ -4,7 +4,7 @@ import { getLabel } from '../label.js'
 import { onTransformUpdate } from '../transform-bus.js'
 
 export interface HoverOverlayProps {
-  element: HTMLElement | null
+  element: Element | null
 }
 
 /**
@@ -17,7 +17,7 @@ export interface HoverOverlayProps {
  */
 export function HoverOverlay({ element }: HoverOverlayProps): JSX.Element | null {
   // Cache borderRadius keyed on element identity — avoids getComputedStyle per render
-  const cachedElementRef = useRef<HTMLElement | null>(null)
+  const cachedElementRef = useRef<Element | null>(null)
   const cachedBorderRadiusRef = useRef('0px')
 
   // Re-render on canvas transform updates so getBoundingClientRect stays fresh

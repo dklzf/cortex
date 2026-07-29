@@ -8,9 +8,6 @@
  * (shadow root) at selection time so we can re-resolve deterministically.
  */
 
-const isHTMLElement = (el: Element | null): el is HTMLElement =>
-  el instanceof HTMLElement
-
 /** Metadata captured at selection time. Must round-trip losslessly across
  *  HMR cycles — stored in a ref alongside the active selection. */
 export interface SelectionMetadata {
@@ -39,7 +36,7 @@ export interface SelectionMetadata {
  * Snapshot identity signals at the moment of selection. Must be called
  * while the element is still connected to the document/shadow tree.
  */
-export function captureSelectionMetadata(el: HTMLElement): SelectionMetadata {
+export function captureSelectionMetadata(el: Element): SelectionMetadata {
   const source = el.getAttribute('data-cortex-source')
   const contentHash = (el.textContent ?? '').trim()
   const inShadowRoot = el.getRootNode() instanceof ShadowRoot
@@ -59,12 +56,21 @@ export function captureSelectionMetadata(el: HTMLElement): SelectionMetadata {
  * the caller knows the element lived in a shadow tree AND the flat query
  * came up empty. Keeps capture/re-resolve in lock-step — a regression where
  * only one side runs the deep query would silently desync.
+ *
+ * `Element[]`, not `HTMLElement[]`: source-transform annotates every lowercase
+ * JSX tag (it filters on `/^[a-z]/` with no HTML allowlist), so `<svg>`,
+ * `<path>`, `<circle>` and friends in the user's own .jsx carry
+ * `data-cortex-source`. Filtering to `HTMLElement` made
+ * `captureSelectionMetadata` compute `index === -1` for an SVG selection, which
+ * made `reResolveSelection` return null on the next HMR cycle and silently
+ * cleared the user's selection — a fix to the click path alone would have
+ * evaporated on the first save.
  */
-function findSourceMatches(source: string, inShadowRoot: boolean): HTMLElement[] {
+function findSourceMatches(source: string, inShadowRoot: boolean): Element[] {
   try {
     const selector = `[data-cortex-source="${CSS.escape(source)}"]`
-    const flat = Array.from(document.querySelectorAll(selector)).filter(isHTMLElement)
-    return (flat.length === 0 && inShadowRoot) ? deepQuerySelectorAll(selector) : flat
+    const flat = Array.from(document.querySelectorAll(selector))
+    return (flat.length === 0 && inShadowRoot) ? deepQueryAllElements(selector) : flat
   } catch (err) {
     // CSS.escape spec-throws on unpaired surrogates; querySelectorAll throws
     // SyntaxError on malformed selectors. Treat as "no matches" so the caller
@@ -75,42 +81,22 @@ function findSourceMatches(source: string, inShadowRoot: boolean): HTMLElement[]
 }
 
 /**
- * Traverse open shadow roots recursively. Closed shadow roots are opaque
- * from outside and cannot be traversed — documented limitation.
+ * Traverse open shadow roots recursively, returning ALL matching elements
+ * regardless of namespace — SVG / MathML nodes that source-transform annotated
+ * are included, because every lowercase JSX tag gets `data-cortex-source`.
+ *
+ * There used to be an `HTMLElement`-filtered twin of this function. It was
+ * deleted: the filter was wrong at all four of its call sites (it under-counted
+ * shared sources, broke set/clear symmetry for highlights, dropped SVG-sourced
+ * intents in reconcile, and silently cleared SVG selections on HMR). Two
+ * functions differing only by a filter nobody wanted was the actual defect.
+ *
+ * Closed shadow roots are opaque from outside and cannot be traversed —
+ * documented limitation. `shadowRoot` is only non-null for `{mode: 'open'}`.
  *
  * Performance: walks every element under `root` looking for shadow hosts.
- * Only invoked as fallback when the top-level flat query returns zero AND
- * the selected element was originally in a shadow tree.
- */
-export function deepQuerySelectorAll(
-  selector: string,
-  root: Document | ShadowRoot = document,
-): HTMLElement[] {
-  const matches: HTMLElement[] = []
-  for (const el of root.querySelectorAll(selector)) {
-    if (isHTMLElement(el)) matches.push(el)
-  }
-  for (const el of root.querySelectorAll('*')) {
-    // `shadowRoot` is only non-null when the shadow was attached with
-    // `{mode: 'open'}`. Closed shadows are invisible from outside.
-    if (el.shadowRoot) {
-      matches.push(...deepQuerySelectorAll(selector, el.shadowRoot))
-    }
-  }
-  return matches
-}
-
-/**
- * Element-typed sibling of `deepQuerySelectorAll`. Returns ALL matching
- * elements without the `HTMLElement` filter — including SVG / MathML /
- * other namespaced elements that source-transform may have annotated.
- *
- * Used where attribute-set/clear symmetry matters across element types
- * (e.g., `clearHighlights` must clear what `highlightSharedElements` set,
- * even on SVG nodes), and where the detector counts must reflect the true
- * sibling set across loop-rendered SVG icons.
- *
- * Same shadow-root traversal semantics as `deepQuerySelectorAll`.
+ * On the re-resolution path this is a fallback only, invoked when the flat
+ * query returns zero AND the selected element was originally in a shadow tree.
  */
 export function deepQueryAllElements(
   selector: string,
@@ -140,7 +126,7 @@ export function deepQueryAllElements(
  * The content-search branch is gated on `meta.contentHash !== ''` because an
  * empty hash would false-match the first icon-only element in the list.
  */
-export function reResolveSelection(meta: SelectionMetadata): HTMLElement | null {
+export function reResolveSelection(meta: SelectionMetadata): Element | null {
   if (!meta.source) return null
 
   const matches = findSourceMatches(meta.source, meta.inShadowRoot)
@@ -184,7 +170,7 @@ export function reResolveSelection(meta: SelectionMetadata): HTMLElement | null 
  *  otherwise delegates to hmrFilesAffectElement. */
 export function shouldRefreshOnHMR(
   files: string[] | undefined,
-  element: HTMLElement | null,
+  element: Element | null,
 ): boolean {
   if (!element) return false
   if (!files || files.length === 0) return true
@@ -236,7 +222,7 @@ const DEFAULT_ANCESTOR_DEPTH = 20
  */
 export function hmrFilesAffectElement(
   files: string[],
-  element: HTMLElement,
+  element: Element,
   maxDepth: number = DEFAULT_ANCESTOR_DEPTH,
 ): boolean {
   // Normalize paths FIRST so classification (CSS_EXT, VIRTUAL_MODULE) and
@@ -262,7 +248,7 @@ export function hmrFilesAffectElement(
   // shadow-hosted selections still pick up ancestor source-file changes (e.g.
   // a web-component host app where cortex is selecting elements inside the
   // light-tree projection of a shadow component).
-  let current: HTMLElement | null = element
+  let current: Element | null = element
   let depth = 0
   while (current && depth < maxDepth) {
     const src = current.getAttribute('data-cortex-source')
@@ -270,12 +256,16 @@ export function hmrFilesAffectElement(
       const file = stripLineCol(src)
       if (file && normalizedFiles.has(file)) return true
     }
-    const parentEl: HTMLElement | null = current.parentElement
+    // `parentElement` is typed `HTMLElement | null` by lib.dom, which is a lie
+    // inside namespaced trees — a <path>'s parent is an SVGElement.
+    const parentEl: Element | null = current.parentElement
     if (parentEl) {
       current = parentEl
     } else {
       const root = current.getRootNode()
-      current = root instanceof ShadowRoot ? (root.host as HTMLElement) : null
+      // `ShadowRoot.host` is already `Element` — the cast that used to be here
+      // was narrowing it to a lie.
+      current = root instanceof ShadowRoot ? root.host : null
     }
     depth++
   }
