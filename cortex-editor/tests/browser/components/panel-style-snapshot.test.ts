@@ -454,6 +454,33 @@ describe('SVG geometry dimming', () => {
     path.remove()
   })
 
+  it.each(['rect', 'image', 'use', 'foreignObject'])(
+    'does NOT dim width/height on <%s>, which honours CSS sizing per SVG2',
+    (tag) => {
+      const el = document.createElementNS(SVG_NS, tag)
+      document.body.appendChild(el)
+
+      const { dimmedProperties } = computePanelStyleSnapshot({ ...base, element: el })
+
+      // Pre-fix: true — dimming a control that actually works, the dead-control
+      // bug inverted. These are SVG2 geometry properties.
+      expect(dimmedProperties?.has('width') ?? false).toBe(false)
+      expect(dimmedProperties?.has('height') ?? false).toBe(false)
+      // The box-model half is still inert on them.
+      expect(dimmedProperties?.has('padding-top')).toBe(true)
+
+      el.remove()
+    },
+  )
+
+  it('DOES dim width/height on geometry that ignores CSS sizing', () => {
+    const path = document.createElementNS(SVG_NS, 'path')
+    document.body.appendChild(path)
+    const { dimmedProperties } = computePanelStyleSnapshot({ ...base, element: path })
+    expect(dimmedProperties?.has('width')).toBe(true)
+    path.remove()
+  })
+
   it('does NOT dim them on the outer <svg>, which is a real CSS box', () => {
     const svg = document.createElementNS(SVG_NS, 'svg')
     document.body.appendChild(svg)

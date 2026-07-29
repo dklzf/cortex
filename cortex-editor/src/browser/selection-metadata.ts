@@ -51,11 +51,20 @@ export function captureSelectionMetadata(el: Element): SelectionMetadata {
 }
 
 /**
- * Locate all elements sharing a `data-cortex-source` value. Tries the flat
- * top-level query first; falls back to a shadow-DOM-piercing walk only when
- * the caller knows the element lived in a shadow tree AND the flat query
- * came up empty. Keeps capture/re-resolve in lock-step — a regression where
- * only one side runs the deep query would silently desync.
+ * Locate all elements sharing a `data-cortex-source` value. Uses the cheap flat
+ * query for light-DOM selections, and the shadow-piercing walk whenever the
+ * caller knows the element lived in a shadow tree.
+ *
+ * Deliberately NOT `flat.length === 0 && inShadowRoot`: if a shadow-hosted
+ * element shares its source with a light-DOM render (the same component used in
+ * both), the flat query returns a non-empty list that does not contain the
+ * selected element, `indexOf` yields -1, and the selection is cleared on the next
+ * HMR cycle. Latent today — `elementFromPoint` retargets to the shadow host, so
+ * nothing can currently select a shadow-inner node and `inShadowRoot` is always
+ * false — but the flat-first shape is a trap for whoever lands shadow selection.
+ *
+ * Keeps capture/re-resolve in lock-step — a regression where only one side runs
+ * the deep query would silently desync.
  *
  * `Element[]`, not `HTMLElement[]`: source-transform annotates every lowercase
  * JSX tag (it filters on `/^[a-z]/` with no HTML allowlist), so `<svg>`,
@@ -70,7 +79,7 @@ function findSourceMatches(source: string, inShadowRoot: boolean): Element[] {
   try {
     const selector = `[data-cortex-source="${CSS.escape(source)}"]`
     const flat = Array.from(document.querySelectorAll(selector))
-    return (flat.length === 0 && inShadowRoot) ? deepQueryAllElements(selector) : flat
+    return inShadowRoot ? deepQueryAllElements(selector) : flat
   } catch (err) {
     // CSS.escape spec-throws on unpaired surrogates; querySelectorAll throws
     // SyntaxError on malformed selectors. Treat as "no matches" so the caller
