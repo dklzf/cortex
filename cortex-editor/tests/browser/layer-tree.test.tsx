@@ -186,3 +186,36 @@ describe('LayerTree rendering', () => {
     expect(expandedChevrons.length).toBeGreaterThanOrEqual(2)
   })
 })
+
+// The HTMLElement filters these replace were type plumbing, not intent: they hid
+// SVG children from the tree while Panel's own `hasChildren` counted them
+// unfiltered, so the child-navigation button rendered enabled with nothing under it.
+describe('buildScopedTree with SVG children', () => {
+  const SVG_NS = 'http://www.w3.org/2000/svg'
+
+  it('includes SVG children of the selected element', () => {
+    const container = document.createElement('div')
+    const span = document.createElement('span')
+    const svg = document.createElementNS(SVG_NS, 'svg')
+    container.append(span, svg)
+    document.body.appendChild(container)
+
+    const tree = buildScopedTree(container)
+    const node = tree!.children.find(n => n.element === container)!
+    expect(node.children.map(c => c.element)).toEqual([span, svg]) // pre-fix: [span]
+
+    container.remove()
+  })
+
+  it('counts an SVG-only child in hasChildren', () => {
+    const container = document.createElement('div')
+    container.appendChild(document.createElementNS(SVG_NS, 'svg'))
+    document.body.appendChild(container)
+
+    const tree = buildScopedTree(container)
+    const node = tree!.children.find(n => n.element === container)!
+    expect(node.hasChildren).toBe(true) // pre-fix: false
+
+    container.remove()
+  })
+})

@@ -165,10 +165,10 @@ export const initialCortexAppReducerState: CortexAppReducerState = {
  * bail out of re-render via `setSelectedElementsState(prev => prev)`.
  */
 export function applySelectionUpdate(
-  prev: HTMLElement[],
-  elements: HTMLElement[],
+  prev: Element[],
+  elements: Element[],
   action: 'replace' | 'add' | 'toggle',
-): HTMLElement[] {
+): Element[] {
   if (action === 'replace') {
     // Identity-stable replace: same contents in same order → return prev.
     if (

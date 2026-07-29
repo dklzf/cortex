@@ -26,7 +26,7 @@ import { parseAppearanceValues } from './sections/AppearanceSection.js'
 import { parseSpacingValues, ALL_DIMMING_PROPERTIES } from './sections/spacing-utils.js'
 
 export interface ComputePanelStyleSnapshotInput {
-  element: HTMLElement | null
+  element: Element | null
   activePseudo: 'element' | '::before' | '::after'
   activeState: InteractionState
   sharedInfo: SharedClassInfo | null

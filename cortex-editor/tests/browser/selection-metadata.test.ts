@@ -387,3 +387,60 @@ describe('shouldRefreshOnHMR', () => {
     expect(shouldRefreshOnHMR(['src/bar.tsx'], el)).toBe(false)
   })
 })
+
+// source-transform annotates every lowercase JSX tag, so <svg>/<path> in the
+// user's own .jsx carry data-cortex-source. These lock in that an SVG selection
+// SURVIVES an HMR cycle — the HTMLElement filter that used to live in
+// findSourceMatches made captureSelectionMetadata report index === -1, which
+// made reResolveSelection return null and silently cleared the selection on the
+// next save. A fix to the click path alone would have evaporated there.
+describe('SVG selections survive re-resolution', () => {
+  const SVG_NS = 'http://www.w3.org/2000/svg'
+  const orphans: Element[] = []
+
+  afterEach(() => {
+    for (const el of orphans) el.remove()
+    orphans.length = 0
+  })
+
+  /** N sibling icons sharing one source — the `.map()` over an icon list case. */
+  function appendIcons(wrap: Element, source: string, count: number): SVGSVGElement[] {
+    const svgs: SVGSVGElement[] = []
+    for (let i = 0; i < count; i++) {
+      const svg = document.createElementNS(SVG_NS, 'svg')
+      svg.setAttribute('data-cortex-source', source)
+      svg.textContent = `icon-${i}`
+      wrap.appendChild(svg)
+      svgs.push(svg)
+    }
+    return svgs
+  }
+
+  function makeWrap(): HTMLDivElement {
+    const wrap = document.createElement('div')
+    document.body.appendChild(wrap)
+    orphans.push(wrap)
+    return wrap
+  }
+
+  it('captureSelectionMetadata computes a real index for an <svg>', () => {
+    const svgs = appendIcons(makeWrap(), 'src/Icons.tsx:7:9', 3)
+    const meta = captureSelectionMetadata(svgs[1]!)
+    expect(meta.source).toBe('src/Icons.tsx:7:9')
+    expect(meta.index).toBe(1) // pre-fix: -1, because indexOf ran over a filtered list
+  })
+
+  it('reResolveSelection follows an <svg> selection onto its replacement node', () => {
+    const wrap = makeWrap()
+    const original = appendIcons(wrap, 'src/Icons.tsx:7:9', 3)
+    const meta = captureSelectionMetadata(original[1]!)
+
+    // Simulate the HMR swap: same markup, brand-new DOM nodes.
+    for (const svg of original) svg.remove()
+    const fresh = appendIcons(wrap, 'src/Icons.tsx:7:9', 3)
+
+    const resolved = reResolveSelection(meta)
+    expect(resolved).toBe(fresh[1]) // pre-fix: null → CortexApp clears the selection
+    expect(resolved).not.toBe(original[1])
+  })
+})

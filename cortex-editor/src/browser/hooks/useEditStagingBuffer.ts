@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'preact/hooks'
-import { stripLineCol, deepQuerySelectorAll } from '../selection-metadata.js'
+import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
 
 // Re-export for backward compatibility — existing test imports rely on this.
@@ -246,12 +246,17 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
 
       if (elBySource === null) {
         elBySource = new Map()
-        // Use deepQuerySelectorAll (not document.querySelectorAll) so reconcile
+        // Use deepQueryAllElements (not document.querySelectorAll) so reconcile
         // sees elements inside open shadow roots — web-component apps (Lit,
         // Stencil, Shoelace) place data-cortex-source inside shadow trees.
         // Bare flat queries miss them and falsely flag them as "element
         // deleted" (file deleted/refactored), producing user-hostile divergence
         // cards. Mirrors the existing selection-resolution shadow-pierce path.
+        //
+        // Element-typed (this used to filter to HTMLElement): SVG-sourced
+        // intents are reachable now that selection is Element-typed, and a
+        // missing index entry falls into the `!el` branch below — a false
+        // "element deleted" card on every HMR touching that file.
         // First-seen wins on duplicate sources. With `set` semantics, two
         // mounted instances sharing a `data-cortex-source` (legitimate when
         // scope='all' targets sibling instances; or accidental during HMR
@@ -259,7 +264,7 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         // the LAST element clobber the first, and `last` is non-deterministic
         // in document/insertion order across browsers and shadow trees.
         // First-seen + traversal order produces stable behavior.
-        for (const el of deepQuerySelectorAll('[data-cortex-source]')) {
+        for (const el of deepQueryAllElements('[data-cortex-source]')) {
           const s = el.getAttribute('data-cortex-source')
           if (s !== null && !elBySource.has(s)) elBySource.set(s, el)
         }
