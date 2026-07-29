@@ -8,6 +8,15 @@
     "types": ["node", "vitest/globals"]
   },
   "include": [
+    // COMPILE-TIME CONTRACT — these three `vi.mock` the selection module, and a
+    // wholesale module mock is invisible to the compiler unless the test file is
+    // in a program. keyboard-shortcuts.test.tsx proved the failure mode: its
+    // initSelection annotation was wrong on TWO axes (single-arg instead of
+    // (elements, action), and HTMLElement instead of Element) and survived a
+    // prior signature change unnoticed, because nothing type-checked it.
+    "browser/selection.test.ts",
+    "browser/cortex-app.test.tsx",
+    "browser/keyboard-shortcuts.test.tsx",
     "core/annotations.test.ts",
     // COMPILE-TIME CONTRACT — must stay in this program. The file's whole value
     // is that `npm run typecheck` compiles it (vitest runs transpile-only); it
