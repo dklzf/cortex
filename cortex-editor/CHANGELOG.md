@@ -2,6 +2,18 @@
 
 All notable changes to cortex-editor. Follows [Keep a Changelog](https://keepachangelog.com) loosely; versions follow [SemVer](https://semver.org) (pre-1.0: breaking changes may land in MINOR).
 
+## Unreleased
+
+### Fixed
+- **Clicking an icon no longer clears your selection.** `getTargetElement` guarded on `el instanceof HTMLElement`, but `SVGElement` extends `Element`, not `HTMLElement` — so every SVG target resolved to `null`, which the click handler reads as "backdrop, clear the selection". Since source-transform annotates every lowercase JSX tag (`/^[a-z]/`, no HTML allowlist), inline `<svg>`/`<path>` in your own components were always real, addressable targets; they were just typed out of existence. The selection path is now `Element`-typed throughout, which also deleted four casts and five `instanceof` filters rather than adding any. A click on one stroke of a multi-path icon now selects the whole icon: SVG hit-testing is geometry-based, so without normalization the same visual click landed on a `<path>` or on the SVG root depending on sub-pixel position.
+- **SVG selections survive a hot reload.** `findSourceMatches` filtered to `HTMLElement`, so `captureSelectionMetadata` recorded `index === -1` for an SVG and `reResolveSelection` returned `null` on the next HMR cycle — a fix to the click path alone would have evaporated on your first save.
+- **Icons appear in the Layer Tree, and the child-navigation button works on them.** The tree hid SVG children entirely while the panel's `hasChildren` counted them, so the button rendered *enabled* and did nothing when clicked. Non-rendered SVG containers (`<defs>`, `clipPath`, `linearGradient`, `<title>`) are excluded from both — they have no geometry, so selecting one would park the selection overlay at the viewport origin.
+- **Third-party icons keep their class in the source-resolution hint.** `Element.className` is an `SVGAnimatedString` on SVG, and a `typeof === 'string'` guard was silently dropping it. For an unannotated lucide-style icon that class is the strongest signal Claude has for locating the call site; the hint had been degrading to `{tagName:'svg', domSelector:'svg'}`. SVG element names also keep their case — `linearGradient` was being lowercased into a selector that matches nothing.
+- **Editing one property twice, then undoing, no longer silently discards the change.** `previousValue` served as both the undo target (the prior override, so undo steps back one gesture) and the diff base sent to the server (which must be the true source value). Those agree on a first touch and diverge on every touch after, so a second edit recorded a staged intermediate the file never contained. Three consequences, all fixed: undoing a chained edit left the override showing the intermediate value while the staging buffer read empty and Apply wrote nothing; the Tailwind rewriter searched for a class the file never held (`Token '…' not found in className`, a silent apply failure); and `reconcile` compared live source against a value that never existed, so the drift banner fired forever on any HMR touching that file. The capture is now split, and undo restores the intent that last-write-wins displaced.
+
+### Changed
+- Box-model controls (padding, margin, border, background, box-shadow) are dimmed when SVG geometry is selected — they have no effect on a `<path>`, and previously you could scrub one, see nothing move, and still have Apply write it into your JSX.
+
 ## 0.3.1 — 2026-07-21
 
 Fast-follow from the 0.3.0 real-app retest (a production Next 16.1.6 app). Activation was confirmed working; these fix the gaps the retest surfaced.
