@@ -60,11 +60,20 @@ vi.mock('../../src/browser/selection.js', () => {
   const cleanupFn = vi.fn()
   const setDesignModeFn = vi.fn()
   const setInterceptClicksFn = vi.fn()
-  let hoverCb: ((el: HTMLElement | null) => void) | null = null
-  let selectCb: ((el: HTMLElement | null) => void) | null = null
+  // These annotations were wrong on TWO axes and stayed wrong through at least
+  // one prior signature change: onSelect takes (elements, action), not a single
+  // element, and the type is Element (SVG selections are real). vi.mock replaces
+  // the module wholesale so nothing forced them to stay honest — tests/browser
+  // is in no typecheck program. Keep them accurate by hand.
+  let hoverCb: ((el: Element | null) => void) | null = null
+  let selectCb: ((elements: Element[], action: 'replace' | 'add' | 'toggle') => void) | null = null
 
   return {
-    initSelection: vi.fn((_shadow: ShadowRoot, onHover: (el: HTMLElement | null) => void, onSelect: (el: HTMLElement | null) => void) => {
+    initSelection: vi.fn((
+      _shadow: ShadowRoot,
+      onHover: (el: Element | null) => void,
+      onSelect: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void,
+    ) => {
       hoverCb = onHover
       selectCb = onSelect
       return { cleanup: cleanupFn, setDesignMode: setDesignModeFn, setInterceptClicks: setInterceptClicksFn }
@@ -151,7 +160,9 @@ describe('cascade priorities (integration)', () => {
     await new Promise(r => setTimeout(r, SETTLE))
 
     // Select an element
-    const { _getCallbacks } = await import('../../src/browser/selection.js') as any
+    const { _getCallbacks } = await import('../../src/browser/selection.js') as unknown as {
+      _getCallbacks: () => { selectCb: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void }
+    }
     const { selectCb } = _getCallbacks()
     const target = document.createElement('div')
     document.body.appendChild(target)

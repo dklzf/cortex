@@ -15,7 +15,7 @@ const WAIT_FOR_COMMIT_MS = 2000
 // test's unmounted-component callbacks cannot be returned by _getCallbacks
 // under async timing — call from afterEach (ZF0-1297 test-hygiene fix).
 //
-// selectCb now receives (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle').
+// selectCb now receives (elements: Element[], action: 'replace' | 'add' | 'toggle').
 // Tests that need to select a single element use: selectCb([target], 'replace')
 // Tests that need to clear selection use: selectCb([], 'replace')
 // For back-compat with existing tests, a selectOne(el) helper is also exported.
@@ -23,11 +23,11 @@ vi.mock('../../src/browser/selection.js', () => {
   const cleanupFn = vi.fn()
   const setDesignModeFn = vi.fn()
   const setInterceptClicksFn = vi.fn()
-  let hoverCb: ((el: HTMLElement | null) => void) | null = null
-  let selectCb: ((elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void) | null = null
+  let hoverCb: ((el: Element | null) => void) | null = null
+  let selectCb: ((elements: Element[], action: 'replace' | 'add' | 'toggle') => void) | null = null
 
   return {
-    initSelection: vi.fn((_shadow: ShadowRoot, onHover: (el: HTMLElement | null) => void, onSelect: (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void) => {
+    initSelection: vi.fn((_shadow: ShadowRoot, onHover: (el: Element | null) => void, onSelect: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void) => {
       hoverCb = onHover
       selectCb = onSelect
       return { cleanup: cleanupFn, setDesignMode: setDesignModeFn, setInterceptClicks: setInterceptClicksFn }
@@ -198,7 +198,7 @@ describe('CortexApp', () => {
     await activateEditor(channel)
 
     const { _getCallbacks } = await import('../../src/browser/selection.js') as unknown as {
-      _getCallbacks: () => { selectCb: (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void }
+      _getCallbacks: () => { selectCb: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void }
     }
     const { selectCb } = _getCallbacks()
 
@@ -261,7 +261,7 @@ describe('CortexApp', () => {
     await activateEditor(channel)
 
     const { _getCallbacks } = await import('../../src/browser/selection.js') as unknown as {
-      _getCallbacks: () => { selectCb: (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void }
+      _getCallbacks: () => { selectCb: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void }
     }
     const { selectCb } = _getCallbacks()
 
@@ -1500,7 +1500,7 @@ describe('CortexApp — HMR-driven selection re-resolution (ZF0-1292)', () => {
 
     // Select an element.
     const { _getCallbacks } = await import('../../src/browser/selection.js') as unknown as {
-      _getCallbacks: () => { selectCb: (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void }
+      _getCallbacks: () => { selectCb: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void }
     }
     const { selectCb } = _getCallbacks()
 
@@ -1647,7 +1647,7 @@ describe('CortexApp — HMR file-list filter (ZF0-1292 follow-up)', () => {
     await new Promise(r => setTimeout(r, 10))
 
     const { _getCallbacks } = await import('../../src/browser/selection.js') as unknown as {
-      _getCallbacks: () => { selectCb: (elements: HTMLElement[], action: 'replace' | 'add' | 'toggle') => void }
+      _getCallbacks: () => { selectCb: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void }
     }
     const { selectCb } = _getCallbacks()
 
@@ -2098,9 +2098,9 @@ describe('CortexApp — mcp-session-hello never wipes; reconcile fires on every 
     // The surviving intent must be the divergent one (App.tsx:10:5, padding: 24px).
     const surviving = bridge.buffer.list() as Array<{ source: string; property: string; value: string }>
     expect(surviving).toHaveLength(1)
-    expect(surviving[0].source).toBe('App.tsx:10:5')
-    expect(surviving[0].property).toBe('padding')
-    expect(surviving[0].value).toBe('24px')
+    expect(surviving[0]!.source).toBe('App.tsx:10:5')
+    expect(surviving[0]!.property).toBe('padding')
+    expect(surviving[0]!.value).toBe('24px')
   })
 
   it('reconcile-on-connect: auto-clears already-matched intent on same-UUID reconnect path', async () => {
