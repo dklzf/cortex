@@ -478,6 +478,7 @@ describe('SVG geometry dimming', () => {
     document.body.appendChild(path)
     const { dimmedProperties } = computePanelStyleSnapshot({ ...base, element: path })
     expect(dimmedProperties?.has('width')).toBe(true)
+    expect(dimmedProperties?.has('height')).toBe(true)
     path.remove()
   })
 
