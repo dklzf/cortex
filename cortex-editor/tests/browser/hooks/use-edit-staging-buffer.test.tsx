@@ -166,6 +166,82 @@ describe('useEditStagingBuffer', () => {
     unmount()
   })
 
+  // append's return value is what makes undo of a chained edit possible: it is
+  // the ONLY record that last-write-wins destroyed a prior intent.
+  it('append returns the displaced entry on a key collision, undefined on a fresh key', async () => {
+    const { result, unmount } = renderHook(() => useEditStagingBuffer())
+
+    const first = makeEdit({ intentId: 'id-1', value: 'red', source: 'src/Hero.tsx:14:5', property: 'color' })
+    const second = makeEdit({ intentId: 'id-2', value: 'green', source: 'src/Hero.tsx:14:5', property: 'color' })
+
+    let freshResult: PendingEdit | undefined
+    let collisionResult: PendingEdit | undefined
+    await act(() => {
+      freshResult = result.current.append(first)
+      collisionResult = result.current.append(second)
+    })
+
+    expect(freshResult).toBeUndefined()
+    expect(collisionResult?.intentId).toBe('id-1')
+    expect(collisionResult?.value).toBe('red')
+    // A different composite key displaces nothing.
+    let otherKey: PendingEdit | undefined
+    await act(() => {
+      otherKey = result.current.append(makeEdit({ intentId: 'id-3', source: 'src/Hero.tsx:14:5', property: 'display' }))
+    })
+    expect(otherKey).toBeUndefined()
+
+    unmount()
+  })
+
+  it('displacement and eviction are mutually exclusive at the 500-entry cap', async () => {
+    const syncRemove = vi.fn()
+    const emitter: SyncEmitter = { syncAdd: vi.fn(), syncRemove, syncClear: vi.fn(), syncFullState: vi.fn() }
+    const { result, unmount } = renderHook(() => useEditStagingBuffer(emitter))
+
+    await act(() => {
+      for (let i = 0; i < 500; i++) {
+        result.current.append(makeEdit({ intentId: `id-${i}`, property: `prop-${i}`, timestamp: i }))
+      }
+    })
+    expect(result.current.size()).toBe(500)
+    syncRemove.mockClear()
+
+    // Re-append an EXISTING key while at the cap. `append` does delete-then-set,
+    // so size is unchanged and the eviction branch cannot fire. A refactor to
+    // set-without-delete would silently evict here AND return a displaced entry,
+    // double-counting the same mutation.
+    let displaced: PendingEdit | undefined
+    await act(() => {
+      displaced = result.current.append(makeEdit({ intentId: 'id-499-v2', property: 'prop-499', timestamp: 999 }))
+    })
+
+    expect(displaced?.intentId).toBe('id-499')
+    expect(result.current.size()).toBe(500)
+    expect(syncRemove).not.toHaveBeenCalled()
+
+    unmount()
+  })
+
+  it('append does not mutate the caller\'s edit object', async () => {
+    const { result, unmount } = renderHook(() => useEditStagingBuffer())
+
+    const first = makeEdit({ intentId: 'id-1', previousValue: 'red', source: 'src/Hero.tsx:14:5', property: 'color' })
+    const second = makeEdit({ intentId: 'id-2', previousValue: 'blue', source: 'src/Hero.tsx:14:5', property: 'color' })
+
+    await act(() => {
+      result.current.append(first)
+      result.current.append(second)
+    })
+
+    // Commands hold these exact objects for redo. An in-place implementation
+    // would corrupt the redo payload.
+    expect(first.previousValue).toBe('red')
+    expect(second.previousValue).toBe('blue')
+
+    unmount()
+  })
+
   it('reconcile for unchanged files returns empty divergent list', async () => {
     const { result, unmount } = renderHook(() => useEditStagingBuffer())
 
@@ -819,4 +895,5 @@ describe('createPanelSyncEmitter — channel.send wiring', () => {
     // Boundary copy: the readonly input must not be passed by reference
     expect(call.edits).not.toBe(edits)
   })
+
 })
