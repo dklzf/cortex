@@ -219,3 +219,30 @@ describe('buildScopedTree with SVG children', () => {
     container.remove()
   })
 })
+
+describe('buildScopedTree excludes non-rendered children', () => {
+  const SVG_NS = 'http://www.w3.org/2000/svg'
+
+  it('omits SVG <defs> and <title> from the tree and from hasChildren', () => {
+    const icon = document.createElementNS(SVG_NS, 'svg')
+    icon.append(
+      document.createElementNS(SVG_NS, 'defs'),
+      document.createElementNS(SVG_NS, 'title'),
+    )
+    const container = document.createElement('div')
+    container.appendChild(icon)
+    document.body.appendChild(container)
+
+    const tree = buildScopedTree(icon)
+    const iconNode = tree!.children
+      .find(n => n.element === container)!.children
+      .find(n => n.element === icon)!
+
+    // Pre-fix: two rows, both with an all-zero rect, so clicking either parked
+    // the selection overlay at the viewport origin.
+    expect(iconNode.children).toHaveLength(0)
+    expect(iconNode.hasChildren).toBe(false)
+
+    container.remove()
+  })
+})

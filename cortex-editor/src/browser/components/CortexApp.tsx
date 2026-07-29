@@ -420,7 +420,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // exercise browser-only CSSOM branches without making it a public API.
         // The Map-to-object conversion keeps the bridge return value
         // structured-clone friendly.
-        detectStates: (el: HTMLElement) => {
+        detectStates: (el: Element) => {
           const states = detectStates(el)
           return {
             hover: Object.fromEntries(states.hover),
@@ -501,7 +501,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // Allows e2e specs to seed multi-select state without real click interactions.
         // selectElement (above) handles single-element selection via the legacy shim;
         // selectElements is the multi-element version for ZF0-1195 multi-select specs.
-        selectElements: (els: HTMLElement[]) => setSelection(els, 'replace'),
+        selectElements: (els: Element[]) => setSelection(els, 'replace'),
         // TEST-ONLY: mount a minimal Preact popover (using the production
         // `useOutsideDismiss` hook) into any ParentNode including a genuinely
         // closed ShadowRoot. Exists to exercise the hook's closed-shadow
@@ -722,7 +722,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
     //     but null-guard is defensive for tests / strict-mode double-mount).
     //   - buffer.size() === 0: no intents → no work.
     //
-    // Element resolution uses deepQuerySelectorAll (shadow-piercing, same as
+    // Element resolution uses deepQueryAllElements (shadow-piercing, same as
     // buffer.reconcile's internal element-index build) to find elements annotated
     // with `data-cortex-source`. Intents whose element is not found in the DOM are
     // not auto-cleared — they're treated as divergent and left for the user to handle.

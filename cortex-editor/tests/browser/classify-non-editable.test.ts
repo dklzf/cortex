@@ -55,4 +55,22 @@ describe('isNonEditable', () => {
     const el = createEditableDiv('/src/components/Hero.tsx:20:3')
     expect(isNonEditable(el)).toBe(false)
   })
+
+  // Reachable via the Layer Tree / child-nav, never via a click (no geometry to
+  // hit-test). All-zero getBoundingClientRect, so selecting one detaches the
+  // overlay to the viewport origin and every box-model control is inert.
+  it.each(['defs', 'clipPath', 'mask', 'linearGradient', 'radialGradient', 'symbol', 'desc'])(
+    'treats the non-rendered SVG container <%s> as non-editable',
+    (tag) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', tag)
+      expect(isNonEditable(el)).toBe(true)
+    },
+  )
+
+  it('still treats rendered SVG geometry as editable', () => {
+    for (const tag of ['svg', 'path', 'circle', 'rect', 'g']) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', tag)
+      expect(isNonEditable(el)).toBe(false)
+    }
+  })
 })

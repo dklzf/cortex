@@ -427,3 +427,40 @@ describe('computePanelStyleSnapshot', () => {
   })
 
 })
+
+describe('SVG geometry dimming', () => {
+  const SVG_NS = 'http://www.w3.org/2000/svg'
+  const base = {
+    activePseudo: 'element' as const,
+    activeState: 'default' as const,
+    sharedInfo: null,
+    editScope: 'instance' as const,
+    overrideManager: { get: () => undefined },
+    defaultStyles: null,
+  }
+
+  it('dims box-model controls on SVG geometry', () => {
+    const path = document.createElementNS(SVG_NS, 'path')
+    document.body.appendChild(path)
+
+    const { dimmedProperties } = computePanelStyleSnapshot({ ...base, element: path })
+
+    // Pre-fix: undefined — the user could scrub padding on a <path>, see nothing
+    // move, and Apply would still write it into their JSX.
+    expect(dimmedProperties?.has('padding-top')).toBe(true)
+    expect(dimmedProperties?.has('border-radius')).toBe(true)
+    expect(dimmedProperties?.has('background-color')).toBe(true)
+
+    path.remove()
+  })
+
+  it('does NOT dim them on the outer <svg>, which is a real CSS box', () => {
+    const svg = document.createElementNS(SVG_NS, 'svg')
+    document.body.appendChild(svg)
+
+    const { dimmedProperties } = computePanelStyleSnapshot({ ...base, element: svg })
+    expect(dimmedProperties?.has('padding-top') ?? false).toBe(false)
+
+    svg.remove()
+  })
+})

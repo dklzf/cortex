@@ -1840,6 +1840,34 @@ describe('CSSOverrideManager', () => {
       targetB.remove()
     })
   })
+
+  // hasAnyOverrides gates whether Panel pays for the override-bypassing read or
+  // trusts a plain computed read as the staged-edit baseline. Every Panel test
+  // supplies a hand-written mock of it, so without these the production formula
+  // is never executed anywhere — and a wrong `false` silently reinstates the
+  // polluted-baseline bug.
+  describe('hasAnyOverrides', () => {
+    it('is false on a fresh manager, true once a user edit is staged, false after clearAll', () => {
+      expect(manager.hasAnyOverrides()).toBe(false)
+      manager.set('a:1:1', 'color', 'red')
+      expect(manager.hasAnyOverrides()).toBe(true)
+      manager.clearAll()
+      expect(manager.hasAnyOverrides()).toBe(false)
+    })
+
+    it('reports forced-state declarations with no user edits', () => {
+      // The stateOverrides term is the only reason this is not just
+      // `overrides.size > 0`. Forced :hover declarations land in the SAME
+      // <style>, so a plain computed read is contaminated by them too —
+      // dropping this term would send Panel down the cheap path while the
+      // override sheet is actively lying to getComputedStyle.
+      manager.setStateOverrides('a:1:1', new Map([['color', 'blue']]))
+      expect(manager.hasAnyOverrides()).toBe(true)
+      manager.clearStateOverrides()
+      expect(manager.hasAnyOverrides()).toBe(false)
+    })
+  })
+
 })
 
 describe('OverrideManager dirty-flag short-circuit (ZF0-1835)', () => {

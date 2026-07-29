@@ -85,11 +85,12 @@ function findSourceMatches(source: string, inShadowRoot: boolean): Element[] {
  * regardless of namespace — SVG / MathML nodes that source-transform annotated
  * are included, because every lowercase JSX tag gets `data-cortex-source`.
  *
- * There used to be an `HTMLElement`-filtered twin of this function. It was
- * deleted: the filter was wrong at all four of its call sites (it under-counted
- * shared sources, broke set/clear symmetry for highlights, dropped SVG-sourced
- * intents in reconcile, and silently cleared SVG selections on HMR). Two
- * functions differing only by a filter nobody wanted was the actual defect.
+ * There used to be an `HTMLElement`-filtered twin (`deepQuerySelectorAll`). Its
+ * three call sites — HMR re-resolution here, `buffer.reconcile`, and
+ * `reconcileOnConnect` — all wanted the unfiltered result: the filter silently
+ * cleared SVG selections on HMR and dropped SVG-sourced intents in reconcile. It
+ * was deleted and every caller now uses this function. Two functions differing
+ * only by a filter nobody wanted was the actual defect.
  *
  * Closed shadow roots are opaque from outside and cannot be traversed —
  * documented limitation. `shadowRoot` is only non-null for `{mode: 'open'}`.

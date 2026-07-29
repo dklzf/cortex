@@ -1,6 +1,7 @@
 import type { JSX } from 'preact'
 import { useMemo, useState } from 'preact/hooks'
 import { getTreeLabel } from '../label.js'
+import { isNonEditable } from '../classify-non-editable.js'
 import { ChevronRight } from './icons.js'
 
 export interface TreeNode {
@@ -18,6 +19,17 @@ export interface TreeNode {
  *
  *  Complexity: O(depth * max_siblings) — only visits nodes on the ancestor path
  *  and their siblings, never the full DOM tree. */
+/** Children worth showing in the tree. Excludes non-visual tags via the SAME gate
+ *  the click path uses (selection.ts calls isNonEditable before selecting).
+ *  The `instanceof HTMLElement` filter this replaces was providing that gate by
+ *  accident; widening to Element removed it, which surfaced SVG <defs>,
+ *  <clipPath>, <linearGradient> and <title> as clickable rows. Those have an
+ *  all-zero getBoundingClientRect, so selecting one parks the overlay at the
+ *  viewport origin, detached from the icon. */
+function editableChildren(el: Element): Element[] {
+  return Array.from(el.children).filter(c => !isNonEditable(c))
+}
+
 export function buildScopedTree(element: Element | null): TreeNode | null {
   if (!element) return null
   if (!element.isConnected || !document.body.contains(element)) return null
@@ -32,10 +44,7 @@ export function buildScopedTree(element: Element | null): TreeNode | null {
   }
 
   function leafNode(c: Element, depth: number): TreeNode {
-    // No HTMLElement filter: it was type plumbing, not intent. It hid SVG
-    // children from the tree entirely while `hasChildren` elsewhere counted
-    // them — an expanded row with nothing under it.
-    const childCount = c.children.length
+    const childCount = editableChildren(c).length
     return { element: c, label: getTreeLabel(c), depth, selected: false, expanded: false, hasChildren: childCount > 0, children: [] }
   }
 
@@ -47,15 +56,15 @@ export function buildScopedTree(element: Element | null): TreeNode | null {
     let children: TreeNode[] = []
     if (isSelected) {
       // Selected element: show direct children as leaf nodes
-      children = Array.from(el.children).map(c => leafNode(c, depth + 1))
+      children = editableChildren(el).map(c => leafNode(c, depth + 1))
     } else if (isOnPath && pathChild) {
       // Ancestor on the path: show all element children at this level,
       // recurse into the one that's on the ancestor path
-      children = Array.from(el.children)
+      children = editableChildren(el)
         .map(c => c === pathChild ? buildNode(c, depth + 1, true) : leafNode(c, depth + 1))
     }
 
-    const childCount = el.children.length
+    const childCount = editableChildren(el).length
     return {
       element: el,
       label: getTreeLabel(el),

@@ -59,7 +59,13 @@ function buildSourceResolutionHint(el: Element): SourceResolutionHint {
   const id = clampUtf8(el.id.trim())
   const textPreview = clampUtf8((el.textContent ?? '').trim())
   return {
-    tagName: el.tagName.toLowerCase(),
+    // `localName`, not `tagName.toLowerCase()`: SVG element names are
+    // case-sensitive, so lowercasing turned <linearGradient> into
+    // "lineargradient" — a selector matching nothing, handed to Claude as a
+    // source locator. clampUtf8 for parity with the other fields; the server
+    // schema caps tagName at the same byte budget and would reject the whole
+    // staged-edit message rather than truncate.
+    tagName: clampUtf8(el.localName),
     ...(className ? { className } : {}),
     ...(id ? { id } : {}),
     textPreview,
@@ -68,7 +74,7 @@ function buildSourceResolutionHint(el: Element): SourceResolutionHint {
 }
 
 function buildDomSelectorHint(el: Element, className: string, id: string): string {
-  const tagName = el.tagName.toLowerCase()
+  const tagName = CSS.escape(el.localName)
   if (id) return clampUtf8(`${tagName}#${CSS.escape(id)}`)
   const testId = el.getAttribute('data-testid')
   const trimmedTestId = testId ? clampUtf8(testId.trim()) : ''

@@ -25,6 +25,38 @@ import { parsePositionValues } from './sections/PositionSection.js'
 import { parseAppearanceValues } from './sections/AppearanceSection.js'
 import { parseSpacingValues, ALL_DIMMING_PROPERTIES } from './sections/spacing-utils.js'
 
+/** CSS the box model gives you that SVG GEOMETRY simply does not implement.
+ *
+ *  `<path>`, `<circle>`, `<g>` and friends are not CSS boxes: padding, margin,
+ *  border (incl. radius), background-color and box-shadow have no effect on
+ *  them, and width/height apply only to rect/image and the SVG root. Before the
+ *  Element widening these were unreachable, so the panel never had to say so.
+ *  Now they are selectable, and without this the user scrubs a value, sees
+ *  nothing move, and Apply still writes the property into their JSX — the same
+ *  dead-control failure as the child-nav button.
+ *
+ *  Dimmed, not hidden: the panel's shape stays stable across selections, which
+ *  is the existing treatment for flex-child-inert properties.
+ *
+ *  The SVG root element is a replaced element with a real CSS box, so it is
+ *  excluded. */
+const SVG_GEOMETRY_INERT_PROPERTIES: readonly string[] = [
+  'width', 'height',
+  'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'background-color', 'background-image',
+  'border-width', 'border-style', 'border-color', 'border-radius',
+  'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+  'border-top-left-radius', 'border-top-right-radius',
+  'border-bottom-left-radius', 'border-bottom-right-radius',
+  'box-shadow',
+]
+
+/** True for SVG geometry and resource containers, false for the SVG root. */
+function isSvgGeometry(el: Element): boolean {
+  return el instanceof SVGElement && el.localName !== 'svg'
+}
+
 export interface ComputePanelStyleSnapshotInput {
   element: Element | null
   activePseudo: 'element' | '::before' | '::after'
@@ -177,6 +209,12 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
       }
     }
     if (mixed.size === 0) mixed = undefined
+  }
+
+  // Merge in the properties SVG geometry cannot honour. Done here rather than by
+  // gating whole sections so it rides the existing per-control dimming treatment.
+  if (element && isSvgGeometry(element)) {
+    dimmed = new Set([...(dimmed ?? []), ...SVG_GEOMETRY_INERT_PROPERTIES])
   }
 
   return { computedStyles: parsed, dimmedProperties: dimmed, mixedProperties: mixed }

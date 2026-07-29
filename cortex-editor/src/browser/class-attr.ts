@@ -1,9 +1,11 @@
 /**
  * Read an element's class list as a string, for ANY element namespace.
  *
- * `Element.className` is a plain string only for HTML. On SVG and MathML it is
- * an `SVGAnimatedString` / `DOMTokenList`-adjacent object, so a bare
- * `el.className` read yields an object where callers expect text.
+ * `Element.className` is a DOMString everywhere except `SVGElement`, where it is
+ * an `SVGAnimatedString` (`{baseVal, animVal}`) — so a bare `el.className` read on
+ * inline SVG yields an object where callers expect text. (MathMLElement inherits
+ * `Element.className` unchanged, so it is not affected; `getAttribute` covers it
+ * regardless.)
  *
  * Guarding with `typeof cls === 'string'` alone prevents the crash but silently
  * drops the classes — which matters most on the `agent-resolve` path, where a
