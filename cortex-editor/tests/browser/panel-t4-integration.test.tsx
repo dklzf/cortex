@@ -95,6 +95,7 @@ function makeOverrideManager(
     clearAll: vi.fn(),
     dispose: vi.fn(),
     flush: vi.fn(),
+    hasAnyOverrides: vi.fn(() => overrideStore.size > 0),
     readSourceValue: opts?.readSourceValue ?? vi.fn(() => ''),
   }
 }

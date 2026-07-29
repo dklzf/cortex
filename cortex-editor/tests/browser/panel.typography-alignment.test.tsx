@@ -34,6 +34,8 @@ function createTrackingOverrideManager() {
     clearAll: vi.fn(),
     dispose: vi.fn(),
     flush: vi.fn(),
+    hasAnyOverrides: vi.fn(() => store.size > 0),
+    readSourceValue: vi.fn(() => ''),
     store,
   }
 }
