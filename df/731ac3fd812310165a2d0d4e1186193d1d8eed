@@ -1,0 +1,19 @@
+cortex-editor/CHANGELOG.md
+  s_ac95164da1de8f::t_342244848c6334 5-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "df731ac3fd812310165a2d0d4e1186193d1d8eed",
+  "prompts": {},
+  "sessions": {
+    "s_ac95164da1de8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f661a594-3bd7-417e-83b7-ec85ad721f71",
+        "model": "unknown"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
