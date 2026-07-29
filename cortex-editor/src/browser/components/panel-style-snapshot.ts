@@ -41,7 +41,6 @@ import { parseSpacingValues, ALL_DIMMING_PROPERTIES } from './sections/spacing-u
  *  The SVG root element is a replaced element with a real CSS box, so it is
  *  excluded. */
 const SVG_GEOMETRY_INERT_PROPERTIES: readonly string[] = [
-  'width', 'height',
   'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
   'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
   'background-color', 'background-image',
@@ -51,6 +50,13 @@ const SVG_GEOMETRY_INERT_PROPERTIES: readonly string[] = [
   'border-bottom-left-radius', 'border-bottom-right-radius',
   'box-shadow',
 ]
+
+/** SVG2 exposes `width`/`height` as geometry PROPERTIES on these elements, so CSS
+ *  sizing genuinely applies to them. Dimming those would be the same dead-control
+ *  mistake in reverse — greying out a control that works. Every other SVG geometry
+ *  element ignores CSS width/height. Matched on `localName`, which preserves case
+ *  (`foreignObject`). The SVG root is already excluded by `isSvgGeometry`. */
+const SVG_SIZING_CAPABLE_TAGS: ReadonlySet<string> = new Set(['rect', 'image', 'use', 'foreignObject'])
 
 /** True for SVG geometry and resource containers, false for the SVG root. */
 function isSvgGeometry(el: Element): boolean {
@@ -214,7 +220,10 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   // Merge in the properties SVG geometry cannot honour. Done here rather than by
   // gating whole sections so it rides the existing per-control dimming treatment.
   if (element && isSvgGeometry(element)) {
-    dimmed = new Set([...(dimmed ?? []), ...SVG_GEOMETRY_INERT_PROPERTIES])
+    const inert = SVG_SIZING_CAPABLE_TAGS.has(element.localName)
+      ? SVG_GEOMETRY_INERT_PROPERTIES
+      : [...SVG_GEOMETRY_INERT_PROPERTIES, 'width', 'height']
+    dimmed = new Set([...(dimmed ?? []), ...inert])
   }
 
   return { computedStyles: parsed, dimmedProperties: dimmed, mixedProperties: mixed }

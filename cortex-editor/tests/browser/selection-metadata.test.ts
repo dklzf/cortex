@@ -444,3 +444,43 @@ describe('SVG selections survive re-resolution', () => {
     expect(resolved).not.toBe(original[1])
   })
 })
+
+// CodeRabbit #177: the flat-first shortcut was a trap. Latent today —
+// elementFromPoint retargets to the shadow host, so nothing can currently select
+// a shadow-inner node — but it fails the moment shadow selection lands.
+describe('findSourceMatches with a shadow-hosted selection', () => {
+  const orphans: Element[] = []
+  afterEach(() => {
+    for (const el of orphans) el.remove()
+    orphans.length = 0
+  })
+
+  it('indexes a shadow-hosted element even when the same source also renders in light DOM', () => {
+    const SRC = 'src/Shared.tsx:4:2'
+
+    // Same component rendered once in light DOM and once inside an open shadow root.
+    const light = document.createElement('div')
+    light.setAttribute('data-cortex-source', SRC)
+    light.textContent = 'shared'
+    document.body.appendChild(light)
+    orphans.push(light)
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    orphans.push(host)
+    const shadow = host.attachShadow({ mode: 'open' })
+    const inner = document.createElement('div')
+    inner.setAttribute('data-cortex-source', SRC)
+    inner.textContent = 'shared'
+    shadow.appendChild(inner)
+
+    const meta = captureSelectionMetadata(inner)
+
+    // Pre-fix: -1. The flat query found the LIGHT element, so `flat.length === 0`
+    // was false and the deep walk never ran — indexOf missed, and the next HMR
+    // cycle would clear the selection.
+    expect(meta.inShadowRoot).toBe(true)
+    expect(meta.index).toBeGreaterThanOrEqual(0)
+    expect(reResolveSelection(meta)).toBe(inner)
+  })
+})
