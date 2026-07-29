@@ -63,13 +63,13 @@ export interface CortexTestBridge {
     handleHMRVerified: (editId: string, match: boolean, kind: string) => void
     _testOnly_evictStale: (source: string, property: string, pseudo?: '::before' | '::after') => void
   }
-  detectStates?: (el: HTMLElement) => {
+  detectStates?: (el: Element) => {
     hover: Record<string, string>
     focus: Record<string, string>
     active: Record<string, string>
   }
   channel?: unknown
-  selectElement?: (el: HTMLElement | null) => void
+  selectElement?: (el: Element | null) => void
   onDivergence?: (cb: (d: OverrideDivergence) => void) => () => void
   /** TEST-ONLY: directly append an edit to Panel's staging buffer.
    *  Allows Apply-button lifecycle specs to seed the buffer without going
@@ -95,7 +95,7 @@ export interface CortexTestBridge {
   /** TEST-ONLY: set multi-element selection directly (bypasses click interactions).
    *  Calls setSelection(els, 'replace') so Panel fans out edits to all elements.
    *  Only present in test builds; undefined in prod bundles. */
-  selectElements?: (els: HTMLElement[]) => void
+  selectElements?: (els: Element[]) => void
   /** TEST-ONLY: invoke Panel's onEditDispatch handler directly. Allows unit
    *  tests to seed editDispatchRef without going through the scrub commit
    *  path. Only present in test builds; undefined in prod bundles. */

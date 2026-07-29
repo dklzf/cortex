@@ -159,10 +159,11 @@ export class PropertyEditCommand extends BaseEditCommand {
     // Remove buffer entries by intentId so a subsequent Apply doesn't flush
     // edits the user just undid, THEN restore whatever those appends displaced.
     //
-    // Order matters: appending first would leave the displacing entry sitting
-    // under the composite key, so the restore would be immediately clobbered.
-    // Remove-first also makes the wire order deterministic (syncRemove then
-    // syncAdd), which is what keeps the server-side cache in lockstep.
+    // Remove-first is for wire determinism, not local correctness: `remove`
+    // deletes by intentId (not by composite key), so append-first would also
+    // end at the right local state. What remove-first buys is a deterministic
+    // syncRemove-then-syncAdd order on the channel, keeping the server-side
+    // StagedEditsCache in lockstep with the browser buffer.
     if (this.bufferOps) {
       if (this.pendingEdits.length > 0) {
         this.bufferOps.remove(this.pendingEdits.map(e => e.intentId))

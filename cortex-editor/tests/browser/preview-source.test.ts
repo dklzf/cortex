@@ -62,7 +62,7 @@ describe('preview-source edit targets', () => {
     // models it as a plain string, so the guard this test covers is unreachable
     // without a shim. Same category as the mockElementFromPoint /
     // mockGetComputedStyle helpers this suite already relies on.
-    // tests/e2e/svg-source-hint.spec.ts is the authoritative real-Chromium check.
+    // tests/e2e/svg-selection.spec.ts is the authoritative real-Chromium check.
     Object.defineProperty(svg, 'className', {
       value: { baseVal: 'lucide lucide-check', animVal: 'lucide lucide-check' },
       configurable: true,
@@ -77,5 +77,16 @@ describe('preview-source edit targets', () => {
     // that is the single most identifying signal Claude gets for the call site.
     expect(hint.className).toBe('lucide lucide-check')
     expect(hint.domSelector).toBe('svg.lucide')
+  })
+
+  it('preserves camelCase SVG element names in the hint', () => {
+    const grad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient')
+    const hint = getElementEditTarget(grad).sourceResolutionHint!
+
+    // Pre-fix: 'lineargradient' — tagName.toLowerCase() corrupted the only
+    // identifying signal, producing a domSelector that matches nothing and
+    // handing it to Claude as a source locator.
+    expect(hint.tagName).toBe('linearGradient')
+    expect(hint.domSelector).toBe('linearGradient')
   })
 })

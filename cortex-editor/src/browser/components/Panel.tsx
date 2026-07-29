@@ -7,6 +7,8 @@ import { PropertyEditCommand, CompoundEditCommand } from '../edit-command.js'
 import type { PropertyChange } from '../edit-command.js'
 import { parseCortexSource, isLibraryComponent, findUserAncestor } from '../label.js'
 import { PANEL_WIDTH } from '../hooks/useSnapToEdge.js'
+import { classAttr } from '../class-attr.js'
+import { isNonEditable } from '../classify-non-editable.js'
 import { extractUtilities } from '../class-extractor.js'
 import { PanelHeader } from './PanelHeader.js'
 import { ElementTree } from './sections/ElementTree.js'
@@ -143,7 +145,7 @@ function clearHighlights(): void {
     //       shadow boundaries — would leak the attribute), and
     //   (b) non-HTMLElement nodes (SVG / MathML / other namespaced siblings
     //       that highlightSharedElements may have set the attribute on via
-    //       SharedClassInfo.elements — deepQuerySelectorAll's HTMLElement
+    //       SharedClassInfo.elements — deepQueryAllElements is Element-typed,
     //       filter would silently skip these and orphan the attribute)
     // are both cleared symmetrically.
     for (const el of deepQueryAllElements(`[${HIGHLIGHT_ATTR}]`)) {
@@ -349,6 +351,23 @@ export function Panel({
   //
   // Key: source\0property\0pseudo (null-byte separated — source paths contain colons).
   const scrubPreviousRef = useRef<Map<string, { override: string; baseline: string }>>(new Map())
+
+  // Cache of resolved SOURCE values, keyed the same way and scoped to one HMR
+  // generation. A source value cannot change without the file changing, and a
+  // file change means an HMR cycle — so within one `hmrAppliedVersion` a
+  // baseline read is valid forever and every repeat is provably redundant.
+  //
+  // This is a throughput guard, not a micro-optimisation. `readSourceValue`
+  // detaches the override <style>, calls getComputedStyle, and reattaches: two
+  // forced style recalcs per call. `scrubPreviousRef` alone does NOT bound it —
+  // that map is cleared on every commit, and the wheel / held-arrow affordances
+  // in NumericInput commit once per input EVENT (they call onChange, not
+  // onScrub). Without this cache a held arrow key re-pays the full detach set
+  // per repeat, multiplied by every target in a scope='all' fan-out.
+  const sourceBaselineRef = useRef<{ version: number; values: Map<string, string> }>({
+    version: -1,
+    values: new Map(),
+  })
   // Tracks the last committed value per property to suppress phantom commits
   // from HMR re-render blur events (same value committed twice for the same property).
   const lastCommitValueRef = useRef<Map<string, string>>(new Map())
@@ -706,13 +725,7 @@ export function Panel({
 
   // Shared raw className read — both extractedUtilities (Tailwind utilities)
   // and typographyClassName (bundle + chip detection) need the same string.
-  // SVG elements return SVGAnimatedString for .className; use getAttribute for those.
-  const rawClassName = useMemo<string>(() => {
-    if (!element) return ''
-    return typeof element.className === 'string'
-      ? element.className
-      : (element.getAttribute('class') ?? '')
-  }, [element, styleVersion])
+  const rawClassName = useMemo<string>(() => (element ? classAttr(element) : ''), [element, styleVersion])
 
   // Extract Tailwind utility classes from element's className.
   // Enables the "direct class path": send the actual class name to the server
@@ -873,10 +886,8 @@ export function Panel({
     // Stays HERE, ahead of the appends: buffer.append bumps the buffer version,
     // which can re-render Panel and fire an input onChange, and this guard needs
     // to be armed before that can happen.
-    if (changes.length > 0) {
-      for (const c of changes) {
-        lastCommitValueRef.current.set(`${c.source}${SEP}${c.property}${SEP}${c.pseudo ?? ''}`, c.value)
-      }
+    for (const c of changes) {
+      lastCommitValueRef.current.set(`${c.source}${SEP}${c.property}${SEP}${c.pseudo ?? ''}`, c.value)
     }
 
     overrideManager.flush()
@@ -986,14 +997,28 @@ export function Panel({
     const existing = overrideManager.get(elSource, property, pseudo)
     const override = existing
       ?? (getComputedStyle(el, pseudo ?? null).getPropertyValue(property).trim() || '')
+
+    // Version-keyed reset, checked synchronously rather than in an effect so a
+    // capture in the same render pass as an HMR bump can't read a stale entry.
+    const version = hmrAppliedVersion ?? 0
+    if (sourceBaselineRef.current.version !== version) {
+      sourceBaselineRef.current = { version, values: new Map() }
+    }
+    const cached = sourceBaselineRef.current.values.get(key)
+    if (cached !== undefined) {
+      scrubPreviousRef.current.set(key, { override, baseline: cached })
+      return
+    }
+
     // No overrides anywhere ⟹ `existing` was undefined ⟹ `override` is the
     // computed value, which is the source value. Reuse it rather than paying
     // for a second read.
     const baseline = overrideManager.hasAnyOverrides()
       ? overrideManager.readSourceValue(el, property, pseudo ?? null).trim()
       : override
+    sourceBaselineRef.current.values.set(key, baseline)
     scrubPreviousRef.current.set(key, { override, baseline })
-  }, [overrideManager])
+  }, [overrideManager, hmrAppliedVersion])
 
   // Scrub phase: captures previousValue on first touch per property, applies override.
   // On commit (commitRender=true): delegates to commitScrub() for atomic command creation.
@@ -1066,9 +1091,12 @@ export function Panel({
     for (const el of fanOutTargets) {
       const elSource = getElementEditTarget(el).source
       const elPrevKey = `${elSource}${SEP}${property}${SEP}${pseudo ?? ''}`
-      // Same helper as the primary capture above — `fanOutTargets` contains
-      // `element` in every branch, so this is usually a no-op re-visit, but
-      // sharing one implementation means the two can never drift apart.
+      // Same helper as the primary capture above, so the two can never drift
+      // apart. Usually a no-op re-visit — but the primary capture is NOT
+      // redundant: it pins the primary target's pre-gesture state ahead of every
+      // `set()` in this loop, and the `isAll` branch returns
+      // `sharedInfo.elements`, a flat-query snapshot that need not contain a
+      // shadow-hosted `element`.
       capturePrevious(el, elSource, property, pseudo, elPrevKey)
       overrideManager.set(elSource, property, value, pseudo)
     }
@@ -1489,10 +1517,13 @@ export function Panel({
 
   const handleSelectChild = useCallback(() => {
     if (!element) return
-    // No HTMLElement guard: `hasChildren` below counts `element.children`
-    // unfiltered, so a div whose only child is an SVG icon rendered an ENABLED
-    // button that silently did nothing when clicked.
-    const firstChild = element.children[0]
+    // Skip non-visual children (script/style/title, including an SVG's own),
+    // matching both `hasChildren` below and the click path's isNonEditable gate.
+    // The old `instanceof HTMLElement` guard made this a no-op on an SVG first
+    // child while `hasChildren` still counted it — an ENABLED button that did
+    // nothing. Advancing to the first EDITABLE child keeps the two in agreement
+    // instead of trading one asymmetry for another.
+    const firstChild = Array.from(element.children).find(c => !isNonEditable(c))
     if (firstChild) {
       onSelectElement(firstChild)
     }
@@ -1517,7 +1548,7 @@ export function Panel({
   const isLibrary = isLibraryComponent(element)
   const ancestor = isLibrary ? findUserAncestor(element) : null
   const hasParent = element.parentElement !== null && element.parentElement !== document.documentElement
-  const hasChildren = element.children.length > 0
+  const hasChildren = Array.from(element.children).some(c => !isNonEditable(c))
   // Typography section only renders for elements that directly render text.
   // Pure container elements have nothing to do in Typography.
   const showTypography = hasTypographyContent(element)

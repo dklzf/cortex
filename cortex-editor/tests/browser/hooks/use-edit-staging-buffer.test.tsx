@@ -223,6 +223,9 @@ describe('useEditStagingBuffer', () => {
     unmount()
   })
 
+  // Guard, not a repro — passes pre-fix too. `append` never touched its argument;
+  // this pins that a future in-place implementation can't corrupt a command's
+  // redo payload, which holds these exact objects.
   it('append does not mutate the caller\'s edit object', async () => {
     const { result, unmount } = renderHook(() => useEditStagingBuffer())
 

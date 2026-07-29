@@ -17,6 +17,23 @@ import { PREVIEW_SOURCE_ATTR, PREVIEW_SOURCE_PREFIX } from '../../src/browser/pr
  * Optional `bufferRef` receives the buffer handle so tests can inspect in-memory
  * state directly (Change 4: memory-only — no localStorage observation needed).
  */
+/** Minimal CSSOverrideManager stub. Panel touches only a handful of methods, and
+ *  every new method on the real class used to mean editing ~19 inline literals in
+ *  this file. Pass `overrides` to specialise a single test. */
+function createStubOverrideManager(overrides: Record<string, unknown> = {}) {
+  return {
+    set: vi.fn(),
+    get: vi.fn(),
+    remove: vi.fn(),
+    clearAll: vi.fn(),
+    dispose: vi.fn(),
+    flush: vi.fn(),
+    hasAnyOverrides: vi.fn(() => false),
+    readSourceValue: vi.fn(() => ''),
+    ...overrides,
+  }
+}
+
 function PanelWithRealBuffer(props: Omit<Parameters<typeof Panel>[0], 'buffer'> & {
   bufferRef?: { current: StagingBufferHandle | null }
 }) {
@@ -152,12 +169,7 @@ describe('Panel', () => {
     }
     const elA = makeTarget('src/A.tsx:1:1')
     const elB = makeTarget('src/B.tsx:2:2')
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(),
-      clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
     const commonProps = {
       overrideManager: overrideManager as any,
       onClose: vi.fn(),
@@ -394,12 +406,7 @@ describe('Panel', () => {
       display: 'block',
     })
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(),
-      clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
     const result = renderInShadow(
       <Panel
         selectedElements={[target]}
@@ -447,12 +454,7 @@ describe('Panel — library detection wiring', () => {
     parent.appendChild(libEl)
     document.body.appendChild(parent)
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(), clearAll: vi.fn(),
-      dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
 
     const container = document.createElement('div')
     document.body.appendChild(container)
@@ -485,12 +487,7 @@ describe('Panel — library detection wiring', () => {
     userEl.setAttribute('data-cortex-source', 'src/Hero.tsx:14:5')
     document.body.appendChild(userEl)
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(), clearAll: vi.fn(),
-      dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
 
     const container = document.createElement('div')
     document.body.appendChild(container)
@@ -809,8 +806,8 @@ describe('Panel — activeState + activePseudo + dimming', () => {
       const overrideManager = {
         set: vi.fn(), get: vi.fn(), remove: vi.fn(), clearAll: vi.fn(),
         dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
+        hasAnyOverrides: vi.fn(() => false),
+        readSourceValue: vi.fn(() => ''),
       }
 
       document.body.appendChild(container)
@@ -945,12 +942,7 @@ describe('Panel — hmrAppliedVersion (ZF0-1292)', () => {
     }
     const restoreStyles = mockGetComputedStyle(target, styles)
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(),
-      clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
 
     // Capture every getComputedStyle invocation since the spy is set.
     const gcsSpy = vi.spyOn(window, 'getComputedStyle')
@@ -1044,12 +1036,7 @@ describe('Panel — hmrAppliedVersion (ZF0-1292)', () => {
       makeProxy(defaultStyles)) as typeof window.getComputedStyle
     const restoreStyles = (): void => { window.getComputedStyle = originalGCS }
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(),
-      clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
     const fakeBufferForScopeTest = makeFakeBuffer()
@@ -1962,14 +1949,24 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
 
   // Install a getComputedStyle proxy that provides getPropertyValue on any
   // element (needed when applyOverride reads computed styles for previousValue).
-  function installGCSProxy(values: Record<string, string> = {}): () => void {
+  //  `store` (optional): when supplied, the proxy models what a REAL browser does
+  //  — computed style REFLECTS a staged !important override. Without it the proxy
+  //  returns the source value no matter what is staged, and a baseline test cannot
+  //  distinguish readSourceValue (which detaches the override sheet) from a plain
+  //  computed read (which does not). That made the chained-baseline test pass
+  //  against an implementation that read computed style directly.
+  function installGCSProxy(values: Record<string, string> = {}, store?: Map<string, string>): () => void {
     const original = window.getComputedStyle
     window.getComputedStyle = ((el: Element, pseudo?: string | null) => {
       const base = original.call(window, el, pseudo)
       return new Proxy(base, {
         get(obj, prop) {
           if (prop === 'getPropertyValue') {
-            return (p: string) => values[p] ?? ''
+            return (p: string) => {
+              const src = el.getAttribute?.('data-cortex-source')
+              const staged = src ? store?.get(`${src}\0${p}`) : undefined
+              return staged ?? values[p] ?? ''
+            }
           }
           return (obj as any)[prop]
         },
@@ -2215,7 +2212,10 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
       // "The file" says display: block. readSourceValue bypasses the override
       // layer, so it must keep reporting block no matter what is staged on top.
       const overrideManager = createTrackingOverrideManager('block')
-      const restoreGCS = installGCSProxy({ display: 'block' })
+      // Pass the override store: after the first commit, computed style reports
+      // the STAGED value ('flex') while readSourceValue still reports 'block'.
+      // That gap is what makes the baseline assertion below falsifiable.
+      const restoreGCS = installGCSProxy({ display: 'block' }, overrideManager._store)
       const commandStack = new CommandStack()
       const container = document.createElement('div')
       document.body.appendChild(container)
@@ -2295,6 +2295,9 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
       c.cleanup()
     })
 
+    // Guard, not a repro — passes pre-fix too (pre-fix undo #1 also left the
+    // buffer empty, and cmd1's previousValue was already 'block'). Kept as a
+    // terminal-state invariant; the falsifying assertions are the two above.
     it('undoing the whole chain empties the buffer and restores the source value', async () => {
       const c = await setupChain()
       await c.commit('flex')
@@ -2304,6 +2307,28 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
 
       expect(c.list()).toHaveLength(0)
       expect(c.overrideManager.get(SRC, 'display')).toBe('block')
+
+      c.cleanup()
+    })
+
+    // Guards the throughput fix. readSourceValue detaches the override <style>
+    // and forces two style recalcs per call; scrubPreviousRef is cleared on every
+    // commit, and NumericInput's wheel/arrow affordances commit once per input
+    // EVENT — so without the version-keyed cache a held arrow key re-pays the
+    // full detach set per repeat, times every fan-out target.
+    it('reads the source baseline at most once per key within one HMR generation', async () => {
+      const c = await setupChain()
+      // Seed an unrelated override so hasAnyOverrides() is true from the first
+      // capture and the detached read path is genuinely taken.
+      c.overrideManager.set(SRC, 'opacity', '0.5')
+
+      await c.commit('flex')
+      await c.commit('grid')
+      await c.commit('block')
+
+      const displayReads = c.overrideManager.readSourceValue.mock.calls
+        .filter((args: unknown[]) => args[1] === 'display').length
+      expect(displayReads).toBe(1) // without the cache: one per commit (3)
 
       c.cleanup()
     })
@@ -2537,12 +2562,7 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     el2.setAttribute('data-cortex-source', source)
     document.body.appendChild(el2)
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(),
-      clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
     render(
@@ -2594,12 +2614,7 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     el2.setAttribute('data-cortex-css', sharedCss)
     document.body.appendChild(el2)
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(),
-      clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
     render(
@@ -2639,12 +2654,7 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     // No data-cortex-css attribute — detectSharedClasses returns null immediately
     document.body.appendChild(el)
 
-    const overrideManager = {
-      set: vi.fn(), get: vi.fn(), remove: vi.fn(),
-      clearAll: vi.fn(), dispose: vi.fn(), flush: vi.fn(),
- hasAnyOverrides: vi.fn(() => false),
- readSourceValue: vi.fn(() => ''),
-    }
+    const overrideManager = createStubOverrideManager()
 
     const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
     render(
