@@ -62,6 +62,47 @@
       <li id="map-item-1" data-cortex-source="fixture:map:1">Item B</li>
       <li id="map-item-2" data-cortex-source="fixture:map:1">Item C</li>
     </ul>
+    <!--
+      Inline SVG icons for the SVG-selection specs.
+
+      Business purpose: `document.elementFromPoint` hit-tests SVG GEOMETRY, so a
+      click on an icon returns the inner shape (SVGRectElement here), never the
+      <svg>. That behavior cannot be reproduced in happy-dom, whose
+      elementFromPoint is a hard-coded `return null` — so real Chromium is the
+      only place the selection normalization can be verified. Each icon has a
+      filled rect covering the full viewBox so a center-click deterministically
+      lands on a CHILD of the <svg>, not the <svg> itself.
+
+      #icon is annotated (both the <svg> and its rect carry DISTINCT sources, so
+      a spec can tell "normalized to the icon" from "selected the shape").
+      The second icon carries NO source and NO id, which routes through the
+      agent-resolve path — the only place SVGAnimatedString `className` handling
+      is observable, since happy-dom models className as a plain string.
+
+      INVARIANT: source values are mirrored in helpers/fixture-server.ts as
+      FIXTURE_ICON_*. Both icons use unique sources, so shared-source counts in
+      the blast-radius specs are unaffected.
+    -->
+    <svg
+      id="icon"
+      class="lucide lucide-check"
+      data-cortex-source="fixture:icon:1"
+      width="40"
+      height="40"
+      viewBox="0 0 40 40"
+      style="display: block;"
+    >
+      <rect id="icon-shape" data-cortex-source="fixture:icon-shape:1" width="40" height="40" fill="rgb(20, 120, 200)" />
+    </svg>
+    <svg
+      class="lucide lucide-check"
+      width="40"
+      height="40"
+      viewBox="0 0 40 40"
+      style="display: block;"
+    >
+      <rect id="icon-unannotated-shape" width="40" height="40" fill="rgb(200, 60, 60)" />
+    </svg>
     <script src="./cortex-bundle.js"></script>
   </body>
 </html>

@@ -45,6 +45,17 @@ export const FIXTURE_SECONDARY_SOURCE = 'fixture:2:1'
  *  simulating items rendered from the same `.map()` call site. Selecting any
  *  of them causes detectSharedSource() to return count=3 and Panel to show
  *  the "Used by N elements" banner. */
+/** Annotated inline icon. The <svg> and its rect carry DISTINCT sources so a
+ *  spec can distinguish "normalized to the icon" from "selected the shape". */
+export const FIXTURE_ICON_SELECTOR = '#icon'
+export const FIXTURE_ICON_SOURCE = 'fixture:icon:1'
+export const FIXTURE_ICON_SHAPE_SOURCE = 'fixture:icon-shape:1'
+/** Icon with NO data-cortex-source anywhere — routes through agent-resolve.
+ *  Deliberately has no `id` and no `data-testid`: `buildDomSelectorHint` ranks
+ *  id > data-testid > first class, so either one would outrank the class and
+ *  mask the branch this fixture exists to cover. Located by class instead. */
+export const FIXTURE_ICON_UNANNOTATED_SELECTOR = 'svg.lucide:not([data-cortex-source])'
+
 export const FIXTURE_MAP_SELECTOR = '#map-item-0'
 export const FIXTURE_MAP_SOURCE = 'fixture:map:1'
 /** Total count of elements sharing FIXTURE_MAP_SOURCE in basic.html.

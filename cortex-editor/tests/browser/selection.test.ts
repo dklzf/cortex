@@ -312,4 +312,125 @@ describe('initSelection', () => {
     restoreEfp()
     target.remove()
   })
+
+  // `SVGElement extends Element`, NOT HTMLElement — in happy-dom exactly as in a
+  // real browser — so these reproduce the shipped bug without any shim.
+  describe('SVG targets', () => {
+    const SVG_NS = 'http://www.w3.org/2000/svg'
+
+    /** A two-path icon, matching what a lucide-style component renders. */
+    function createIcon(): { svg: SVGSVGElement; path1: SVGPathElement; path2: SVGPathElement } {
+      const svg = document.createElementNS(SVG_NS, 'svg')
+      svg.setAttribute('data-cortex-source', 'src/Icon.tsx:3:5')
+      svg.setAttribute('class', 'lucide lucide-check')
+      const path1 = document.createElementNS(SVG_NS, 'path')
+      const path2 = document.createElementNS(SVG_NS, 'path')
+      svg.append(path1, path2)
+      document.body.appendChild(svg)
+      return { svg, path1, path2 }
+    }
+
+    it('click on an inline <svg> selects it instead of clearing the selection', () => {
+      const { svg } = createIcon()
+      const restoreEfp = mockElementFromPoint(svg)
+      const handle = initSelection(shadow, onHover, onSelect)
+
+      dispatchMouseEvent(document.body, 'click', { clientX: 50, clientY: 50 })
+      // Pre-fix: ([], 'replace') — the instanceof HTMLElement guard returned
+      // null, and handleClick reads null as "backdrop, clear the selection".
+      expect(onSelect).toHaveBeenCalledWith([svg], 'replace')
+
+      handle.cleanup()
+      restoreEfp()
+      svg.remove()
+    })
+
+    it('click on an inner <path> selects the owning icon, not the path', () => {
+      const { svg, path1 } = createIcon()
+      const restoreEfp = mockElementFromPoint(path1)
+      const handle = initSelection(shadow, onHover, onSelect)
+
+      dispatchMouseEvent(document.body, 'click', { clientX: 50, clientY: 50 })
+      // Pre-fix: ([], 'replace'). Also fails a NAIVE widening, which would
+      // report ([path1], 'replace') — a selection that flips between <path> and
+      // the icon depending on sub-pixel geometry hit-testing.
+      expect(onSelect).toHaveBeenCalledWith([svg], 'replace')
+
+      handle.cleanup()
+      restoreEfp()
+      svg.remove()
+    })
+
+    it('mousemove over an <svg> reports it to onHover', () => {
+      const { svg } = createIcon()
+      const restoreEfp = mockElementFromPoint(svg)
+      const handle = initSelection(shadow, onHover, onSelect)
+
+      dispatchMouseEvent(document.body, 'mousemove', { clientX: 50, clientY: 50 })
+      expect(onHover).toHaveBeenCalledWith(svg) // pre-fix: onHover(null)
+
+      handle.cleanup()
+      restoreEfp()
+      svg.remove()
+    })
+
+    it('hover does not re-fire while crossing between paths of one icon', () => {
+      const { svg, path1, path2 } = createIcon()
+      const handle = initSelection(shadow, onHover, onSelect)
+
+      const restore1 = mockElementFromPoint(path1)
+      dispatchMouseEvent(document.body, 'mousemove', { clientX: 50, clientY: 50 })
+      restore1()
+      const restore2 = mockElementFromPoint(path2)
+      dispatchMouseEvent(document.body, 'mousemove', { clientX: 52, clientY: 52 })
+      restore2()
+
+      // Assert on `.mock.calls`, NOT toHaveBeenCalledTimes(1): pre-fix the count
+      // is ALSO 1 (both moves resolve to null, and the null dedupe swallows the
+      // second), so a count assertion would pass against the bug. The VALUE is
+      // what distinguishes them — pre-fix this is [[null]].
+      expect(onHover.mock.calls).toEqual([[svg]])
+
+      handle.cleanup()
+      svg.remove()
+    })
+
+    it('does not normalize HTML inside <foreignObject> to the enclosing icon', () => {
+      const { svg } = createIcon()
+      const fo = document.createElementNS(SVG_NS, 'foreignObject')
+      const inner = document.createElement('div')
+      inner.setAttribute('data-cortex-source', 'src/Icon.tsx:9:7')
+      fo.appendChild(inner)
+      svg.appendChild(fo)
+      const restoreEfp = mockElementFromPoint(inner)
+      const handle = initSelection(shadow, onHover, onSelect)
+
+      dispatchMouseEvent(document.body, 'click', { clientX: 50, clientY: 50 })
+      // Guard, not a repro — passes pre-fix too. foreignObject content is HTML,
+      // so it must keep its own identity rather than collapsing to the icon.
+      expect(onSelect).toHaveBeenCalledWith([inner], 'replace')
+
+      handle.cleanup()
+      restoreEfp()
+      svg.remove()
+    })
+
+    it('click on a <style> inside an <svg> still clears the selection', () => {
+      const { svg } = createIcon()
+      const svgStyle = document.createElementNS(SVG_NS, 'style')
+      svg.appendChild(svgStyle)
+      const restoreEfp = mockElementFromPoint(svgStyle)
+      const handle = initSelection(shadow, onHover, onSelect)
+
+      dispatchMouseEvent(document.body, 'click', { clientX: 50, clientY: 50 })
+      // Ordering guard: isNonEditable must run on the ORIGINAL node. If SVG
+      // normalization ran first, this would promote to the icon and select it,
+      // silently breaking the non-editable contract asserted above for <script>.
+      expect(onSelect).toHaveBeenCalledWith([], 'replace')
+
+      handle.cleanup()
+      restoreEfp()
+      svg.remove()
+    })
+  })
 })
