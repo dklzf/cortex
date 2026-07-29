@@ -514,8 +514,12 @@ export class CSSOverrideManager {
     kind: EditKind | undefined,
   ): { value: string; readFrom: DivergenceSource } {
     if (kind === 'jsx-immediate') {
+      // `.style` lives on ElementCSSInlineStyle (HTMLElement | SVGElement), not
+      // on Element. Narrow instead of casting — SVG targets reach this path once
+      // the selection layer is Element-typed, and a cast would have lied about it.
+      const inline = el instanceof HTMLElement || el instanceof SVGElement ? el.style : null
       return {
-        value: (el as HTMLElement).style.getPropertyValue(property).trim(),
+        value: inline?.getPropertyValue(property).trim() ?? '',
         readFrom: 'inline-style',
       }
     }

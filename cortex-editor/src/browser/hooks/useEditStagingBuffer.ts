@@ -90,9 +90,13 @@ function defaultReadSourceValue(
   property: string,
   pseudo: '::before' | '::after' | null,
 ): string {
+  // `.style` lives on ElementCSSInlineStyle (HTMLElement | SVGElement), not on
+  // Element. Narrow instead of casting — SVG-sourced intents are reachable once
+  // the selection layer is Element-typed.
+  const inlineStyle = el instanceof HTMLElement || el instanceof SVGElement ? el.style : null
   const inlineValue = pseudo
     ? ''
-    : (el as HTMLElement).style?.getPropertyValue(property).trim() ?? ''
+    : (inlineStyle?.getPropertyValue(property).trim() ?? '')
   if (inlineValue !== '') return inlineValue
   return getComputedStyle(el, pseudo ?? undefined).getPropertyValue(property).trim()
 }
