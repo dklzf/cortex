@@ -1,3 +1,4 @@
+import { classAttr } from './class-attr.js'
 import type { ColorChip } from './token-detector.js'
 
 const COLOR_UTILITY_PREFIXES = [
@@ -96,7 +97,10 @@ export function collectPageColorNames(root: ParentNode = document): Set<string> 
   for (const element of elementsInScope(scope)) {
     if (element.closest('[data-cortex-host]')) continue
 
-    const className = typeof element.className === 'string' ? element.className : ''
+    // classAttr, not a bare typeof guard: `fill-` and `stroke-` are in
+    // COLOR_UTILITY_PREFIXES and exist specifically for SVG, so the elements the
+    // guard silently skipped were exactly the ones those prefixes target.
+    const className = classAttr(element)
     for (const token of className.split(/\s+/)) {
       const name = colorNameFromUtility(token, doc)
       if (name) used.add(name)

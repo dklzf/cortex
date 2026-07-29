@@ -32,7 +32,7 @@ export interface SharedSourceInfo {
  * Returns SharedSourceInfo when 2+ elements share the source value, or null
  * if no sharing is detected (element has no attribute, or count <= 1).
  */
-export function detectSharedSource(el: HTMLElement): SharedSourceInfo | null {
+export function detectSharedSource(el: Element): SharedSourceInfo | null {
   const source = el.getAttribute('data-cortex-source')
   if (!source) return null
 
