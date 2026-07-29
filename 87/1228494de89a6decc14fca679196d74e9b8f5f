@@ -1,0 +1,28 @@
+cortex-editor/src/browser/hooks/useEditStagingBuffer.ts
+  s_8a55f585a15622::t_ed5613758d557c 40-46,162,164-167,202-206
+cortex-editor/src/browser/edit-command.ts
+  s_8a55f585a15622::t_ed5613758d557c 19-21,97-101,126-130,135,148-153,160-172
+cortex-editor/src/browser/components/Panel.tsx
+  s_8a55f585a15622::t_ed5613758d557c 872-875,889,891-896,903-920
+  s_8a55f585a15622::t_9dceff26a88705 921
+cortex-editor/tests/browser/hooks/use-edit-staging-buffer.test.tsx
+  s_8a55f585a15622::t_ed5613758d557c 169-244,898-899
+cortex-editor/tests/browser/panel.test.tsx
+  s_8a55f585a15622::t_ed5613758d557c 2279-2306,2308-2327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "871228494de89a6decc14fca679196d74e9b8f5f",
+  "prompts": {},
+  "sessions": {
+    "s_8a55f585a15622": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74142dea-afb2-4fcd-848d-bf1a75541a59",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
