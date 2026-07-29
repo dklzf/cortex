@@ -16,7 +16,9 @@ export interface PropertyChange {
  *  buffer-side undo/redo bookkeeping. Defined narrowly so the command
  *  doesn't depend on the entire hook surface. */
 export interface StagingBufferOps {
-  append: (edit: PendingEdit) => void
+  /** Returns the entry this append displaced under the same composite key,
+   *  or undefined on a fresh key. See `StagingBufferHandle.append`. */
+  append: (edit: PendingEdit) => PendingEdit | undefined
   remove: (intentIds: string[]) => void
 }
 
@@ -92,6 +94,11 @@ export interface PropertyEditCommandInit extends EditCommandInit {
    *  One PendingEdit per PropertyChange (same order). On undo we remove
    *  these from the buffer; on redo (execute) we re-append them. */
   pendingEdits?: readonly PendingEdit[]
+  /** Entries that this command's appends DISPLACED under the same composite
+   *  keys (last-write-wins destroys the prior intent with no other record).
+   *  Undo re-appends them so the buffer matches what the reverted override
+   *  actually shows. Empty for a first touch on every key. */
+  displacedEdits?: readonly PendingEdit[]
   /** Buffer handle. Captured at construction time and held for the
    *  lifetime of the command. Safe because the command's lifetime is
    *  bounded by the activation session — see commandStack.clear() on
@@ -116,10 +123,16 @@ export class PropertyEditCommand extends BaseEditCommand {
   readonly hasServerEntry = false
   private readonly pendingEdits: readonly PendingEdit[]
   private readonly bufferOps: StagingBufferOps | null
+  /** Not readonly: `execute()` (redo) refreshes it from what its own appends
+   *  displaced, so undo/redo stay symmetric on their own terms rather than
+   *  relying on CommandStack's "redo can only replay into the state undo left"
+   *  invariant holding forever. */
+  private displacedEdits: readonly PendingEdit[]
 
   constructor(init: PropertyEditCommandInit) {
     super(init)
     this.pendingEdits = init.pendingEdits ?? []
+    this.displacedEdits = init.displacedEdits ?? []
     this.bufferOps = init.bufferOps ?? null
   }
 
@@ -132,16 +145,31 @@ export class PropertyEditCommand extends BaseEditCommand {
     // command via commandStack.record() (which skips execute()) and does the
     // initial buffer.append at the call site. So execute() only fires on redo.
     if (this.bufferOps && this.pendingEdits.length > 0) {
-      for (const edit of this.pendingEdits) this.bufferOps.append(edit)
+      const displaced: PendingEdit[] = []
+      for (const edit of this.pendingEdits) {
+        const d = this.bufferOps.append(edit)
+        if (d !== undefined) displaced.push(d)
+      }
+      this.displacedEdits = displaced
     }
   }
 
   override undo(): void {
     super.undo()
     // Remove buffer entries by intentId so a subsequent Apply doesn't flush
-    // edits the user just undid.
-    if (this.bufferOps && this.pendingEdits.length > 0) {
-      this.bufferOps.remove(this.pendingEdits.map(e => e.intentId))
+    // edits the user just undid, THEN restore whatever those appends displaced.
+    //
+    // Order matters: appending first would leave the displacing entry sitting
+    // under the composite key, so the restore would be immediately clobbered.
+    // Remove-first also makes the wire order deterministic (syncRemove then
+    // syncAdd), which is what keeps the server-side cache in lockstep.
+    if (this.bufferOps) {
+      if (this.pendingEdits.length > 0) {
+        this.bufferOps.remove(this.pendingEdits.map(e => e.intentId))
+      }
+      for (const displaced of this.displacedEdits) {
+        this.bufferOps.append(displaced)
+      }
     }
   }
 }

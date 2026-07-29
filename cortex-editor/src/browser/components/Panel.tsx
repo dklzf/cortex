@@ -869,22 +869,11 @@ export function Panel({
       }))
     }
 
-    // Record command on stack. Overrides are already applied during scrub phase,
-    // so record() stores without re-executing (avoids double-apply). The command
-    // owns the staging-buffer side of undo/redo via pendingEdits + bufferOps.
+    // Track committed values to suppress phantom re-commits from HMR re-render.
+    // Stays HERE, ahead of the appends: buffer.append bumps the buffer version,
+    // which can re-render Panel and fire an input onChange, and this guard needs
+    // to be armed before that can happen.
     if (changes.length > 0) {
-      if (commandStack) {
-        const cmd = new PropertyEditCommand({
-          changes,
-          overrideManager,
-          pendingEdits,
-          bufferOps: buffer,
-        })
-        commandStack.record(cmd)
-      } else {
-        console.warn('[cortex] Edit committed without undo stack — this edit cannot be undone')
-      }
-      // Track committed values to suppress phantom re-commits from HMR re-render.
       for (const c of changes) {
         lastCommitValueRef.current.set(`${c.source}${SEP}${c.property}${SEP}${c.pseudo ?? ''}`, c.value)
       }
@@ -897,13 +886,38 @@ export function Panel({
     // Initial append to the staging buffer (deferred to Apply gesture).
     // Subsequent redo() of the recorded command re-appends these same shapes
     // via PropertyEditCommand.execute → bufferOps.append.
+    const displacedEdits: PendingEdit[] = []
     for (const edit of pendingEdits) {
-      buffer.append(edit)
+      // Last-write-wins destroys any prior intent for this composite key. Collect
+      // what each append displaced so undo can restore it — otherwise undoing a
+      // chained edit empties the buffer while the override still shows the
+      // intermediate value, and Apply silently writes nothing.
+      const displaced = buffer.append(edit)
+      if (displaced !== undefined) displacedEdits.push(displaced)
       // A new edit supersedes any prior divergence card for the same source+property.
       // Pre-pivot, this clear happened in CortexApp.handleEditDispatch when the edit
       // went out via channel.send. Now that the edit is buffer-appended, dispatch
       // doesn't fire — so we re-establish the contract here.
       onDismissError?.(`${edit.source}${SEP}${edit.property}`)
+    }
+
+    // Record command on stack AFTER the appends, so it owns what they displaced.
+    // Overrides are already applied during the scrub phase, so record() stores
+    // without re-executing (avoids double-apply). The command owns the
+    // staging-buffer side of undo/redo via pendingEdits + displacedEdits.
+    if (changes.length > 0) {
+      if (commandStack) {
+        const cmd = new PropertyEditCommand({
+          changes,
+          overrideManager,
+          pendingEdits,
+          displacedEdits,
+          bufferOps: buffer,
+        })
+        commandStack.record(cmd)
+      } else {
+        console.warn('[cortex] Edit committed without undo stack — this edit cannot be undone')
+      }
     }
   }, [selectedElements, element, overrideManager, buffer, sharedInfo, editScope, commandStack, onDismissError])
 

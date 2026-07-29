@@ -2276,7 +2276,55 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
       c.cleanup()
     })
 
+    it('undo of a chained edit restores the displaced intent so buffer matches the override', async () => {
+      const c = await setupChain()
+      await c.commit('flex')
+      await c.commit('grid')
+      await c.step(() => { c.commandStack.undo() })
 
+      // Pre-fix: 0 — undo removed the current intent and restored nothing, so
+      // the screen showed 'flex' while the Apply badge read 0 and Apply wrote
+      // nothing at all.
+      const after = c.list()
+      expect(after).toHaveLength(1)
+      expect(after[0]!.value).toBe('flex')
+      expect(after[0]!.previousValue).toBe('block')
+      // The override and the buffer now agree on what Apply would write.
+      expect(c.overrideManager.get(SRC, 'display')).toBe('flex')
+
+      c.cleanup()
+    })
+
+    it('undoing the whole chain empties the buffer and restores the source value', async () => {
+      const c = await setupChain()
+      await c.commit('flex')
+      await c.commit('grid')
+      await c.step(() => { c.commandStack.undo() })
+      await c.step(() => { c.commandStack.undo() })
+
+      expect(c.list()).toHaveLength(0)
+      expect(c.overrideManager.get(SRC, 'display')).toBe('block')
+
+      c.cleanup()
+    })
+
+    it('undo -> redo -> undo is stable', async () => {
+      const c = await setupChain()
+      await c.commit('flex')
+      await c.commit('grid')
+      await c.step(() => { c.commandStack.undo() })
+      await c.step(() => { c.commandStack.redo() })
+      await c.step(() => { c.commandStack.undo() })
+
+      // Redo re-displaces what undo restored; execute() refreshes the command's
+      // displacedEdits from its own appends, so the cycle does not drift.
+      const after = c.list()
+      expect(after).toHaveLength(1)
+      expect(after[0]!.value).toBe('flex')
+      expect(after[0]!.previousValue).toBe('block')
+
+      c.cleanup()
+    })
   })
 
   it('AC3: multi-select + scope=all packs instanceSources per selected source', async () => {

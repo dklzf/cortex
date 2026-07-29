@@ -37,7 +37,13 @@ export interface SyncEmitter {
 }
 
 export interface StagingBufferHandle {
-  append: (edit: PendingEdit) => void     // last-write-wins by (source\0property\0pseudo)
+  /** Last-write-wins by (source\0property\0pseudo). Returns the entry this
+   *  append DISPLACED, or undefined on a fresh key. `PropertyEditCommand` keeps
+   *  it so undo can put it back: without that, undoing the second edit in a
+   *  chain removed the current intent and restored nothing, leaving the override
+   *  showing the intermediate value while the buffer read empty and Apply was a
+   *  silent no-op. */
+  append: (edit: PendingEdit) => PendingEdit | undefined
   remove: (intentIds: string[]) => void
   list: () => PendingEdit[]
   clear: () => void
@@ -153,9 +159,12 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
   // (persistNow/schedulePersist/flush) was removed — it allocated a timer per
   // mutation that only ever called a no-op.
 
-  const append = useCallback((edit: PendingEdit) => {
+  const append = useCallback((edit: PendingEdit): PendingEdit | undefined => {
     const key = compositeKey(edit)
-    if (bufferRef.current.has(key)) {
+    // Capture BEFORE the delete. This is the entry last-write-wins is about to
+    // destroy, and it is the only record that it ever existed.
+    const displaced = bufferRef.current.get(key)
+    if (displaced !== undefined) {
       // Update in-place (last-write-wins) — remove and re-insert to keep insertion order.
       bufferRef.current.delete(key)
     }
@@ -190,6 +199,11 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
     }
 
     bumpRef.current()
+    // Displacement and eviction are mutually exclusive: a displacing append does
+    // delete-then-set, so size is unchanged and the `> MAX_ENTRIES` branch above
+    // cannot fire. A refactor to set-without-delete would break that silently —
+    // there is a test pinning it.
+    return displaced
   }, [])
 
   const remove = useCallback((intentIds: string[]) => {
