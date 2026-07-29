@@ -36,7 +36,7 @@ const STATE_INCLUDES: Record<StateName, RegExp> = {
  * so it can offer toggle buttons (e.g., show :hover appearance). The detected
  * declarations are later applied as CSS overrides to force-preview the state.
  */
-export function detectStates(element: HTMLElement): StateDeclarations {
+export function detectStates(element: Element): StateDeclarations {
   const result: StateDeclarations = {
     hover: new Map(),
     focus: new Map(),
@@ -58,7 +58,7 @@ export function detectStates(element: HTMLElement): StateDeclarations {
 
 function collectFromRules(
   rules: CSSRuleList,
-  element: HTMLElement,
+  element: Element,
   result: StateDeclarations,
 ): void {
   for (const rule of rules) {
@@ -112,7 +112,7 @@ function resolveNestingSelector(rule: CSSStyleRule): string | null {
 
 function processStyleRule(
   rule: CSSStyleRule,
-  element: HTMLElement,
+  element: Element,
   result: StateDeclarations,
 ): void {
   // Split comma-separated selectors and process each independently

@@ -1,3 +1,4 @@
+import { classAttr } from './class-attr.js'
 import { MAX_SOURCE_HINT_FIELD_BYTES, PREVIEW_SOURCE_PREFIX, isPreviewSource } from '../shared/preview-source.js'
 export { MAX_SOURCE_HINT_FIELD_BYTES, PREVIEW_SOURCE_PREFIX, isPreviewSource } from '../shared/preview-source.js'
 
@@ -26,7 +27,7 @@ export function selectorForEditSource(source: string): string {
   return `[data-cortex-source="${CSS.escape(source)}"]`
 }
 
-export function getElementEditTarget(el: HTMLElement): ElementEditTarget {
+export function getElementEditTarget(el: Element): ElementEditTarget {
   const source = el.getAttribute('data-cortex-source')
   if (source) return { source, applyMode: 'direct' }
 
@@ -39,7 +40,7 @@ export function getElementEditTarget(el: HTMLElement): ElementEditTarget {
   }
 }
 
-function ensurePreviewId(el: HTMLElement): string {
+function ensurePreviewId(el: Element): string {
   const existing = el.getAttribute(PREVIEW_SOURCE_ATTR)
   if (existing) return existing
   previewIdCounter += 1
@@ -48,8 +49,13 @@ function ensurePreviewId(el: HTMLElement): string {
   return previewId
 }
 
-function buildSourceResolutionHint(el: HTMLElement): SourceResolutionHint {
-  const className = clampUtf8(typeof el.className === 'string' ? el.className.trim() : '')
+function buildSourceResolutionHint(el: Element): SourceResolutionHint {
+  // classAttr, not a bare `typeof el.className === 'string'` guard: on SVG the
+  // guard yields '' and drops the classes entirely. For a third-party icon
+  // (lucide et al., unannotated because source-transform skips node_modules)
+  // `class="lucide lucide-check"` is the strongest signal Claude has for
+  // locating the call site — dropping it leaves `{tagName:'svg', domSelector:'svg'}`.
+  const className = clampUtf8(classAttr(el).trim())
   const id = clampUtf8(el.id.trim())
   const textPreview = clampUtf8((el.textContent ?? '').trim())
   return {
@@ -61,7 +67,7 @@ function buildSourceResolutionHint(el: HTMLElement): SourceResolutionHint {
   }
 }
 
-function buildDomSelectorHint(el: HTMLElement, className: string, id: string): string {
+function buildDomSelectorHint(el: Element, className: string, id: string): string {
   const tagName = el.tagName.toLowerCase()
   if (id) return clampUtf8(`${tagName}#${CSS.escape(id)}`)
   const testId = el.getAttribute('data-testid')

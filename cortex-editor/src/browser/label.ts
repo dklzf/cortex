@@ -1,3 +1,5 @@
+import { classAttr } from './class-attr.js'
+
 export interface SourceInfo {
   componentName: string | null
   fileName: string
@@ -7,7 +9,7 @@ export interface SourceInfo {
 
 /** Parse a data-cortex-source attribute into structured parts.
  *  Splits from the right so Windows drive letters (C:\...) don't break parsing. */
-export function parseCortexSource(el: HTMLElement): SourceInfo | null {
+export function parseCortexSource(el: Element): SourceInfo | null {
   const source = el.getAttribute('data-cortex-source')
   if (!source) return null
 
@@ -64,7 +66,7 @@ function isNodeModulesPath(filePath: string): boolean {
 }
 
 /** Check if an element comes from a third-party library (node_modules). */
-export function isLibraryComponent(el: HTMLElement): boolean {
+export function isLibraryComponent(el: Element): boolean {
   const info = parseCortexSource(el)
   if (!info) return false
   return isNodeModulesPath(info.filePath)
@@ -72,9 +74,11 @@ export function isLibraryComponent(el: HTMLElement): boolean {
 
 /** Walk up the DOM to find the closest ancestor with a user-space source. */
 export function findUserAncestor(
-  el: HTMLElement,
-): { source: SourceInfo; element: HTMLElement } | null {
-  let current = el.parentElement
+  el: Element,
+): { source: SourceInfo; element: Element } | null {
+  // `parentElement` is typed `HTMLElement | null` by lib.dom, which is a lie for
+  // namespaced trees — an <svg>'s parent chain is SVGElement. Annotate honestly.
+  let current: Element | null = el.parentElement
   while (current) {
     const source = parseCortexSource(current)
     if (source && !isNodeModulesPath(source.filePath)) {
@@ -87,9 +91,9 @@ export function findUserAncestor(
 
 /** Get a Chrome DevTools-style label for the layer tree: tag.firstClass or just tag.
  *  Always shows the HTML element, never the component name — "section.hero" not "Features". */
-export function getTreeLabel(el: HTMLElement): string {
+export function getTreeLabel(el: Element): string {
   const tag = el.tagName.toLowerCase()
-  const cls = typeof el.className === 'string' ? el.className : (el.getAttribute('class') ?? '')
+  const cls = classAttr(el)
   if (cls.trim()) {
     return `${tag}.${cls.trim().split(/\s+/)[0]}`
   }
@@ -97,25 +101,25 @@ export function getTreeLabel(el: HTMLElement): string {
 }
 
 /** Get a compact label (hover overlay) */
-export function getLabel(el: HTMLElement): string {
+export function getLabel(el: Element): string {
   const info = parseCortexSource(el)
   if (info?.componentName) return info.componentName
 
   const tag = el.tagName.toLowerCase()
-  const cls = el.className
-  if (typeof cls === 'string' && cls.trim()) {
+  const cls = classAttr(el)
+  if (cls.trim()) {
     return `${tag}.${cls.trim().split(/\s+/)[0]}`
   }
   return tag
 }
 
 /** Get a detailed label (selection overlay) */
-export function getSelectionLabel(el: HTMLElement): string {
+export function getSelectionLabel(el: Element): string {
   const info = parseCortexSource(el)
   if (!info) {
     const tag = el.tagName.toLowerCase()
-    const cls = el.className
-    if (typeof cls === 'string' && cls.trim()) {
+    const cls = classAttr(el)
+    if (cls.trim()) {
       return `${tag}.${cls.trim().split(/\s+/)[0]}`
     }
     return tag
