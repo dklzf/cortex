@@ -1,0 +1,51 @@
+cortex-editor/src/browser/components/CortexApp.tsx
+  s_8a55f585a15622::t_633d535081b431 34,74-75,165,314,327,736,1199
+cortex-editor/src/browser/selection-metadata.ts
+  s_8a55f585a15622::t_633d535081b431 39,59-67,69,72-73,84-86,88-92,94-95,97-99,129,173,225,251,259-261,266-268
+cortex-editor/src/browser/hooks/useEditStagingBuffer.ts
+  s_8a55f585a15622::t_cd97f32db7b306 2,249,255-259,267
+cortex-editor/tests/browser/hooks/use-edit-staging-buffer.test.tsx
+  s_8a55f585a15622::t_cd97f32db7b306 516-544
+cortex-editor/src/browser/components/sections/ElementTree.tsx
+  s_8a55f585a15622::t_633d535081b431 5-6,12
+cortex-editor/tests/browser/panel.test.tsx
+  s_8a55f585a15622::t_cd97f32db7b306 292-312
+cortex-editor/src/browser/components/SecondarySelectionOverlay.tsx
+  s_8a55f585a15622::t_633d535081b431 8
+cortex-editor/src/browser/components/HoverOverlay.tsx
+  s_8a55f585a15622::t_633d535081b431 7,20
+cortex-editor/src/browser/selection-source-expand.ts
+  s_8a55f585a15622::t_633d535081b431 23,25-26,50-52,54
+cortex-editor/src/browser/shared-class-detector.ts
+  s_8a55f585a15622::t_633d535081b431 6-10,47,55,60
+cortex-editor/tests/browser/layer-tree.test.tsx
+  s_8a55f585a15622::t_633d535081b431 189-221
+cortex-editor/src/browser/components/LayerTree.tsx
+  s_8a55f585a15622::t_633d535081b431 7,21,27-28,34-38,42,45,50,58,74-75,84
+cortex-editor/tests/browser/selection-metadata.test.ts
+  s_8a55f585a15622::t_633d535081b431 390-446
+cortex-editor/src/browser/components/SelectionOverlay.tsx
+  s_8a55f585a15622::t_633d535081b431 9
+cortex-editor/src/browser/cortex-app-reducer.ts
+  s_8a55f585a15622::t_633d535081b431 168-169,171
+cortex-editor/src/browser/components/panel-style-snapshot.ts
+  s_8a55f585a15622::t_633d535081b431 29
+cortex-editor/src/browser/components/Panel.tsx
+  s_8a55f585a15622::t_633d535081b431 108,124,191,194-195,333,978,982,1431-1433,1435
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "db855caa73be6d52925f16000fa48ae806250a80",
+  "prompts": {},
+  "sessions": {
+    "s_8a55f585a15622": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74142dea-afb2-4fcd-848d-bf1a75541a59",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
