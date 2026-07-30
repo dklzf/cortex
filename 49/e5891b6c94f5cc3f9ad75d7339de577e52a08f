@@ -1,0 +1,26 @@
+cortex-editor/src/cli/mcp.ts
+  s_8a55f585a15622::t_9f35bb327f0765 9,726,731,751-752,759
+cortex-editor/vitest.config.ts
+  s_8a55f585a15622::t_ea57917e2e8940 84
+cortex-editor/src/shared/untrusted-fence.ts
+  s_8a55f585a15622::t_acca0ff9c5cb77 1-111
+cortex-editor/tests/shared/untrusted-fence.test.ts
+  s_8a55f585a15622::t_af73b5050f7800 1-35,37-53,58-77
+  s_8a55f585a15622::t_fe6fd36f3ff669 36,54-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "49e5891b6c94f5cc3f9ad75d7339de577e52a08f",
+  "prompts": {},
+  "sessions": {
+    "s_8a55f585a15622": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74142dea-afb2-4fcd-848d-bf1a75541a59",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
