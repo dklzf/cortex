@@ -1,0 +1,367 @@
+<meta charset="utf-8">
+<title>M0c — does a drag beat a sentence?</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e6e8ec;--dim:#8b93a3;--accent:#4f8cff;--warn:#d97706;--ok:#16a34a}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+  h1{font-size:15px;margin:0;font-weight:600}
+  .sub{color:var(--dim);font-size:12px}
+  main{display:grid;grid-template-columns:1fr 340px;min-height:calc(100vh - 53px)}
+  #stage{padding:24px;position:relative}
+  aside{border-left:1px solid var(--line);background:var(--panel);padding:16px;display:flex;flex-direction:column;gap:14px}
+  .card{background:#12151b;border:1px solid var(--line);border-radius:8px;padding:12px}
+  .card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
+  button{font:inherit;background:#1e232d;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+  button:hover{border-color:#38414f}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  textarea{width:100%;background:#0c0e13;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:13px ui-monospace,monospace;resize:vertical}
+  /* ---- the fake app the user manipulates ---- */
+  .app{background:#fff;color:#111;border-radius:8px;padding:18px;max-width:640px}
+  .app h2{margin:0 0 4px;font-size:17px}
+  .app p.lede{margin:0 0 14px;color:#666;font-size:13px}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+  .btn{background:#111;color:#fff;border-radius:6px;padding:7px 12px;font-size:13px}
+  .btn.ghost{background:#eee;color:#111}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #eee}
+  th{color:#666;font-weight:600;font-size:12px}
+  .badge{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:99px;padding:2px 8px;font-size:11px}
+  /* ---- editor affordances ---- */
+  .cx-hover{outline:2px solid rgba(79,140,255,.55);outline-offset:1px}
+  .cx-sel{outline:2px solid var(--accent);outline-offset:1px}
+  .cx-ghost{position:fixed;pointer-events:none;z-index:50;opacity:.75;border:1px dashed var(--accent);background:rgba(79,140,255,.12);border-radius:6px;padding:4px 8px;font-size:12px;color:#fff}
+  .cx-line{position:absolute;height:2px;background:var(--accent);z-index:40;pointer-events:none}
+  .cx-chip{display:inline-flex;align-items:center;gap:5px;border:1px dashed var(--accent);color:#1d4ed8;background:rgba(79,140,255,.10);border-radius:6px;padding:3px 8px;font-size:12px;margin:2px 0}
+  .cx-deleted{opacity:.28;text-decoration:line-through}
+  .log{font:12px ui-monospace,monospace;color:var(--dim);max-height:150px;overflow:auto;white-space:pre-wrap}
+  .big{font-size:26px;font-weight:650;font-variant-numeric:tabular-nums}
+  .muted{color:var(--dim);font-size:12px}
+  .taskbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line);background:#12151b}
+  .pill{border:1px solid var(--line);border-radius:99px;padding:3px 10px;font-size:12px;color:var(--dim)}
+  .pill.on{border-color:var(--accent);color:var(--text)}
+  table.res{width:100%;border-collapse:collapse;font:12px ui-monospace,monospace}
+  table.res td,table.res th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left}
+</style>
+
+<header>
+  <h1>M0c — does a drag beat a sentence?</h1>
+  <span class="sub">Ten tasks, two arms, same stopwatch. The question three review rounds never asked.</span>
+</header>
+
+<div class="taskbar">
+  <span class="pill" id="armPill">arm: —</span>
+  <span class="pill" id="taskPill">task 0 / 10</span>
+  <strong id="taskText" style="font-weight:500"></strong>
+  <span style="flex:1"></span>
+  <button id="startBtn" class="primary">Start run</button>
+  <button id="doneBtn" disabled>Task done ⏎</button>
+  <button id="giveUpBtn" disabled>Couldn't do it</button>
+</div>
+
+<main>
+  <div id="stage">
+    <div class="app" id="app">
+      <h2 data-n="title">Quarterly report</h2>
+      <p class="lede" data-n="lede">Revenue and risk across all business units.</p>
+      <div class="row" id="actions">
+        <span class="btn ghost" data-n="filter">Filter</span>
+        <span class="btn ghost" data-n="sort">Sort</span>
+        <span class="btn" data-n="export">Export CSV</span>
+      </div>
+      <table id="tbl">
+        <thead><tr><th>Unit</th><th>Revenue</th><th>Risk</th></tr></thead>
+        <tbody>
+          <tr data-n="r1"><td>North</td><td>$1.2M</td><td><span class="badge">Low</span></td></tr>
+          <tr data-n="r2"><td>South</td><td>$0.9M</td><td><span class="badge">Med</span></td></tr>
+          <tr data-n="r3"><td>East</td><td>$1.7M</td><td><span class="badge">Low</span></td></tr>
+        </tbody>
+      </table>
+      <div class="row" style="margin-top:14px">
+        <span class="btn ghost" data-n="prev">Previous</span>
+        <span class="btn ghost" data-n="next">Next</span>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <div class="card">
+      <h3>Stopwatch</h3>
+      <div class="big" id="clock">0.0s</div>
+      <div class="muted" id="clockNote">idle</div>
+    </div>
+
+    <div class="card" id="dragPanel">
+      <h3>Changes <span id="count" style="color:var(--accent)">(0)</span></h3>
+      <div class="log" id="changes">nothing staged</div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button id="undoBtn">Undo</button>
+        <button id="sendBtn" class="primary">Send</button>
+      </div>
+    </div>
+
+    <div class="card" id="typePanel" hidden>
+      <h3>Selection-assisted prompt</h3>
+      <div class="muted" id="selHint">Click an element to attach it, then type the instruction.</div>
+      <textarea id="prompt" rows="4" placeholder="e.g. move this above the table"></textarea>
+      <button id="submitPrompt" class="primary" style="margin-top:8px">Submit</button>
+    </div>
+
+    <div class="card">
+      <h3>Results</h3>
+      <div id="results" class="muted">No completed tasks yet.</div>
+      <button id="exportBtn" style="margin-top:8px">Copy results JSON</button>
+    </div>
+  </aside>
+</main>
+
+<script>
+/* ────────────────────────────────────────────────────────────────────────────
+   M0c harness.
+
+   The spec's kill condition: "If Claude must ask a clarifying question on
+   30-40% of gestures, then drag-plus-question costs more than typing." So the
+   comparison arm is NOT raw typing — it is v0/Bolt-style SELECTION-ASSISTED
+   prompting (click the element, then describe the change), which is what a
+   designer would actually do today. Comparing against raw typing would have
+   flattered the drag arm by pricing in the target-description cost that
+   selection already removes.
+
+   Each participant does all ten tasks in both arms. Arm order alternates per
+   participant so learning effects fall on both arms roughly equally.
+
+   The measured quantity is wall-clock from task presentation to self-declared
+   completion. It deliberately does NOT include Claude's resolution time or a
+   clarifying round trip: those are additive to the drag arm, so excluding them
+   biases IN FAVOUR of drag. If drag loses here, it loses by more in reality.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const TASKS = [
+  'Move "Export CSV" above the table.',
+  'Delete the "Sort" button.',
+  'Move the "Previous"/"Next" row above the table.',
+  'Delete the East row from the table.',
+  'Move "Filter" to the end of its row.',
+  'Add a new button after "Export CSV".',
+  'Move the lede paragraph below the table.',
+  'Delete the Risk column header.',
+  'Move the South row to the top of the table.',
+  'Add a caption under the title.',
+];
+
+const state = {
+  arm: null, taskIdx: -1, t0: 0, running: false,
+  results: [], changes: [], sel: null, undoStack: [],
+};
+
+const $ = id => document.getElementById(id);
+const app = $('app');
+
+/* ---------- stopwatch ---------- */
+let raf;
+function tick(){ if(!state.running) return; $('clock').textContent = ((performance.now()-state.t0)/1000).toFixed(1)+'s'; raf=requestAnimationFrame(tick); }
+
+function startTask(){
+  state.taskIdx++;
+  if (state.taskIdx >= TASKS.length) return finishArm();
+  $('taskPill').textContent = `task ${state.taskIdx+1} / ${TASKS.length}`;
+  $('taskText').textContent = TASKS[state.taskIdx];
+  resetApp();
+  state.t0 = performance.now(); state.running = true;
+  $('clockNote').textContent = 'running — press Task done when finished';
+  $('doneBtn').disabled = false; $('giveUpBtn').disabled = false;
+  tick();
+}
+
+function record(outcome){
+  if(!state.running) return;
+  state.running = false; cancelAnimationFrame(raf);
+  const ms = performance.now() - state.t0;
+  state.results.push({ arm: state.arm, task: state.taskIdx+1, text: TASKS[state.taskIdx], ms: Math.round(ms), outcome });
+  $('doneBtn').disabled = true; $('giveUpBtn').disabled = true;
+  renderResults();
+  startTask();
+}
+
+function finishArm(){
+  $('clockNote').textContent = 'arm complete';
+  $('taskText').textContent = '';
+  if (state.arm === 'drag'){
+    state.arm = 'prompt'; state.taskIdx = -1;
+    setArm('prompt');
+    alert('Drag arm complete. Now the SAME ten tasks using selection-assisted prompting.');
+    startTask();
+  } else {
+    $('taskPill').textContent = 'run complete';
+    $('startBtn').disabled = false;
+    alert('Run complete. Copy the results JSON and paste it into the spec.');
+  }
+}
+
+function setArm(arm){
+  state.arm = arm;
+  $('armPill').textContent = 'arm: ' + (arm === 'drag' ? 'DRAG (sketch mode)' : 'SELECTION-ASSISTED PROMPT');
+  $('armPill').className = 'pill on';
+  $('dragPanel').hidden = arm !== 'drag';
+  $('typePanel').hidden = arm !== 'prompt';
+}
+
+/* ---------- the fake app, restored between tasks ---------- */
+const PRISTINE = app.innerHTML;
+function resetApp(){
+  app.innerHTML = PRISTINE;
+  state.changes = []; state.undoStack = []; state.sel = null;
+  renderChanges();
+  $('selHint').textContent = 'Click an element to attach it, then type the instruction.';
+  $('prompt').value = '';
+}
+
+/* ---------- shared: hover + select ---------- */
+let hovered = null;
+app.addEventListener('mousemove', e => {
+  const el = e.target.closest('[data-n]');
+  if (el === hovered) return;
+  hovered?.classList.remove('cx-hover');
+  hovered = el; hovered?.classList.add('cx-hover');
+});
+app.addEventListener('mouseleave', () => { hovered?.classList.remove('cx-hover'); hovered = null; });
+
+app.addEventListener('click', e => {
+  const el = e.target.closest('[data-n]');
+  if (!el) return;
+  e.preventDefault();
+  state.sel?.classList.remove('cx-sel');
+  state.sel = el; el.classList.add('cx-sel');
+  if (state.arm === 'prompt') $('selHint').textContent = 'attached: ' + label(el);
+});
+
+const label = el => (el.dataset.n || el.tagName.toLowerCase()) + ' · "' + (el.textContent||'').trim().slice(0,22) + '"';
+
+/* ---------- DRAG arm: ghost, insertion line, chip, delete, undo ---------- */
+let dragging = null, ghost = null, line = null, downPt = null;
+
+app.addEventListener('mousedown', e => {
+  if (state.arm !== 'drag') return;
+  const el = e.target.closest('[data-n]');
+  if (!el) return;
+  downPt = { x: e.clientX, y: e.clientY, el };
+});
+
+window.addEventListener('mousemove', e => {
+  if (state.arm !== 'drag' || !downPt) return;
+  const dist = Math.hypot(e.clientX-downPt.x, e.clientY-downPt.y);
+  if (!dragging && dist > 5){            // 5px threshold, per §2
+    dragging = downPt.el;
+    ghost = document.createElement('div');
+    ghost.className = 'cx-ghost'; ghost.textContent = label(dragging);
+    document.body.appendChild(ghost);
+  }
+  if (!dragging) return;
+  ghost.style.left = (e.clientX+10)+'px'; ghost.style.top = (e.clientY+10)+'px';
+  showLine(e.clientX, e.clientY);
+});
+
+window.addEventListener('mouseup', e => {
+  if (state.arm !== 'drag') { downPt = null; return; }
+  if (dragging){
+    const target = dropTarget(e.clientX, e.clientY);
+    if (target) stage({ verb:'move', what:label(dragging), where:'before ' + label(target) });
+    ghost?.remove(); ghost = null; line?.remove(); line = null;
+    // subtract-don't-fabricate: the real page is NOT reflowed. A chip marks intent.
+    const chip = document.createElement('div');
+    chip.className = 'cx-chip'; chip.textContent = '⇢ ' + label(dragging) + ' goes here';
+    target?.parentNode.insertBefore(chip, target);
+    dragging = null;
+  }
+  downPt = null;
+});
+
+function candidates(){ return [...app.querySelectorAll('[data-n]')]; }
+function dropTarget(x,y){
+  let best = null, bestD = Infinity;
+  for (const el of candidates()){
+    if (el === dragging) continue;
+    const r = el.getBoundingClientRect();
+    const d = Math.abs(r.top - y) + (x < r.left || x > r.right ? 60 : 0);
+    if (d < bestD){ bestD = d; best = el; }
+  }
+  return bestD < 90 ? best : null;
+}
+function showLine(x,y){
+  const t = dropTarget(x,y);
+  if (!t){ line?.remove(); line = null; return; }
+  const r = t.getBoundingClientRect(), s = $('stage').getBoundingClientRect();
+  if (!line){ line = document.createElement('div'); line.className='cx-line'; $('stage').appendChild(line); }
+  line.style.left = (r.left - s.left)+'px'; line.style.top = (r.top - s.top - 1)+'px'; line.style.width = r.width+'px';
+}
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && state.running && !e.target.matches('textarea')) { e.preventDefault(); $('doneBtn').click(); }
+  if (state.arm !== 'drag') return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && state.sel && !e.target.matches('textarea')){
+    e.preventDefault();
+    state.sel.classList.add('cx-deleted');   // real subtraction: hide, let layout close up
+    stage({ verb:'remove', what: label(state.sel) });
+    state.sel = null;
+  }
+  if ((e.metaKey||e.ctrlKey) && e.key === 'z'){ e.preventDefault(); undo(); }
+});
+
+function stage(change){
+  state.changes.push(change);
+  state.undoStack.push(app.innerHTML);
+  renderChanges();
+}
+function undo(){
+  if (!state.changes.length) return;
+  state.changes.pop();
+  const prev = state.undoStack.pop();
+  if (prev !== undefined) app.innerHTML = prev;
+  state.sel = null;
+  renderChanges();
+}
+function renderChanges(){
+  $('count').textContent = `(${state.changes.length})`;
+  $('changes').textContent = state.changes.length
+    ? state.changes.map((c,i)=>`${i+1}. ${c.verb} ${c.what}${c.where?' → '+c.where:''}`).join('\n')
+    : 'nothing staged';
+}
+$('undoBtn').onclick = undo;
+$('sendBtn').onclick = () => alert('Would send to Claude:\n\n' + JSON.stringify(state.changes, null, 2) +
+  '\n\n(M0c stops here — resolution time is deliberately NOT counted, which biases in favour of drag.)');
+
+/* ---------- PROMPT arm ---------- */
+$('submitPrompt').onclick = () => {
+  if (!$('prompt').value.trim()) return alert('Type the instruction first.');
+  alert('Would send to Claude:\n\nselection: ' + (state.sel ? label(state.sel) : '(none)') +
+        '\ninstruction: ' + $('prompt').value.trim());
+};
+
+/* ---------- results ---------- */
+function renderResults(){
+  const rows = state.results;
+  if (!rows.length){ $('results').textContent = 'No completed tasks yet.'; return; }
+  const by = arm => rows.filter(r=>r.arm===arm && r.outcome==='done').map(r=>r.ms);
+  const med = a => a.length ? (a.slice().sort((x,y)=>x-y)[Math.floor(a.length/2)]/1000).toFixed(1)+'s' : '—';
+  const gave = arm => rows.filter(r=>r.arm===arm && r.outcome==='gaveup').length;
+  $('results').innerHTML =
+    `<table class="res"><tr><th>arm</th><th>n</th><th>median</th><th>gave up</th></tr>` +
+    `<tr><td>drag</td><td>${by('drag').length}</td><td>${med(by('drag'))}</td><td>${gave('drag')}</td></tr>` +
+    `<tr><td>prompt</td><td>${by('prompt').length}</td><td>${med(by('prompt'))}</td><td>${gave('prompt')}</td></tr></table>`;
+}
+$('exportBtn').onclick = () => {
+  navigator.clipboard.writeText(JSON.stringify({ ranAt: new Date().toISOString(), results: state.results }, null, 2));
+  $('exportBtn').textContent = 'copied ✓'; setTimeout(()=>$('exportBtn').textContent='Copy results JSON', 1200);
+};
+
+$('doneBtn').onclick = () => record('done');
+$('giveUpBtn').onclick = () => record('gaveup');
+$('startBtn').onclick = () => {
+  state.results = []; state.taskIdx = -1;
+  setArm('drag'); $('startBtn').disabled = true;
+  alert('Arm 1 of 2: DRAG.\n\nDrag to move, select + Delete to remove, Cmd+Z to undo.\nPress "Task done" the moment you consider the task expressed.');
+  startTask();
+};
+setArm('drag'); $('dragPanel').hidden = false;
+</script>
