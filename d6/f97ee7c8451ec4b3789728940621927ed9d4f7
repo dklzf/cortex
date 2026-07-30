@@ -1,0 +1,24 @@
+cortex-editor/src/browser/selection-metadata.ts
+  s_8a55f585a15622::t_9bd2aa3e081191 33-43,56,61,184-202
+cortex-editor/tests/tsconfig.json
+  s_8a55f585a15622::t_8974ae47aafb37 17-21
+cortex-editor/tests/browser/selection-metadata.test.ts
+  s_8a55f585a15622::t_752acb1e9452bb 488-548
+  s_8a55f585a15622::t_192ad96d4a49bb 195,202,211,221,232,241,252,265,291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "d6f97ee7c8451ec4b3789728940621927ed9d4f7",
+  "prompts": {},
+  "sessions": {
+    "s_8a55f585a15622": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74142dea-afb2-4fcd-848d-bf1a75541a59",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
