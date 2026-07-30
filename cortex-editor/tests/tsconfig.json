@@ -14,6 +14,11 @@
     // initSelection annotation was wrong on TWO axes (single-arg instead of
     // (elements, action), and HTMLElement instead of Element) and survived a
     // prior signature change unnoticed, because nothing type-checked it.
+    // Hand-builds SelectionMetadata literals rather than going through
+    // captureSelectionMetadata, so a field added to that interface drifts
+    // silently here — `groupSize` did exactly that, and only a runtime test
+    // failure caught it. In the program, the compiler catches it instead.
+    "browser/selection-metadata.test.ts",
     "browser/selection.test.ts",
     "browser/cortex-app.test.tsx",
     "browser/keyboard-shortcuts.test.tsx",
