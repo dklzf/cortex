@@ -292,6 +292,10 @@ function setHeightMode(el, mode){
   else el.style.height = Math.round(el.getBoundingClientRect().height)+'px';
 }
 
+/* Surface a degradation once per gesture rather than spamming per frame. */
+let degraded = null;
+function degrade(msg){ if (degraded === msg) return; degraded = msg; document.getElementById('refuse').textContent = msg; }
+
 /* ── perf: what the gesture actually cost ─────────────────────────────────── */
 let frames = [];
 const markFrame = ms => frames.push(ms);
@@ -392,6 +396,21 @@ function returnToFlow(el){
 
 /* ── handles: east (width), south (height), corner (both) ─────────────────── */
 function clearHandles(){ handles.forEach(h=>h.remove()); handles=[]; }
+/* HANDLES ARE CONTEXTUAL. A gesture may change only the sizing mode of the axis
+   its visible handle addresses — so a corner can never INTRODUCE a fixed height.
+
+   The universal corner was the whole bug. `se` carried axis:'both', so it wrote
+   an explicit height and the element stopped reflowing; only the east handle
+   worked. Measured: paragraph narrowed 120px reflowed 54->90px via east and
+   stayed pinned at 54px via corner. A chip narrowed 60px wrapped to 68px tall
+   via east and stayed 32px via corner — the user's own button example.
+
+   A movement threshold was considered and rejected: reflow itself moves the
+   corner downward as the element grows taller, so the gesture generates Y motion
+   independent of the hand. A 3px wobble already pinned height at 57px.
+
+   Corner therefore appears ONLY where two-axis geometry is already true:
+   height explicitly Fixed, or the element lifted out of flow. */
 function placeHandles(){
   clearHandles();
   const el = S.sel; if (!el) return;
@@ -402,20 +421,45 @@ function placeHandles(){
     h.style.left = x+'px'; h.style.top = y+'px';
     h.addEventListener('pointerdown', ev => {
       ev.preventDefault(); ev.stopPropagation(); snapshot();
-      resize = { el, axis, x0:ev.clientX, y0:ev.clientY,
-                 w0:r.width, h0:r.height };
+      resize = { el, axis, x0:ev.clientX, y0:ev.clientY, w0:r.width, h0:r.height };
     });
     document.body.appendChild(h); handles.push(h);
   };
-  mk('e',  r.right-4, r.top + r.height/2 - 11, 'x');
-  mk('s',  r.left + r.width/2 - 11, r.bottom-4, 'y');
-  mk('se', r.right-5, r.bottom-5, 'both');
+  mk('e', r.right-4, r.top + r.height/2 - 11, 'x');
+  mk('s', r.left + r.width/2 - 11, r.bottom-4, 'y');
+  if (heightMode(el) === 'fixed' || isAbs(el)) mk('se', r.right-5, r.bottom-5, 'both');
 }
 window.addEventListener('pointermove', e => {
   if (!resize) return;
   const t0 = performance.now();
   if (resize.axis !== 'y') setWidth(resize.el, resize.w0 + (e.clientX - resize.x0));
   if (resize.axis !== 'x') resize.el.style.height = Math.max(16, resize.h0 + (e.clientY - resize.y0))+'px';
+
+  /* CONSTRAINT OWNERSHIP — a real problem, deliberately NOT detected here.
+
+     `width = w0 + dx` assumes the opposite edge is anchored and the child owns
+     its width. Often the parent owns it: a centred child moves half as far, a
+     `flex-end` child's grabbed edge does not move at all (reproduced — right
+     edge stayed put across a 50px drag), and a `flex:1` child ignores the width
+     entirely. This fixture's card sits in a `1fr 1fr` grid, so narrowing it
+     changes the child inside its track without resizing the track or giving the
+     space to its sibling — which is exactly how this differs from Figma auto
+     layout, where resizing a child acts on the frame.
+
+     Two heuristics were tried and both failed:
+       asked-width vs got-width  never fired — flex-end honours the width and
+                                 pins the edge, so the widths match
+       edge-lag vs cursor        false-fired on the HEALTHY path — a chip that
+                                 legitimately wraps to the next line moves its
+                                 right edge 172px, indistinguishable from a
+                                 parent-pinned edge by position alone
+
+     Telling "the parent pinned my edge" from "I reflowed and moved" needs the
+     parent's layout model, not pixel comparison — a constraint-owner resolver
+     that decides whether the edit belongs on the element (width/max-width), its
+     flex allocation (flex-basis/grow), or the parent's grid track. That is a
+     design problem, not a heuristic. Shipping a check that cries wolf on the
+     working path would be worse than leaving it visibly unsolved. */
   placeHandles(); syncPanel();
   markFrame(performance.now() - t0);
 });
