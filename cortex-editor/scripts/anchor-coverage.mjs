@@ -18,7 +18,10 @@
  *   node scripts/anchor-coverage.mjs --base http://localhost:3000 --routes / /about
  *   node scripts/anchor-coverage.mjs --base http://localhost:3000 --routes-file routes.txt
  *
- * Output: per-route and aggregate buckets, plus a shared-source histogram.
+ * Output: per-route and aggregate buckets, plus a shared-source histogram, and
+ * a second table restricted to the REORDERABLE-SIBLING population (nodes with
+ * >= 2 element siblings inside a flex/grid layout parent) — the only nodes a
+ * drag-reorder gesture can target, and a strictly harder case for identity.
  * Exits non-zero only on harness failure, never on a bad score — this measures,
  * it does not gate.
  */
@@ -118,6 +121,93 @@ const PROBE = () => {
   }
   window.scrollTo(0, 0)
 
+  // ── Third population: nodes that are actually REORDERABLE. ───────────────
+  // The headline number above is a marginal over every pointable node, which
+  // mixes in one-off chrome (headers, the single H1, a lone button) — elements
+  // that are unique precisely BECAUSE they have no siblings to reorder among.
+  // A drag-reorder gesture can only ever target a node that (a) sits in a
+  // multi-child layout container and (b) has real siblings to swap with, and
+  // those are by construction repeated renders. Measuring that population
+  // separately says whether the anchor layer can support the reorder gesture,
+  // as opposed to whether it can support pointing at things in general.
+  //
+  // Criteria: >= 2 element siblings under the same layout parent, and that
+  // layout parent lays out its children (flex / grid, incl. the two-value
+  // `block flex` forms). display:contents ancestors are transparent to layout,
+  // so they are walked through on both the parent lookup and the sibling count.
+  const laysOutChildren = (display) => {
+    const parts = display.trim().split(/\s+/)
+    const last = parts[parts.length - 1]
+    return last === 'flex' || last === 'grid' || last === 'inline-flex' || last === 'inline-grid'
+  }
+  const displayOf = (el) => getComputedStyle(el).display
+  // Nearest ancestor that actually generates a layout box for `el`.
+  const layoutParentOf = (el) => {
+    let p = el.parentElement
+    while (p && displayOf(p) === 'contents') p = p.parentElement
+    return p
+  }
+  // Children of `parent` as the layout tree sees them: display:contents boxes
+  // are replaced by their own children, recursively.
+  const layoutChildrenOf = (parent) => {
+    const out = []
+    const walk = (node) => {
+      for (const c of node.children) {
+        const d = displayOf(c)
+        if (d === 'contents') { walk(c); continue }   // transparent to layout
+        // A box that is not generated is not a sibling you could reorder among.
+        // Counting these inflated the sibling count and contradicted this
+        // function's own stated semantics ("as the layout tree sees them").
+        if (d === 'none') continue
+        if (NON_VISUAL.has(c.tagName.toLowerCase())) continue
+        out.push(c)
+      }
+    }
+    walk(parent)
+    return out
+  }
+  const layoutChildCache = new Map()
+  const layoutChildCount = (parent) => {
+    if (!layoutChildCache.has(parent)) layoutChildCache.set(parent, layoutChildrenOf(parent).length)
+    return layoutChildCache.get(parent)
+  }
+
+  const reorder = { unique: 0, shared: 0, unannotated: 0 }
+  const reorderPointable = { unique: 0, shared: 0, unannotated: 0 }
+  const reorderSharedSizes = []
+  const reorderUnannotatedSample = []
+  // Looser reading of "reorderable" (>= 1 sibling, i.e. a 2-item row) kept as a
+  // sanity check that the >= 2 threshold is not what drives the result.
+  const reorderPairs = { unique: 0, shared: 0, unannotated: 0 }
+
+  for (const el of document.querySelectorAll('*')) {
+    const tag = el.tagName.toLowerCase()
+    if (NON_VISUAL.has(tag) || NON_RENDERED_SVG.has(tag)) continue
+    if (el === document.documentElement || el === document.body) continue
+    if (el.closest('[data-cortex-host]') || el.hasAttribute('data-cortex-root')) continue
+    const r = el.getBoundingClientRect()
+    if (r.width === 0 || r.height === 0) continue
+    const cs = getComputedStyle(el)
+    if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue
+
+    const parent = layoutParentOf(el)
+    if (!parent || parent === document.documentElement) continue
+    if (!laysOutChildren(displayOf(parent))) continue
+    const siblings = layoutChildCount(parent) - 1
+    if (siblings < 1) continue
+
+    const src = el.getAttribute('data-cortex-source')
+    const key = !src ? 'unannotated' : (sourceCounts.get(src) ?? 1) === 1 ? 'unique' : 'shared'
+    reorderPairs[key]++
+    if (siblings < 2) continue
+    reorder[key]++
+    if (seen.has(el)) reorderPointable[key]++
+    if (key === 'shared') reorderSharedSizes.push(sourceCounts.get(src))
+    if (key === 'unannotated' && reorderUnannotatedSample.length < 12) {
+      reorderUnannotatedSample.push(tag + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/)[0] : ''))
+    }
+  }
+
   return {
     buckets,
     hit,
@@ -126,6 +216,14 @@ const PROBE = () => {
     distinctSources: sourceCounts.size,
     sharedGroupSizes: sharedSizes,
     unannotatedSample,
+    reorder,
+    reorderTotal: reorder.unique + reorder.shared + reorder.unannotated,
+    reorderPointable,
+    reorderPointableTotal: reorderPointable.unique + reorderPointable.shared + reorderPointable.unannotated,
+    reorderPairs,
+    reorderPairsTotal: reorderPairs.unique + reorderPairs.shared + reorderPairs.unannotated,
+    reorderSharedSizes,
+    reorderUnannotatedSample,
     cortexPresent: !!document.querySelector('[data-cortex-source]'),
   }
 }
@@ -138,7 +236,11 @@ async function main() {
   const page = await browser.newPage({ viewport })
 
   const agg = { unique: 0, shared: 0, unannotated: 0, total: 0 }
+  const aggR = { unique: 0, shared: 0, unannotated: 0, total: 0 }
+  const aggRP = { unique: 0, shared: 0, unannotated: 0, total: 0 }
+  const aggRPairs = { unique: 0, shared: 0, unannotated: 0, total: 0 }
   const allShared = []
+  const allReorderShared = []
   const rows = []
 
   for (const route of routes) {
@@ -159,7 +261,16 @@ async function main() {
     agg.shared += r.hit.shared
     agg.unannotated += r.hit.unannotated
     agg.total += r.hitTotal
+    for (const k of ['unique', 'shared', 'unannotated']) {
+      aggR[k] += r.reorder[k]
+      aggRP[k] += r.reorderPointable[k]
+      aggRPairs[k] += r.reorderPairs[k]
+    }
+    aggR.total += r.reorderTotal
+    aggRP.total += r.reorderPointableTotal
+    aggRPairs.total += r.reorderPairsTotal
     allShared.push(...r.sharedGroupSizes)
+    allReorderShared.push(...r.reorderSharedSizes)
     rows.push({ route, ...r })
   }
   await browser.close()
@@ -197,6 +308,45 @@ async function main() {
     }
     const sample = rows.find(r => r.unannotatedSample?.length)?.unannotatedSample
     if (sample) console.log(`  unannotated sample: ${sample.slice(0, 8).join(', ')}`)
+
+    // ── REORDERABLE-SIBLING population ───────────────────────────────────────
+    console.log('\n' + '='.repeat(78))
+    console.log('REORDERABLE-SIBLING population — what a drag-REORDER gesture can target')
+    console.log('Filter: >= 2 element siblings under a layout parent whose display is flex/grid')
+    console.log('(display:contents ancestors walked through). This drops one-off chrome, which is')
+    console.log('unique precisely because it has nothing to reorder among.')
+    console.log('='.repeat(78))
+    console.log('route'.padEnd(30) + 'nodes'.padStart(7) + 'unique'.padStart(9) + 'shared'.padStart(9) + 'none'.padStart(9))
+    console.log('-'.repeat(78))
+    for (const row of rows) {
+      if (row.error) continue
+      console.log(
+        row.route.slice(0, 29).padEnd(30) +
+        String(row.reorderTotal).padStart(7) +
+        pct(row.reorder.unique, row.reorderTotal).padStart(9) +
+        pct(row.reorder.shared, row.reorderTotal).padStart(9) +
+        pct(row.reorder.unannotated, row.reorderTotal).padStart(9),
+      )
+    }
+    console.log('-'.repeat(78))
+    console.log('AGGREGATE'.padEnd(30) + String(aggR.total).padStart(7) +
+      pct(aggR.unique, aggR.total).padStart(9) + pct(aggR.shared, aggR.total).padStart(9) + pct(aggR.unannotated, aggR.total).padStart(9))
+    console.log('∩ pointable'.padEnd(30) + String(aggRP.total).padStart(7) +
+      pct(aggRP.unique, aggRP.total).padStart(9) + pct(aggRP.shared, aggRP.total).padStart(9) + pct(aggRP.unannotated, aggRP.total).padStart(9))
+    console.log('>=1 sibling (looser)'.padEnd(30) + String(aggRPairs.total).padStart(7) +
+      pct(aggRPairs.unique, aggRPairs.total).padStart(9) + pct(aggRPairs.shared, aggRPairs.total).padStart(9) + pct(aggRPairs.unannotated, aggRPairs.total).padStart(9))
+    if (allReorderShared.length) {
+      const s = [...allReorderShared].sort((a, b) => a - b)
+      const med = s[Math.floor(s.length / 2)]
+      const p90 = s[Math.min(s.length - 1, Math.ceil(s.length * 0.9) - 1)]
+      console.log(`\n  shared-group size (reorderable only): median ${med}, p90 ${p90}, max ${s[s.length - 1]}`)
+    } else {
+      console.log('\n  shared-group size (reorderable only): no shared nodes in this population')
+    }
+    const rSample = rows.find(r => r.reorderUnannotatedSample?.length)?.reorderUnannotatedSample
+    if (rSample) console.log(`  unannotated sample: ${rSample.slice(0, 8).join(', ')}`)
+    console.log('  ∩ pointable = reorderable nodes elementFromPoint also returned (the strict intersection).')
+    console.log('  >=1 sibling  = same filter with the threshold relaxed to a 2-item row, as a sensitivity check.')
   } else {
     console.log('\nNo pages measured. Every route errored — see above.')
   }
