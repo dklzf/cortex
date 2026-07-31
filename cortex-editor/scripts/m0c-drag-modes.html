@@ -101,6 +101,7 @@
         <button data-h="hug" disabled>Hug</button>
         <button data-h="fixed" disabled>Fixed</button>
       </div>
+      <div id="shrinkNote" style="color:var(--warn);font-size:11px;line-height:1.4;margin-top:5px"></div>
       <div id="refuse"></div>
     </div>
 
@@ -314,8 +315,16 @@ function modeOf(el, axis){
   if (len && len !== 'auto') return 'fixed';
   if (role.kind === 'flex' && cross)
     return (s.alignSelf === 'flex-start' || s.alignSelf === 'start') ? 'hug' : 'fill';
-  if (role.kind === 'flex' && !cross)
-    return (s.flexGrow === '1' || s.flex.startsWith('1')) ? 'fill' : 'hug';
+  if (role.kind === 'flex' && !cross){
+    if (s.flexGrow === '1' || s.flex.startsWith('1')) return 'fill';
+    // MAIN AXIS: `flex-shrink` defaults to 1, so an untouched child shrinks
+    // under pressure — measured, a chip went 112px -> 61px when its card was
+    // narrowed 220px. Reporting that as Hug is a lie, and it is why "buttons
+    // are getting resized when I resize the parent" survived the last fix:
+    // that fix addressed cross-axis stretch and left main-axis shrink alone.
+    // Read COMPUTED, not inline — the default is never written to style.
+    return getComputedStyle(el).flexShrink === '0' ? 'hug' : 'shrink';
+  }
   if (role.kind === 'grid')
     return (axis === 'width' ? s.justifySelf : s.alignSelf) === 'start' ? 'hug' : 'fill';
   return axis === 'width' ? 'fill' : 'hug';   // block parent
@@ -552,6 +561,12 @@ function syncPanel(){
   $('selParent').textContent = el ? `${name(el.parentElement)} · ${getComputedStyle(el.parentElement).display}` : '—';
   const wm = el ? widthMode(el) : null, hm = el ? heightMode(el) : null;
   for (const b of $('wSeg').children){ b.disabled = !el; b.setAttribute('aria-pressed', String(b.dataset.w === wm)); }
+  // `shrink` is CSS's default on the main axis and has NO Figma equivalent —
+  // Figma children never shrink below their content. Show it as its own state
+  // rather than pressing Hug and lying, so the difference is visible.
+  $('shrinkNote').textContent = wm === 'shrink'
+    ? 'shrink — CSS default, no Figma equivalent. This element will get smaller when its parent does. Press Hug to pin it.'
+    : '';
   for (const b of $('hSeg').children){ b.disabled = !el || isAbs(el); b.setAttribute('aria-pressed', String(b.dataset.h === hm)); }
   const n = $('wNum');
   n.disabled = !el;
