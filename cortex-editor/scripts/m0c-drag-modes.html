@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Sketch mode — ordered-stacking reorder + absolute mode</title>
+<!-- The doctype is load-bearing, not boilerplate. Without it the page renders in
+     QUIRKS MODE, where tables do not inherit color/font from their parent — the
+     table cells rendered in the dark-theme ink over white paper. Quirks mode also
+     changes box-sizing and line-box behaviour, so any layout measured here would
+     not match a real app. NOTE: m0c-speed-test.html has the same omission. -->
+<style>
+  /* Dark Mode "Blueprint" per DESIGN.md:122-150. Accent = --select (blue).
+     m0c-speed-test.html uses amber #d97706 and cites DESIGN.md for it; DESIGN.md
+     specifies blue and lists orange only as Warning. That file is off-spec. */
+  :root{
+    --paper:#0f172a; --vellum:#1e293b; --well:#1a2332; --well-hover:#233044;
+    --ink:#e2e8f0; --ink-2:#94a3b8; --ink-3:#64748b; --rule:#1e293b;
+    --select:#60a5fa; --on-select:#0f172a; --warn:#fb923c;
+    --r-sm:4px; --r-md:6px; --r-lg:8px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);overflow:hidden;
+       font:13px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{padding:12px 24px;border-bottom:1px solid var(--rule);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  h1{font-size:13px;font-weight:600;margin:0}
+  .hint{color:var(--ink-2);font-size:12px}
+  kbd{background:var(--well);border:1px solid var(--rule);border-radius:3px;padding:1px 5px;font:11px ui-monospace,monospace}
+  main{display:grid;grid-template-columns:1fr 300px;height:calc(100vh - 50px)}
+  #stage{padding:24px;overflow:auto;position:relative}
+  aside{border-left:1px solid var(--rule);background:var(--vellum);padding:12px;
+        display:flex;flex-direction:column;gap:12px;overflow:auto}
+  .card-ui{background:var(--well);border:1px solid var(--rule);border-radius:var(--r-md);padding:10px}
+  .card-ui h3{margin:0 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
+  .kv{display:flex;justify-content:space-between;gap:8px;font:12px ui-monospace,monospace;padding:2px 0}
+  .kv b{font-weight:600;color:var(--ink)} .kv span{color:var(--ink-3)}
+  .log{font:11px ui-monospace,monospace;color:var(--ink-2);max-height:150px;overflow:auto;white-space:pre-wrap;margin:0}
+  aside button{font:inherit;font-size:12px;background:var(--well);color:var(--ink);
+               border:1px solid var(--rule);border-radius:var(--r-sm);padding:6px 10px;cursor:pointer}
+  aside button:hover{background:var(--well-hover)}
+  aside button:disabled{opacity:.4;cursor:not-allowed}
+  ol.try{margin:0;padding-left:17px;color:var(--ink-2);font-size:12px}
+  ol.try li{margin-bottom:5px}
+  ol.try code{color:var(--ink);font:11px ui-monospace,monospace}
+  #refuse{color:var(--warn);font-size:12px;min-height:17px}
+
+  /* ── the fake app: a REALISTIC page. `.app` is block flow on purpose — the
+     previous demo made everything flex/grid, which flattered the old rule. Four
+     of the five move tasks in m0c-speed-test.html are block-flow or table moves. */
+  /* MUST be positioned: .cx-abs children resolve their left/top against the
+     nearest positioned ancestor. Without this they resolved against #stage
+     (which is position:relative) while the code computed offsets against .app,
+     so breaking an element out jumped it by the stage padding plus the app's
+     own offset. */
+  .app{background:#fff;color:#111827;border-radius:var(--r-lg);padding:20px;width:620px;position:relative}
+  .app h2{margin:0 0 4px;font-size:17px}
+  .lede{margin:0 0 14px;color:#6b7280;font-size:13px}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+  .btn{background:#111827;color:#fff;border-radius:var(--r-sm);padding:7px 12px;font-size:12px;white-space:nowrap}
+  .btn.q{background:#f5f5f5;color:#111827;border:1px solid #f0f0f0}
+  table.data{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px}
+  .data th,.data td{text-align:left;padding:7px 8px;border-bottom:1px solid #e6e2da}
+  .data th{color:#6b7280;font-weight:600;font-size:12px}
+
+  /* ── affordances ── */
+  [data-n]{cursor:default}
+  .cx-hover{outline:1.5px solid rgba(96,165,250,.45);outline-offset:1px}
+  .cx-sel{outline:1.5px solid var(--select);outline-offset:1px}
+  .cx-dragging{pointer-events:none;z-index:60}
+  .cx-line{position:fixed;background:var(--select);border-radius:2px;z-index:70;pointer-events:none;
+           box-shadow:0 0 0 1px rgba(15,23,42,.4)}
+  /* Paper's model: "absolute" is a persistent, visible PROPERTY of the element,
+     not something a drag infers. Renamed from "ignore layout" to the CSS property
+     it actually is — same move Paper made in their own build log. */
+  .cx-abs{position:absolute!important;margin:0!important;z-index:55;
+          box-shadow:0 6px 20px rgba(0,0,0,.25);outline:1.5px dashed var(--warn);outline-offset:1px}
+  /* Legible AT REST, not only mid-drag — Paper puts an icon in the layer tree
+     for the same reason. A mode you can only discover by dragging isn't a mode. */
+  .cx-abs::after{content:"abs";position:absolute;top:-8px;right:-6px;background:var(--warn);
+                 color:#1a1206;font:600 9px/1.4 ui-sans-serif,system-ui;letter-spacing:.04em;
+                 padding:0 4px;border-radius:3px;pointer-events:none}
+
+  /* two-state property control, per Paper: a named property with visible state,
+     not a verb-button that only appears when it happens to apply */
+  .seg{display:flex;gap:2px;background:var(--paper);border:1px solid var(--rule);
+       border-radius:var(--r-md);padding:2px}
+  .seg button{flex:1;font:inherit;font-size:12px;background:transparent;color:var(--ink-2);
+              border:0;border-radius:var(--r-sm);padding:5px 8px;cursor:pointer}
+  .seg button:hover:not(:disabled){background:var(--well-hover);color:var(--ink)}
+  .seg button[aria-pressed="true"]{background:var(--select);color:var(--on-select);font-weight:600}
+  .seg button:disabled{opacity:.35;cursor:not-allowed}
+  .seg button[data-p="abs"][aria-pressed="true"]{background:var(--warn);color:#1a1206}
+</style>
+
+<header>
+  <h1>Sketch mode — ordered-stacking reorder</h1>
+  <span class="hint">Drag to reorder in any stacking container ·
+    <kbd>Alt</kbd>+drag to break out to absolute · <kbd>F</kbd> returns to flow</span>
+</header>
+
+<main>
+  <div id="stage">
+    <div class="app" data-n="app">
+      <h2 data-n="title">Quarterly report</h2>
+      <p class="lede" data-n="lede">Revenue and risk across all business units.</p>
+      <div class="row" data-n="actions">
+        <span class="btn q" data-n="filter">Filter</span>
+        <span class="btn q" data-n="sort">Sort</span>
+        <span class="btn" data-n="export">Export CSV</span>
+      </div>
+      <table class="data" data-n="table">
+        <thead><tr data-n="head">
+          <th data-n="h-region">Region</th><th data-n="h-rev">Revenue</th><th data-n="h-risk">Risk</th>
+        </tr></thead>
+        <tbody data-n="body">
+          <tr data-n="r-north"><td>North</td><td>$1.2M</td><td>Low</td></tr>
+          <tr data-n="r-south"><td>South</td><td>$0.9M</td><td>Med</td></tr>
+          <tr data-n="r-east"><td>East</td><td>$1.7M</td><td>Low</td></tr>
+        </tbody>
+      </table>
+      <div class="row" data-n="pager">
+        <span class="btn q" data-n="prev">Previous</span>
+        <span class="btn q" data-n="next">Next</span>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <div class="card-ui">
+      <h3>Live state</h3>
+      <div class="kv"><span>mode</span><b id="hMode">—</b></div>
+      <div class="kv"><span>container</span><b id="hCont">—</b></div>
+      <div class="kv"><span>display</span><b id="hDisp">—</b></div>
+      <div class="kv"><span>slot</span><b id="hIdx">—</b></div>
+    </div>
+    <div class="card-ui">
+      <h3>The 5 move tasks</h3>
+      <ol class="try">
+        <li>Move <code>Export CSV</code> above the table</li>
+        <li>Move the <code>Previous/Next</code> row above the table</li>
+        <li>Move <code>Filter</code> to the far right <span class="hint">(Alt)</span></li>
+        <li>Move the lede below the table</li>
+        <li>Move the <code>South</code> row above <code>North</code></li>
+      </ol>
+    </div>
+    <div class="card-ui">
+      <h3>Recorded</h3>
+      <pre class="log" id="log">nothing yet</pre>
+    </div>
+    <div class="card-ui">
+      <h3>Selected</h3>
+      <div class="kv"><span>element</span><b id="selName">nothing</b></div>
+      <div style="margin-top:8px">
+        <div style="font-size:11px;color:var(--ink-3);margin-bottom:4px">Position</div>
+        <div class="seg" id="posSeg">
+          <button data-p="flow" aria-pressed="true" disabled>In flow</button>
+          <button data-p="abs" aria-pressed="false" disabled>Absolute</button>
+        </div>
+      </div>
+      <div id="refuse"></div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button id="undoBtn">Undo ⌘Z</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+  </aside>
+</main>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   TWO CORRECTIONS TO THE PREVIOUS BUILD, both found by measurement.
+
+   1. CONTAINERS ARE ANY ORDERED-STACKING BOX, not just flex/grid.
+      The flex/grid-only rule was set on a demo page made entirely of flex and
+      grid, which flattered it. On a realistic page four of the five move tasks
+      in m0c-speed-test.html are block-flow or table moves: `.app` declares no
+      display, so it is block, and table rows live in a table-row-group. Under
+      the old rule all four became free-floating objects when every one of them
+      reads as "put it there and let the page reflow".
+
+   2. FREE PLACEMENT IS A PROPERTY OF THE ELEMENT, NOT A VERDICT ON THE DROP.
+      Taken from Paper (paper.design), the closest analogue to this problem: they
+      shipped "Ignore flex layout", then renamed it "Absolute position" — an
+      editor concept re-framed as the CSS property it really is — put an icon in
+      the layer tree so the mode is legible AT REST, and preserve the mode when
+      an element is dragged into another container instead of silently reflowing
+      it. So: Alt+drag breaks an element out, it stays out and says so, and F
+      puts it back. A drag never silently changes which mode you are in.
+
+   Reorder is a real Element.moveBefore. Never CSS `order`: order is DOM-order
+   blind, so :first-child styling, `+` selectors and Tab order keep following the
+   old arrangement — a visual change over a stale accessibility tree.
+
+   MEASURED (zerofog-web, 3,009 elements, real DOM): a naive full-page FLIP pass
+   costs median 1.0ms / p95 1.6ms / max 8.5ms per frame — zero frames over the
+   16.7ms budget. Scoped to one container it is 0.1ms. Performance is not the
+   constraint here.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const ORDERED = new Set([
+  'block','flow-root','list-item',
+  'flex','inline-flex','grid','inline-grid',
+  'table','table-row-group','table-header-group','table-footer-group','table-row',
+  'block flex','inline flex','block grid','inline grid','block flow-root',
+]);
+// Lifting these to position:absolute destroys table layout — refuse, and say why.
+const NO_ABSOLUTE = new Set(['TR','TD','TH','THEAD','TBODY','TFOOT']);
+const HYST = 12, THRESHOLD = 4;
+
+const stage = document.getElementById('stage');
+const app = () => stage.querySelector('[data-n="app"]');
+const S = { drag:null, sel:null, undo:[], log:[] };
+const PRISTINE = stage.innerHTML;
+let lineEl = null, hov = null;
+
+const $ = id => document.getElementById(id);
+const name = el => el?.dataset?.n || el?.tagName?.toLowerCase() || '—';
+const isAbs = el => el?.classList.contains('cx-abs');
+
+function layoutParent(el){
+  let p = el.parentElement;
+  while (p && getComputedStyle(p).display === 'contents') p = p.parentElement;
+  return p;
+}
+/* Explicitly-declared layout boxes. An author writing `display:flex` has stated
+   intent, so these count as containers even when empty. */
+const DECLARED = new Set(['flex','inline-flex','grid','inline-grid',
+  'table','table-row-group','table-header-group','table-footer-group','table-row',
+  'block flex','inline flex','block grid','inline grid']);
+
+function qualifies(el){
+  if (!el || !stage.contains(el) || el === stage) return false;
+  const d = getComputedStyle(el).display;
+  if (!ORDERED.has(d)) return false;
+  if (DECLARED.has(d)) return true;
+  // IMPLICIT block-family boxes need evidence they are actually containers.
+  //
+  // Found by running it: `.btn` is a <span>, but FLEX ITEMS ARE BLOCKIFIED — a
+  // flex child's computed display becomes `block` whatever you wrote. So once
+  // `block` counts as a container, every leaf in a flex row advertises itself as
+  // a drop target, and dragging Export onto Sort put the span INSIDE the button.
+  //
+  // "Everything is inside a block" was the objection I already knew about. This
+  // is worse and I missed it: everything IS a block. Requiring an existing
+  // element child is the cheap discriminator — a text-only leaf is not a
+  // container, and a box that already stacks elements demonstrably is.
+  return el.childElementCount > 0;
+}
+
+/* Being an ordered-stacking box is NOT sufficient — the container must be able
+   to legally hold this child. Found by running it: `<table>` computes to
+   display:table and therefore qualified, so aiming just ABOVE the table resolved
+   to the table itself and a <span> was inserted as its child. Invalid DOM, and
+   it silently swallowed three of the five move tasks.
+
+   This is DOM well-formedness, not edit legality — §2's "the browser does not
+   enforce legality" is about refusing intents, not about producing malformed
+   markup. The table family is the only place the HTML content model bites here. */
+const TABLE_SECTION = new Set(['table-row-group','table-header-group','table-footer-group']);
+const TABLE_TAG = new Set(['TR','TD','TH','THEAD','TBODY','TFOOT','CAPTION','COLGROUP','COL']);
+function canAccept(container, el){
+  const cd = getComputedStyle(container).display, tag = el.tagName;
+  if (cd === 'table')         return ['THEAD','TBODY','TFOOT','TR','CAPTION','COLGROUP'].includes(tag);
+  if (TABLE_SECTION.has(cd))  return tag === 'TR';
+  if (cd === 'table-row')     return tag === 'TD' || tag === 'TH';
+  return !TABLE_TAG.has(tag);   // rows and cells cannot live outside table layout
+}
+/* elementsFromPoint, not elementFromPoint — the latter returns the topmost
+   PAINTED element, so a translucent overlay beats the real container. The list
+   is innermost-first, so the first qualifying hit is the innermost container. */
+function containerUnderCursor(x, y, dragged){
+  for (const el of document.elementsFromPoint(x, y)){
+    if (dragged && (el === dragged || dragged.contains(el))) continue;
+    if (el === lineEl) continue;
+    if (qualifies(el) && (!dragged || canAccept(el, dragged))) return el;
+  }
+  return null;
+}
+function withinSlop(c, x, y){
+  if (!c) return false;
+  const r = c.getBoundingClientRect();
+  return x >= r.left-HYST && x <= r.right+HYST && y >= r.top-HYST && y <= r.bottom+HYST;
+}
+
+/* Which way does this container stack? Decides the insertion line's orientation. */
+function axisOf(container){
+  const cs = getComputedStyle(container);
+  const d = cs.display;
+  if (d.includes('grid')) return 'grid';
+  if (d.includes('flex')) return (cs.flexDirection||'row').startsWith('column') ? 'vertical' : 'horizontal';
+  if (d === 'table-row') return 'horizontal';       // cells sit side by side
+  return 'vertical';                                 // block flow, table rows
+}
+
+/* ── FLIP over a real layout change (150ms ease-in-out per DESIGN.md:188-189) ── */
+function flip(mutate){
+  const nodes = [...stage.querySelectorAll('[data-n]')];
+  const first = new Map(nodes.map(n => [n, n.getBoundingClientRect()]));
+  mutate();
+  const moved = [];
+  for (const n of nodes){
+    if (n === S.drag?.el || isAbs(n)) continue;
+    const f = first.get(n), l = n.getBoundingClientRect();
+    const dx = f.left-l.left, dy = f.top-l.top;
+    if (Math.abs(dx) < .5 && Math.abs(dy) < .5) continue;
+    n.style.transition='none'; n.style.transform=`translate(${dx}px,${dy}px)`;
+    moved.push(n);
+  }
+  if (!moved.length) return;
+  stage.getBoundingClientRect();
+  for (const n of moved){ n.style.transition='transform 150ms ease-in-out'; n.style.transform=''; }
+}
+
+function siblings(container, el){
+  return [...container.children].filter(k => k !== el && k !== lineEl && !isAbs(k));
+}
+function slotIndex(container, x, y, el){
+  const kids = siblings(container, el);
+  if (!kids.length) return 0;
+  const axis = axisOf(container);
+  if (axis === 'grid'){
+    let bi=0, bd=Infinity, bc=null;
+    kids.forEach((k,i)=>{ const r=k.getBoundingClientRect();
+      const cx=r.left+r.width/2, cy=r.top+r.height/2, d=(x-cx)**2+(y-cy)**2;
+      if(d<bd){bd=d;bi=i;bc={cx,cy};} });
+    const dx=x-bc.cx, dy=y-bc.cy;
+    return (Math.abs(dx)>Math.abs(dy) ? dx>0 : dy>0) ? bi+1 : bi;
+  }
+  const vertical = axis === 'vertical';
+  const cs = getComputedStyle(container);
+  const reverse = cs.display.includes('flex') && (cs.flexDirection||'').endsWith('reverse');
+  for (let i=0;i<kids.length;i++){
+    const r = kids[i].getBoundingClientRect();
+    const mid = vertical ? r.top+r.height/2 : r.left+r.width/2;
+    const pos = vertical ? y : x;
+    if (reverse ? pos > mid : pos < mid) return i;
+  }
+  return kids.length;
+}
+/* Capability gate, never a brand gate. `moveBefore` is in Chrome 133+ and
+   Firefox 144+; Safari lacks it, but WebKit's standards position is *support*
+   (standards-positions #375) and bugs.webkit.org #281223 is actively being
+   implemented. A user-agent check would exclude Firefox today and Safari later. */
+const HAS_MOVE_BEFORE = typeof Element.prototype.moveBefore === 'function';
+
+/* What insertBefore actually costs, MEASURED (10 state categories, Chromium A/B):
+     lost, recoverable    focus, scrollTop
+     lost, unrecoverable  live iframe contentWindow (embed reloads),
+                          in-flight CSS transition (snaps to its end value)
+     lost, partial        running animation (restart-and-seek, not continuity)
+     NOT lost             typed input .value, caret offsets, audio/video position,
+                          node identity, event listeners
+     lost under BOTH      document text selection / live Ranges — moveBefore does
+                          NOT preserve these either. The old comment here claimed
+                          it did; that was wrong and is corrected.
+   The snapshot/restore below covers the two fully-recoverable ones. It runs
+   unconditionally: it is a no-op on the moveBefore path and costs nothing. */
+function place(container, el, index){
+  const kids = siblings(container, el);
+  const before = kids[index] || null;
+  if (el.parentElement === container && el.nextElementSibling === before) return;
+
+  if (HAS_MOVE_BEFORE){
+    // Do NOT swallow errors here. A throw is HierarchyRequestError or
+    // NotFoundError — a real bug in our own call — and is a different event from
+    // "this engine has no moveBefore". Collapsing the two into `catch {}` is how
+    // a genuine defect hides behind a supported-looking fallback.
+    container.moveBefore(el, before);
+    return;
+  }
+
+  const scrollers = [el, ...el.querySelectorAll('*')]
+    .filter(n => n.scrollTop || n.scrollLeft)
+    .map(n => [n, n.scrollTop, n.scrollLeft]);
+  const active = el.contains(document.activeElement) ? document.activeElement : null;
+  const sel = active && 'selectionStart' in active
+    ? [active.selectionStart, active.selectionEnd] : null;
+
+  container.insertBefore(el, before);
+
+  for (const [n, top, left] of scrollers){ n.scrollTop = top; n.scrollLeft = left; }
+  if (active){
+    active.focus({ preventScroll:true });
+    if (sel) try { active.setSelectionRange(sel[0], sel[1]) } catch {}
+  }
+  if (el.querySelector('iframe')) degrade('an embedded iframe reloaded — this browser lacks moveBefore');
+}
+
+/* State the degradation rather than hiding it. A designer on Safari whose map
+   embed reloads needs to know cortex did that, not the page. */
+let degraded = false;
+function degrade(msg){
+  if (degraded) return;
+  degraded = true;
+  $('refuse').textContent = msg;
+}
+
+function drawLine(container, index, el){
+  const kids = siblings(container, el);
+  if (!kids.length){ clearLine(); return; }
+  if (!lineEl){ lineEl = document.createElement('div'); lineEl.className='cx-line'; document.body.appendChild(lineEl); }
+  const atEnd = index >= kids.length;
+  const r = kids[atEnd ? kids.length-1 : index].getBoundingClientRect();
+  const vertical = axisOf(container) !== 'horizontal';
+  if (vertical) Object.assign(lineEl.style,{ left:r.left+'px', width:r.width+'px', height:'2px',
+                  top:(atEnd ? r.bottom+3 : r.top-3)+'px' });
+  else Object.assign(lineEl.style,{ top:r.top+'px', height:r.height+'px', width:'2px',
+                  left:(atEnd ? r.right+3 : r.left-3)+'px' });
+}
+function clearLine(){ lineEl?.remove(); lineEl = null; }
+
+function follow(el, e, d){
+  el.style.transition='none'; el.style.transform='';
+  const r = el.getBoundingClientRect();
+  el.style.transform = `translate(${e.clientX-d.dx-r.left}px,${e.clientY-d.dy-r.top}px)`;
+}
+function makeAbsolute(el){
+  if (isAbs(el)) return true;
+  if (NO_ABSOLUTE.has(el.tagName)){
+    $('refuse').textContent = `${el.tagName.toLowerCase()} cannot leave table layout — reorder only`;
+    return false;
+  }
+  const host = app(), hr = host.getBoundingClientRect(), r = el.getBoundingClientRect();
+  el.style.transition='none'; el.style.transform='';
+  el.classList.add('cx-abs');
+  Object.assign(el.style,{ left:(r.left-hr.left)+'px', top:(r.top-hr.top)+'px',
+                           width:r.width+'px', height:r.height+'px' });
+  return true;
+}
+function returnToFlow(el){
+  if (!el || !isAbs(el)) return;
+  flip(() => {
+    el.classList.remove('cx-abs');
+    el.style.left=el.style.top=el.style.width=el.style.height='';
+  });
+  record({ mode:'return-to-flow', what:name(el) });
+  syncButtons();
+}
+
+function select(el){
+  S.sel?.classList.remove('cx-sel'); S.sel = el; el?.classList.add('cx-sel'); syncButtons();
+}
+/* The Position control is a PROPERTY readout, not a verb button: it always shows
+   which of the two states the selection is in, and both states stay visible even
+   when one is unavailable — so "you cannot do this here" is legible rather than
+   silent. Paper's rename of "Ignore flex layout" to "Absolute position" is the
+   same instinct: name the CSS property, not the editor action. */
+function syncButtons(){
+  const el = S.sel, seg = $('posSeg');
+  const [flowBtn, absBtn] = seg.children;
+  $('selName').textContent = el ? name(el) : 'nothing';
+  const canAbs = !!el && !NO_ABSOLUTE.has(el.tagName);
+  const abs = isAbs(el);
+  flowBtn.disabled = !el || !abs;
+  absBtn.disabled = !el || abs || !canAbs;
+  flowBtn.setAttribute('aria-pressed', String(!!el && !abs));
+  absBtn.setAttribute('aria-pressed', String(!!el && abs));
+  if (el && !canAbs) $('refuse').textContent = `${el.tagName.toLowerCase()} cannot leave table layout`;
+  else if (!S.drag) $('refuse').textContent = '';
+}
+
+stage.addEventListener('pointermove', e => {
+  if (S.drag) return;
+  const el = e.target.closest('[data-n]');
+  if (el === hov) return;
+  hov?.classList.remove('cx-hover'); hov = el; hov?.classList.add('cx-hover');
+});
+stage.addEventListener('pointerleave', () => { hov?.classList.remove('cx-hover'); hov=null; });
+
+stage.addEventListener('pointerdown', e => {
+  const el = e.target.closest('[data-n]');
+  if (!el || el === app()) return;
+  // clear BEFORE select — select() calls syncButtons(), which is what writes the
+  // "cannot leave table layout" reason. Clearing after wiped it every time.
+  e.preventDefault(); $('refuse').textContent=''; select(el);
+  const r = el.getBoundingClientRect(), parent = el.parentElement;
+  S.drag = { el, dx:e.clientX-r.left, dy:e.clientY-r.top, x0:e.clientX, y0:e.clientY,
+             moved:false, startedAbs:isAbs(el),
+             homeParent:parent, homeIndex:[...parent.children].indexOf(el),
+             container:null, mode:null, index:null };
+});
+
+window.addEventListener('pointermove', e => {
+  const d = S.drag; if (!d) return;
+  if (!d.moved){
+    if (Math.hypot(e.clientX-d.x0, e.clientY-d.y0) < THRESHOLD) return;
+    d.moved = true; snapshot();
+    hov?.classList.remove('cx-hover'); hov=null;
+    d.el.classList.add('cx-dragging');   // pointer-events:none, else every hit test
+    const lp = layoutParent(d.el);       // under the cursor returns the dragged node
+    d.container = (qualifies(lp) && canAccept(lp, d.el)) ? lp : null;
+  }
+
+  // Alt breaks an in-flow element out, and is checked EVERY frame so it can be
+  // armed mid-drag (Paper does this too). An already-absolute element stays
+  // absolute — a drag never silently changes the mode.
+  if (e.altKey && !isAbs(d.el)) makeAbsolute(d.el);
+
+  if (isAbs(d.el)){
+    d.mode='absolute'; d.container=null; d.index=null; clearLine();
+    const hr = app().getBoundingClientRect();
+    d.el.style.left = (e.clientX-d.dx-hr.left)+'px';
+    d.el.style.top  = (e.clientY-d.dy-hr.top)+'px';
+  } else {
+    const target = resolveTarget(e, d);
+    if (target){
+      d.mode='move'; d.container=target;
+      d.index = slotIndex(target, e.clientX, e.clientY, d.el);
+      drawLine(target, d.index, d.el);
+      follow(d.el, e, d);
+    } else {
+      // No container under the cursor and not absolute: hold the last known slot
+      // rather than silently converting the gesture into a free drop.
+      d.mode='move (held)'; clearLine(); follow(d.el, e, d);
+    }
+  }
+  hud(d);
+});
+
+function resolveTarget(e, d){
+  const {clientX:x, clientY:y} = e;
+  // Hysteresis guards LEAVING only. It must never block entering a deeper
+  // container — every ancestor contains its descendants' points, so a plain
+  // "stick while inside" rule traps the gesture at the outermost container.
+  const inner = containerUnderCursor(x, y, d.el);
+  if (inner && inner !== d.container && d.container?.contains(inner)) return inner;
+  if (d.container && withinSlop(d.container, x, y)) return d.container;
+  return inner || d.container;
+}
+
+window.addEventListener('pointerup', () => {
+  const d = S.drag; if (!d) return;
+  S.drag = null;
+  d.el.classList.remove('cx-dragging');
+  if (!d.moved){ clearLine(); return; }
+
+  if (isAbs(d.el)){
+    clearLine();
+    const hr = app().getBoundingClientRect(), r = d.el.getBoundingClientRect();
+    record({ mode:'absolute', what:name(d.el), leftContainer:name(d.homeParent),
+             at:`${Math.round(r.left-hr.left)},${Math.round(r.top-hr.top)}`,
+             note:'persistent property — survives further drags' });
+  } else if (d.container){
+    if (d.el.classList.contains('cx-abs')) {} else flip(() => place(d.container, d.el, d.index));
+    clearLine();
+    d.el.style.transition='transform 150ms ease-in-out'; d.el.style.transform='';
+    const cs = getComputedStyle(d.container);
+    record({ mode:'move', what:name(d.el), container:name(d.container),
+             sameDomParent: d.container === d.homeParent,
+             fromIndex:d.homeIndex, toIndex:[...d.container.children].indexOf(d.el),
+             parentDisplay:cs.display,
+             parentFlexDirection: cs.display.includes('flex') ? cs.flexDirection : null });
+  } else { clearLine(); d.el.style.transform=''; }
+  hud(null); syncButtons();
+});
+
+function hud(d){
+  $('hMode').textContent = d?.mode ?? '—';
+  $('hCont').textContent = d?.container ? name(d.container) : (d?.mode === 'absolute' ? 'none (absolute)' : '—');
+  $('hDisp').textContent = d?.container ? getComputedStyle(d.container).display : '—';
+  $('hIdx').textContent  = d?.index ?? '—';
+}
+function record(e){ S.log.unshift(e); $('log').textContent = S.log.map(x=>JSON.stringify(x)).join('\n'); }
+function snapshot(){ S.undo.push({ html:stage.innerHTML, log:S.log.length }); }
+function undo(){
+  const s = S.undo.pop(); if (!s) return;
+  clearLine(); stage.innerHTML = s.html; S.log.length = s.log; S.sel=null; hov=null;
+  $('log').textContent = S.log.length ? S.log.map(x=>JSON.stringify(x)).join('\n') : 'nothing yet';
+  hud(null); syncButtons();
+}
+$('posSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-p]');
+  if (!b || b.disabled || !S.sel) return;
+  snapshot();
+  if (b.dataset.p === 'abs'){
+    if (makeAbsolute(S.sel)) record({ mode:'set-absolute', what:name(S.sel) });
+  } else returnToFlow(S.sel);
+  syncButtons();
+});
+$('undoBtn').addEventListener('click', undo);
+$('resetBtn').addEventListener('click', () => {
+  clearLine(); stage.innerHTML = PRISTINE;
+  S.undo=[]; S.log=[]; S.sel=null; hov=null;
+  $('log').textContent='nothing yet'; $('refuse').textContent=''; hud(null); syncButtons();
+});
+window.addEventListener('keydown', e => {
+  if (e.target.matches('input,textarea')) return;
+  if ((e.metaKey||e.ctrlKey) && e.key === 'z'){ e.preventDefault(); undo(); }
+  if (e.key === 'f' || e.key === 'F'){ if (isAbs(S.sel)){ snapshot(); returnToFlow(S.sel); } }
+});
+</script>
