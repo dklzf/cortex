@@ -1,62 +1,81 @@
+<!DOCTYPE html>
 <meta charset="utf-8">
 <title>M0c — does a drag beat a sentence?</title>
+<!-- The doctype is load-bearing. Without it this renders in QUIRKS MODE, where
+     tables do not inherit color/font and box-sizing defaults change — so any
+     layout, and any timing that depends on it, would not match a real app.
+     The previous revision omitted it. -->
 <style>
-  /* Drafting-metaphor palette per DESIGN.md: blueprint ground, amber pencil-mark accent. */
-  :root{--bg:#0f172a;--panel:#141d33;--line:#243352;--text:#e8eaf0;--dim:#8794ab;--accent:#d97706;--ok:#16a34a}
+  /* Dark Mode "Blueprint" per DESIGN.md:122-150. Accent is --select (blue).
+     The previous revision used amber #d97706 and cited DESIGN.md for it;
+     DESIGN.md specifies blue and lists orange only as Warning. */
+  :root{
+    --paper:#0f172a; --vellum:#1e293b; --well:#1a2332; --well-hover:#233044;
+    --ink:#e2e8f0; --ink-2:#94a3b8; --ink-3:#64748b; --rule:#1e293b;
+    --select:#60a5fa; --on-select:#0f172a; --warn:#fb923c; --ok:#4ade80;
+    --r-sm:4px; --r-md:6px; --r-lg:8px;
+  }
   *{box-sizing:border-box}
-  body{margin:0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
-  header{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  body{margin:0;background:var(--paper);color:var(--ink);overflow:hidden;
+       font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{padding:12px 20px;border-bottom:1px solid var(--rule);display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
   h1{font-size:15px;margin:0;font-weight:600}
-  .sub{color:var(--dim);font-size:12px}
-  .taskbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
-  .pill{border:1px solid var(--line);border-radius:99px;padding:3px 10px;font-size:12px;color:var(--dim)}
-  .pill.on{border-color:var(--accent);color:var(--text)}
+  .sub{color:var(--ink-2);font-size:12px}
+  .taskbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 20px;
+           border-bottom:1px solid var(--rule);background:var(--vellum)}
+  .pill{border:1px solid var(--rule);border-radius:99px;padding:3px 10px;font-size:12px;color:var(--ink-2)}
+  .pill.on{border-color:var(--select);color:var(--ink)}
   main{display:grid;grid-template-columns:1fr 320px;height:calc(100vh - 100px)}
   #stage{padding:24px;overflow:auto;position:relative}
-  aside{border-left:1px solid var(--line);background:var(--panel);padding:14px;display:flex;flex-direction:column;gap:12px;overflow:auto}
-  .card{background:#0e1526;border:1px solid var(--line);border-radius:8px;padding:11px}
-  .card h3{margin:0 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:600}
-  button{font:inherit;background:#1b2438;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+  aside{border-left:1px solid var(--rule);background:var(--vellum);padding:14px;
+        display:flex;flex-direction:column;gap:12px;overflow:auto}
+  .card{background:var(--well);border:1px solid var(--rule);border-radius:var(--r-md);padding:11px}
+  .card h3{margin:0 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
+  button{font:inherit;background:var(--well);color:var(--ink);border:1px solid var(--rule);
+         border-radius:var(--r-md);padding:6px 11px;cursor:pointer}
   button:hover{border-color:#35456a}
-  button.primary{background:var(--accent);border-color:var(--accent);color:#1a1206;font-weight:600}
+  button.primary{background:var(--select);border-color:var(--select);color:var(--on-select);font-weight:600}
   button:disabled{opacity:.42;cursor:not-allowed}
-  textarea{width:100%;background:#0a1120;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:13px ui-monospace,monospace;resize:vertical}
+  textarea{width:100%;background:#0a1120;color:var(--ink);border:1px solid var(--rule);
+           border-radius:var(--r-md);padding:8px;font:13px ui-monospace,monospace;resize:vertical}
+  kbd{background:var(--paper);border:1px solid var(--rule);border-radius:3px;padding:1px 5px;font:11px ui-monospace,monospace}
   .big{font-size:25px;font-weight:650;font-variant-numeric:tabular-nums}
-  .muted{color:var(--dim);font-size:12px}
-  .log{font:12px ui-monospace,monospace;color:var(--dim);max-height:130px;overflow:auto;white-space:pre-wrap}
+  .muted{color:var(--ink-2);font-size:12px}
+  .log{font:12px ui-monospace,monospace;color:var(--ink-2);max-height:130px;overflow:auto;white-space:pre-wrap}
   table.res{width:100%;border-collapse:collapse;font:12px ui-monospace,monospace}
-  table.res td,table.res th{border-bottom:1px solid var(--line);padding:4px 5px;text-align:left}
+  table.res td,table.res th{border-bottom:1px solid var(--rule);padding:4px 5px;text-align:left}
+  #refuse{color:var(--warn);font-size:12px;min-height:16px}
 
   /* ── the fake app ── */
-  .app{background:#fbfaf7;color:#111;border-radius:8px;padding:18px;width:640px;position:relative}
+  .app{background:#fff;color:#111827;border-radius:var(--r-lg);padding:18px;width:640px;position:relative}
   .app h2{margin:0 0 4px;font-size:17px}
-  .lede{margin:0 0 14px;color:#666;font-size:13px}
+  .lede{margin:0 0 14px;color:#6b7280;font-size:13px}
   .row{display:flex;gap:8px;align-items:center;margin-bottom:12px}
-  .btn{background:#111;color:#fff;border-radius:6px;padding:7px 12px;font-size:13px}
-  .btn.ghost{background:#e9e6e0;color:#111}
+  .btn{background:#111827;color:#fff;border-radius:var(--r-sm);padding:7px 12px;font-size:13px;white-space:nowrap}
+  .btn.ghost{background:#f5f5f5;color:#111827;border:1px solid #f0f0f0}
   table.data{width:100%;border-collapse:collapse;font-size:13px}
   .data th,.data td{text-align:left;padding:7px 8px;border-bottom:1px solid #e6e2da}
-  .data th{color:#666;font-weight:600;font-size:12px}
-  .badge{display:inline-block;background:#fdf0dc;color:#92400e;border-radius:99px;padding:2px 8px;font-size:11px}
+  .data th{color:#6b7280;font-weight:600;font-size:12px}
+  .badge{display:inline-block;background:#dbeafe;color:#1e40af;border-radius:99px;padding:2px 8px;font-size:11px}
 
-  /* ── freeform manipulation ── */
+  /* ── manipulation (§7e) ── */
   [data-n]{cursor:default}
-  .cx-hover{outline:1.5px solid rgba(217,119,6,.5);outline-offset:1px}
-  .cx-sel{outline:1.5px solid var(--accent);outline-offset:1px}
-  /* A lifted object is OUT OF FLOW and lives in absolute space, Figma-style.
-     Flow closes up behind it natively — that is a real subtraction, not a fake. */
-  .cx-lifted{position:fixed!important;margin:0!important;z-index:60;cursor:grab;
-             box-shadow:0 6px 20px rgba(0,0,0,.28);will-change:transform}
-  .cx-lifted.cx-drag{cursor:grabbing}
-  .cx-handle{position:fixed;width:11px;height:11px;background:var(--accent);border:1.5px solid #fbfaf7;
-             border-radius:2px;z-index:61;cursor:nwse-resize}
-  .cx-origin{position:fixed;border:1px dashed rgba(217,119,6,.45);border-radius:4px;z-index:55;pointer-events:none}
-  .cx-deleted{opacity:.25;text-decoration:line-through}
+  .cx-hover{outline:1.5px solid rgba(96,165,250,.45);outline-offset:1px}
+  .cx-sel{outline:1.5px solid var(--select);outline-offset:1px}
+  .cx-dragging{pointer-events:none;z-index:60}
+  .cx-line{position:fixed;background:var(--select);border-radius:2px;z-index:70;
+           pointer-events:none;box-shadow:0 0 0 1px rgba(15,23,42,.4)}
+  .cx-abs{position:absolute!important;margin:0!important;z-index:55;
+          box-shadow:0 6px 20px rgba(0,0,0,.25);outline:1.5px dashed var(--warn);outline-offset:1px}
+  .cx-abs::after{content:"abs";position:absolute;top:-8px;right:-6px;background:var(--warn);
+                 color:#1a1206;font:600 9px/1.4 ui-sans-serif,system-ui;padding:0 4px;
+                 border-radius:3px;pointer-events:none}
+  .cx-deleted{display:none}
 </style>
 
 <header>
   <h1>M0c — does a drag beat a sentence?</h1>
-  <span class="sub">Freeform direct manipulation. Objects lift out of flow and stay where you put them.</span>
+  <span class="sub">Direct manipulation over real layout. Objects move among their siblings; a line marks where.</span>
 </header>
 
 <div class="taskbar">
@@ -71,7 +90,7 @@
 
 <main>
   <div id="stage">
-    <div class="app" id="app">
+    <div class="app" id="app" data-n="app">
       <h2 data-n="title">Quarterly report</h2>
       <p class="lede" data-n="lede">Revenue and risk across all business units.</p>
       <div class="row" data-n="actions">
@@ -80,8 +99,8 @@
         <span class="btn" data-n="export">Export CSV</span>
       </div>
       <table class="data" data-n="table">
-        <thead><tr><th data-n="th-unit">Unit</th><th data-n="th-rev">Revenue</th><th data-n="th-risk">Risk</th></tr></thead>
-        <tbody>
+        <thead><tr data-n="head"><th data-n="th-unit">Unit</th><th data-n="th-rev">Revenue</th><th data-n="th-risk">Risk</th></tr></thead>
+        <tbody data-n="body">
           <tr data-n="r1"><td>North</td><td>$1.2M</td><td><span class="badge">Low</span></td></tr>
           <tr data-n="r2"><td>South</td><td>$0.9M</td><td><span class="badge">Med</span></td></tr>
           <tr data-n="r3"><td>East</td><td>$1.7M</td><td><span class="badge">Low</span></td></tr>
@@ -102,14 +121,16 @@
     </div>
 
     <div class="card" id="dragPanel">
-      <h3>Changes <span id="count" style="color:var(--accent)">(0)</span></h3>
+      <h3>Changes <span id="count" style="color:var(--select)">(0)</span></h3>
       <div class="log" id="changes">nothing staged</div>
+      <div id="refuse"></div>
       <div style="display:flex;gap:6px;margin-top:8px">
         <button id="undoBtn">Undo</button>
         <button id="sendBtn" class="primary">Send</button>
       </div>
       <div class="muted" style="margin-top:8px;line-height:1.45">
-        drag to move · corner to resize · <kbd>Delete</kbd> to remove · <kbd>⌘Z</kbd> undo
+        drag to move · <kbd>Alt</kbd>+drag to break out · <kbd>F</kbd> back to flow ·
+        <kbd>Delete</kbd> to remove · <kbd>⌘Z</kbd> undo
       </div>
     </div>
 
@@ -130,32 +151,32 @@
 
 <script>
 /* ═══════════════════════════════════════════════════════════════════════════
-   M0c — freeform arm.
+   M0c — the desirability gate. §9: "nobody has measured whether a drag beats a
+   sentence." If Claude must ask a clarifying question on 30-40% of gestures,
+   drag-plus-question costs more than typing the instruction, and the feature
+   dies regardless of how good the identity numbers are.
 
-   WHY THIS MODEL, given §7 said high-fidelity preview is "not deliverable":
+   MEASUREMENT DESIGN — preserved unchanged from the previous revision, because
+   these two decisions are what make the result mean anything:
+   - The comparison arm is SELECTION-ASSISTED PROMPTING (click the element, then
+     describe the change), not raw typing. Comparing against raw typing would
+     flatter the drag arm by pricing in target-description cost that selection
+     already removes.
+   - The stopwatch stops at "task expressed" and EXCLUDES Claude's resolution
+     time and any clarifying round trip. Those are additive to the drag arm, so
+     excluding them biases IN FAVOUR of drag. If drag loses here, it loses by
+     more in reality.
 
-   Every mechanism §7 refuted — CSS cannot reparent, `::before` gaps, specificity
-   wars, ancestor transforms breaking `position:fixed` descendants — is an
-   argument against REFLOWING THE LIVE DOCUMENT to preview an outcome. None of
-   them is an argument against direct manipulation.
-
-   Rev 2 collapsed those two axes and replaced objects with marks (ghost +
-   insertion line + chip). That was a non-sequitur. Figma is the counterexample:
-   total direct manipulation, zero flow preview, because it never reflows —
-   objects live in absolute space.
-
-   So: on grab, the element LEAVES FLOW (position:fixed at its current rect) and
-   moves with the cursor. Nothing snaps. It stays where released, and keeps
-   handles for re-drag and corner-resize. The document underneath is never
-   fabricated — flow closing up behind a lifted object is the browser doing a
-   real subtraction, the same honesty the spec already accepts for delete.
-
-   MEASUREMENT NOTE: the stopwatch stops at "task expressed" and excludes
-   Claude's resolution time and any clarifying question. Those are additive to
-   the drag arm only, so this biases IN FAVOUR of drag. If drag loses here, it
-   loses by more in reality. The comparison arm is selection-assisted prompting
-   (v0/Bolt style), not raw typing — comparing to raw typing would flatter drag
-   by pricing in target-description cost that selection already removes.
+   TWO THINGS FIXED IN THIS REVISION:
+   1. The interaction is now §7e, not the lift-out-of-flow model — which the
+      user rejected on sight, as they had the ghost/insertion-line model before
+      it. Measuring a rejected interaction measures nothing.
+   2. ARM ORDER NOW ALTERNATES. The previous revision's commit message claimed
+      "arm order alternating per participant" and the code did `setArm('drag')`
+      unconditionally on every run. Whichever arm ran second benefited from
+      already knowing all ten tasks — a straight order effect on a two-arm
+      comparison, biasing toward whatever ran last. Order is now chosen per run
+      and recorded in the exported results so it can be checked afterwards.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const TASKS = [
@@ -171,10 +192,254 @@ const TASKS = [
   'Make the table narrower.',
 ];
 
-const state = { arm:null, taskIdx:-1, t0:0, running:false, results:[], changes:[], undo:[], sel:null };
+const state = { arm:null, armOrder:null, taskIdx:-1, t0:0, running:false,
+                results:[], changes:[], undo:[], sel:null };
 const $ = id => document.getElementById(id);
 const app = $('app');
 const label = el => (el.dataset.n||el.tagName.toLowerCase()) + ' "' + (el.textContent||'').trim().slice(0,20) + '"';
+
+/* ── §7e: containers are ordered-stacking boxes that can hold this child ──── */
+const ORDERED = new Set(['block','flow-root','list-item','flex','inline-flex','grid','inline-grid',
+  'table','table-row-group','table-header-group','table-footer-group','table-row',
+  'block flex','inline flex','block grid','inline grid']);
+const DECLARED = new Set(['flex','inline-flex','grid','inline-grid',
+  'table','table-row-group','table-header-group','table-footer-group','table-row',
+  'block flex','inline flex','block grid','inline grid']);
+const TABLE_SECTION = new Set(['table-row-group','table-header-group','table-footer-group']);
+const TABLE_TAG = new Set(['TR','TD','TH','THEAD','TBODY','TFOOT','CAPTION','COLGROUP','COL']);
+const NO_ABSOLUTE = new Set(['TR','TD','TH','THEAD','TBODY','TFOOT']);
+const HAS_MOVE_BEFORE = typeof Element.prototype.moveBefore === 'function';
+const HYST = 12, THRESHOLD = 4;
+
+let lineEl = null, hov = null, drag = null;
+
+function layoutParent(el){
+  let p = el.parentElement;
+  while (p && getComputedStyle(p).display === 'contents') p = p.parentElement;
+  return p;
+}
+function qualifies(el){
+  if (!el || !app.contains(el) && el !== app) return false;
+  const d = getComputedStyle(el).display;
+  if (!ORDERED.has(d)) return false;
+  if (DECLARED.has(d)) return true;
+  // Flex items are BLOCKIFIED, so without this every leaf in a row advertises
+  // itself as a drop container and elements nest inside buttons.
+  return el.childElementCount > 0;
+}
+function canAccept(container, el){
+  const cd = getComputedStyle(container).display, tag = el.tagName;
+  if (cd === 'table')        return ['THEAD','TBODY','TFOOT','TR','CAPTION','COLGROUP'].includes(tag);
+  if (TABLE_SECTION.has(cd)) return tag === 'TR';
+  if (cd === 'table-row')    return tag === 'TD' || tag === 'TH';
+  return !TABLE_TAG.has(tag);
+}
+function containerUnderCursor(x, y, dragged){
+  for (const el of document.elementsFromPoint(x, y)){
+    if (dragged && (el === dragged || dragged.contains(el))) continue;
+    if (el === lineEl) continue;
+    if (qualifies(el) && canAccept(el, dragged)) return el;
+  }
+  return null;
+}
+function withinSlop(c,x,y){
+  if(!c) return false;
+  const r=c.getBoundingClientRect();
+  return x>=r.left-HYST && x<=r.right+HYST && y>=r.top-HYST && y<=r.bottom+HYST;
+}
+function axisOf(c){
+  const cs = getComputedStyle(c), d = cs.display;
+  if (d.includes('grid')) return 'grid';
+  if (d.includes('flex')) return (cs.flexDirection||'row').startsWith('column') ? 'vertical' : 'horizontal';
+  if (d === 'table-row') return 'horizontal';
+  return 'vertical';
+}
+const isAbs = el => el?.classList.contains('cx-abs');
+function siblings(c, el){
+  return [...c.children].filter(k => k !== el && k !== lineEl && !isAbs(k) && !k.classList.contains('cx-deleted'));
+}
+function slotIndex(c, x, y, el){
+  const kids = siblings(c, el);
+  if (!kids.length) return 0;
+  const axis = axisOf(c);
+  if (axis === 'grid'){
+    let bi=0,bd=Infinity,bc=null;
+    kids.forEach((k,i)=>{const r=k.getBoundingClientRect();
+      const cx=r.left+r.width/2, cy=r.top+r.height/2, dd=(x-cx)**2+(y-cy)**2;
+      if(dd<bd){bd=dd;bi=i;bc={cx,cy};}});
+    const dx=x-bc.cx, dy=y-bc.cy;
+    return (Math.abs(dx)>Math.abs(dy)?dx>0:dy>0)?bi+1:bi;
+  }
+  const vertical = axis==='vertical';
+  const cs = getComputedStyle(c);
+  const reverse = cs.display.includes('flex') && (cs.flexDirection||'').endsWith('reverse');
+  for (let i=0;i<kids.length;i++){
+    const r = kids[i].getBoundingClientRect();
+    const mid = vertical ? r.top+r.height/2 : r.left+r.width/2;
+    const pos = vertical ? y : x;
+    if (reverse ? pos>mid : pos<mid) return i;
+  }
+  return kids.length;
+}
+function place(c, el, index){
+  const kids = siblings(c, el);
+  const before = kids[index] || null;
+  if (el.parentElement === c && el.nextElementSibling === before) return;
+  if (HAS_MOVE_BEFORE){ c.moveBefore(el, before); return; }  // throws are real bugs — do not swallow
+  const scrollers = [el, ...el.querySelectorAll('*')].filter(n=>n.scrollTop||n.scrollLeft)
+                      .map(n=>[n,n.scrollTop,n.scrollLeft]);
+  const active = el.contains(document.activeElement) ? document.activeElement : null;
+  c.insertBefore(el, before);
+  for (const [n,t,l] of scrollers){ n.scrollTop=t; n.scrollLeft=l; }
+  if (active) active.focus({preventScroll:true});
+}
+function flip(mutate){
+  const nodes = [...app.querySelectorAll('[data-n]')];
+  const first = new Map(nodes.map(n=>[n,n.getBoundingClientRect()]));
+  mutate();
+  const moved = [];
+  for (const n of nodes){
+    if (n === drag?.el || isAbs(n)) continue;
+    const f=first.get(n), l=n.getBoundingClientRect();
+    const dx=f.left-l.left, dy=f.top-l.top;
+    if (Math.abs(dx)<.5 && Math.abs(dy)<.5) continue;
+    n.style.transition='none'; n.style.transform=`translate(${dx}px,${dy}px)`;
+    moved.push(n);
+  }
+  if (!moved.length) return;
+  app.getBoundingClientRect();
+  for (const n of moved){ n.style.transition='transform 150ms ease-in-out'; n.style.transform=''; }
+}
+function drawLine(c, index, el){
+  const kids = siblings(c, el);
+  if (!kids.length){ clearLine(); return; }
+  if (!lineEl){ lineEl=document.createElement('div'); lineEl.className='cx-line'; document.body.appendChild(lineEl); }
+  const atEnd = index >= kids.length;
+  const r = kids[atEnd?kids.length-1:index].getBoundingClientRect();
+  if (axisOf(c) !== 'horizontal')
+    Object.assign(lineEl.style,{left:r.left+'px',width:r.width+'px',height:'2px',top:(atEnd?r.bottom+3:r.top-3)+'px'});
+  else
+    Object.assign(lineEl.style,{top:r.top+'px',height:r.height+'px',width:'2px',left:(atEnd?r.right+3:r.left-3)+'px'});
+}
+function clearLine(){ lineEl?.remove(); lineEl=null; }
+function follow(el, e, d){
+  el.style.transition='none'; el.style.transform='';
+  const r = el.getBoundingClientRect();
+  el.style.transform = `translate(${e.clientX-d.dx-r.left}px,${e.clientY-d.dy-r.top}px)`;
+}
+function makeAbsolute(el){
+  if (isAbs(el)) return true;
+  if (NO_ABSOLUTE.has(el.tagName)){
+    $('refuse').textContent = `${el.tagName.toLowerCase()} cannot leave table layout — reorder only`;
+    return false;
+  }
+  const hr = app.getBoundingClientRect();
+  el.style.transition='none'; el.style.transform='';
+  const r = el.getBoundingClientRect();
+  el.classList.add('cx-abs');
+  Object.assign(el.style,{left:(r.left-hr.left)+'px',top:(r.top-hr.top)+'px',width:r.width+'px',height:r.height+'px'});
+  return true;
+}
+function returnToFlow(el){
+  if (!isAbs(el)) return;
+  flip(()=>{ el.classList.remove('cx-abs'); el.style.left=el.style.top=el.style.width=el.style.height=''; });
+  stage({verb:'return-to-flow', what:label(el)});
+}
+
+/* ── hover + select (both arms) ── */
+function select(el){
+  state.sel?.classList.remove('cx-sel'); state.sel = el; el?.classList.add('cx-sel');
+  if (state.arm === 'prompt') $('selHint').textContent = el ? 'attached: '+label(el) : 'nothing attached';
+}
+app.addEventListener('pointermove', e=>{
+  if (drag) return;
+  const el = e.target.closest('[data-n]');
+  if (el===hov) return;
+  hov?.classList.remove('cx-hover'); hov=el; hov?.classList.add('cx-hover');
+});
+app.addEventListener('pointerleave', ()=>{ hov?.classList.remove('cx-hover'); hov=null; });
+
+app.addEventListener('pointerdown', e=>{
+  const el = e.target.closest('[data-n]');
+  if (!el || el===app) return;
+  e.preventDefault(); $('refuse').textContent=''; select(el);
+  if (state.arm !== 'drag') return;
+  const r = el.getBoundingClientRect(), parent = el.parentElement;
+  drag = { el, dx:e.clientX-r.left, dy:e.clientY-r.top, x0:e.clientX, y0:e.clientY,
+           moved:false, homeParent:parent, homeIndex:[...parent.children].indexOf(el),
+           container:null, index:null, mode:null };
+});
+window.addEventListener('pointermove', e=>{
+  const d = drag; if (!d) return;
+  if (!d.moved){
+    if (Math.hypot(e.clientX-d.x0, e.clientY-d.y0) < THRESHOLD) return;
+    d.moved = true; snapshot();
+    hov?.classList.remove('cx-hover'); hov=null;
+    d.el.classList.add('cx-dragging');
+    const lp = layoutParent(d.el);
+    d.container = (qualifies(lp) && canAccept(lp, d.el)) ? lp : null;
+  }
+  if (e.altKey && !isAbs(d.el)) makeAbsolute(d.el);
+
+  if (isAbs(d.el)){
+    d.mode='absolute'; d.container=null; d.index=null; clearLine();
+    const hr = app.getBoundingClientRect();
+    d.el.style.left=(e.clientX-d.dx-hr.left)+'px';
+    d.el.style.top =(e.clientY-d.dy-hr.top)+'px';
+  } else {
+    const inner = containerUnderCursor(e.clientX, e.clientY, d.el);
+    let target = null;
+    if (inner && inner!==d.container && d.container?.contains(inner)) target = inner;
+    else if (d.container && withinSlop(d.container, e.clientX, e.clientY)) target = d.container;
+    else target = inner || d.container;
+    if (target){
+      d.mode='move'; d.container=target;
+      d.index = slotIndex(target, e.clientX, e.clientY, d.el);
+      drawLine(target, d.index, d.el);
+    }
+    follow(d.el, e, d);
+  }
+});
+window.addEventListener('pointerup', ()=>{
+  const d = drag; if (!d) return;
+  drag = null;
+  d.el.classList.remove('cx-dragging');
+  if (!d.moved){ clearLine(); return; }
+  if (isAbs(d.el)){
+    clearLine();
+    const hr=app.getBoundingClientRect(), r=d.el.getBoundingClientRect();
+    stage({verb:'absolute', what:label(d.el), to:`${Math.round(r.left-hr.left)},${Math.round(r.top-hr.top)}`});
+  } else if (d.container){
+    flip(()=>place(d.container, d.el, d.index));
+    clearLine();
+    d.el.style.transition='transform 150ms ease-in-out'; d.el.style.transform='';
+    // §7a: the browser records a `move` plus sameDomParent, never a `reorder` —
+    // only source analysis may claim two DOM siblings are JSX siblings.
+    stage({verb:'move', what:label(d.el),
+           to:`${d.container.dataset.n||d.container.tagName.toLowerCase()}[${[...d.container.children].indexOf(d.el)}]`,
+           sameDomParent: d.container === d.homeParent});
+  } else { clearLine(); d.el.style.transform=''; }
+});
+
+// e.target is not always an Element — a keydown dispatched at window has
+// target === window, which has no .matches(), and the bare call threw. Carried
+// over from the previous revision; a typing user never hit it because focus is
+// on an Element, which is exactly why it survived.
+const typingInto = el => el instanceof Element && el.matches('textarea, input');
+
+window.addEventListener('keydown', e=>{
+  if (e.key==='Enter' && state.running && !typingInto(e.target)){ e.preventDefault(); $('doneBtn').click(); }
+  if ((e.metaKey||e.ctrlKey) && e.key==='z'){ e.preventDefault(); undo(); }
+  if (state.arm!=='drag' || typingInto(e.target)) return;
+  if ((e.key==='Delete'||e.key==='Backspace') && state.sel){
+    e.preventDefault(); snapshot();
+    // Real subtraction: the element goes and the page closes up around it.
+    flip(()=>state.sel.classList.add('cx-deleted'));
+    stage({verb:'remove', what:label(state.sel)});
+    select(null);
+  }
+  if ((e.key==='f'||e.key==='F') && isAbs(state.sel)){ snapshot(); returnToFlow(state.sel); }
+});
 
 /* ── stopwatch ── */
 let raf;
@@ -186,170 +451,52 @@ function startTask(){
   $('taskText').textContent = TASKS[state.taskIdx];
   resetApp();
   state.t0 = performance.now(); state.running = true;
-  $('clockNote').textContent = 'running';
-  $('doneBtn').disabled = false; $('giveUpBtn').disabled = false;
+  $('clockNote').textContent='running';
+  $('doneBtn').disabled=false; $('giveUpBtn').disabled=false;
   tick();
 }
 function record(outcome){
   if(!state.running) return;
   state.running=false; cancelAnimationFrame(raf);
-  state.results.push({arm:state.arm, task:state.taskIdx+1, text:TASKS[state.taskIdx], ms:Math.round(performance.now()-state.t0), outcome});
+  state.results.push({arm:state.arm, armOrder:state.armOrder, task:state.taskIdx+1,
+                      text:TASKS[state.taskIdx], ms:Math.round(performance.now()-state.t0), outcome});
   $('doneBtn').disabled=true; $('giveUpBtn').disabled=true;
   renderResults(); startTask();
 }
 function finishArm(){
   $('clockNote').textContent='arm complete'; $('taskText').textContent='';
-  if (state.arm==='drag'){
-    state.arm='prompt'; state.taskIdx=-1; setArm('prompt');
-    alert('Freeform arm complete.\n\nNow the SAME ten tasks using selection-assisted prompting.');
+  const second = state.armOrder[1];
+  if (state.arm === state.armOrder[0]){
+    state.taskIdx=-1; setArm(second);
+    alert(`Arm 1 complete.\n\nNow the SAME ten tasks using ${second==='drag'?'DIRECT MANIPULATION':'SELECTION-ASSISTED PROMPTING'}.`);
     startTask();
   } else { $('taskPill').textContent='run complete'; $('startBtn').disabled=false;
     alert('Run complete. Copy the results JSON.'); }
 }
 function setArm(a){
   state.arm=a;
-  $('armPill').textContent='arm: '+(a==='drag'?'FREEFORM (direct manipulation)':'SELECTION-ASSISTED PROMPT');
+  $('armPill').textContent='arm: '+(a==='drag'?'DIRECT MANIPULATION':'SELECTION-ASSISTED PROMPT');
   $('armPill').className='pill on';
   $('dragPanel').hidden = a!=='drag'; $('typePanel').hidden = a!=='prompt';
-  clearHandles();
+  clearLine();
 }
 
 const PRISTINE = app.innerHTML;
 function resetApp(){
-  clearHandles();
+  clearLine();
   app.innerHTML = PRISTINE;
-  state.changes=[]; state.undo=[]; state.sel=null;
-  renderChanges(); $('selHint').textContent='Click an element to attach it, then type the instruction.'; $('prompt').value='';
+  state.changes=[]; state.undo=[]; state.sel=null; hov=null;
+  $('refuse').textContent='';
+  renderChanges();
+  $('selHint').textContent='Click an element to attach it, then type the instruction.';
+  $('prompt').value='';
 }
-
-/* ── hover + select (both arms) ── */
-let hov=null;
-app.addEventListener('mousemove', e=>{
-  if (drag) return;
-  const el = e.target.closest('[data-n]');
-  if (el===hov) return;
-  hov?.classList.remove('cx-hover'); hov=el; hov?.classList.add('cx-hover');
-});
-app.addEventListener('mouseleave', ()=>{ hov?.classList.remove('cx-hover'); hov=null; });
-
-function select(el){
-  state.sel?.classList.remove('cx-sel');
-  state.sel = el;
-  el?.classList.add('cx-sel');
-  if (state.arm==='prompt') $('selHint').textContent = el ? 'attached: '+label(el) : 'nothing attached';
-  else placeHandles();
-}
-app.addEventListener('click', e=>{
-  const el = e.target.closest('[data-n]');
-  if (!el) return;
-  e.preventDefault(); select(el);
-});
-
-/* ── freeform: lift out of flow, move, resize, stay ── */
-let drag=null, resize=null, handles=[], originMark=null;
-
-function lift(el){
-  if (el.classList.contains('cx-lifted')) return;
-  const r = el.getBoundingClientRect();
-  // Mark where it came from, so the gesture stays legible after flow closes up.
-  originMark = document.createElement('div');
-  originMark.className='cx-origin';
-  Object.assign(originMark.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
-  document.body.appendChild(originMark);
-  // Out of flow. The document closes up behind it natively — a real subtraction.
-  Object.assign(el.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
-  el.classList.add('cx-lifted');
-}
-
-app.addEventListener('mousedown', e=>{
-  if (state.arm!=='drag') return;
-  const el = e.target.closest('[data-n]');
-  if (!el) return;
-  e.preventDefault();
-  select(el);
-  const r = el.getBoundingClientRect();
-  drag = { el, dx:e.clientX-r.left, dy:e.clientY-r.top, moved:false, from:{x:r.left,y:r.top} };
-});
-
-window.addEventListener('mousemove', e=>{
-  if (resize){
-    const r = resize.el.getBoundingClientRect();
-    const w = Math.max(24, e.clientX - r.left), h = Math.max(16, e.clientY - r.top);
-    resize.el.style.width = w+'px'; resize.el.style.height = h+'px';
-    placeHandles(); return;
-  }
-  if (!drag) return;
-  if (!drag.moved){
-    if (Math.hypot(e.clientX-(drag.from.x+drag.dx), e.clientY-(drag.from.y+drag.dy)) < 4) return;
-    drag.moved = true;
-    snapshot();
-    lift(drag.el);
-    drag.el.classList.add('cx-drag');
-    clearHandles();
-  }
-  // No ghost, no snapping, no insertion line. The object itself follows the cursor.
-  drag.el.style.left = (e.clientX-drag.dx)+'px';
-  drag.el.style.top  = (e.clientY-drag.dy)+'px';
-});
-
-window.addEventListener('mouseup', ()=>{
-  if (resize){
-    const r = resize.el.getBoundingClientRect();
-    stage({verb:'resize', what:label(resize.el), to:`${Math.round(r.width)}×${Math.round(r.height)}`});
-    resize=null; placeHandles(); return;
-  }
-  if (drag){
-    if (drag.moved){
-      const r = drag.el.getBoundingClientRect();
-      drag.el.classList.remove('cx-drag');
-      stage({verb:'move', what:label(drag.el), to:`${Math.round(r.left)},${Math.round(r.top)}`});
-      placeHandles();
-    }
-    drag=null;
-  }
-});
-
-/* Handles persist on the selected object, so it can be nudged or resized again. */
-function clearHandles(){ handles.forEach(h=>h.remove()); handles=[]; }
-function placeHandles(){
-  clearHandles();
-  const el = state.sel; if (!el || state.arm!=='drag') return;
-  const r = el.getBoundingClientRect();
-  const h = document.createElement('div');
-  h.className='cx-handle';
-  h.style.left=(r.right-5)+'px'; h.style.top=(r.bottom-5)+'px';
-  h.addEventListener('mousedown', ev=>{
-    ev.preventDefault(); ev.stopPropagation();
-    snapshot(); lift(el); resize={el};
-  });
-  document.body.appendChild(h); handles.push(h);
-}
-window.addEventListener('scroll', placeHandles, true);
-window.addEventListener('resize', placeHandles);
-
-window.addEventListener('keydown', e=>{
-  if (e.key==='Enter' && state.running && !e.target.matches('textarea')){ e.preventDefault(); $('doneBtn').click(); }
-  if (state.arm!=='drag') return;
-  if ((e.key==='Delete'||e.key==='Backspace') && state.sel && !e.target.matches('textarea')){
-    e.preventDefault(); snapshot();
-    state.sel.classList.add('cx-deleted');
-    stage({verb:'remove', what:label(state.sel)});
-    select(null); clearHandles();
-  }
-  if ((e.metaKey||e.ctrlKey) && e.key==='z'){ e.preventDefault(); undo(); }
-});
-
-/* ── change log ── */
 function snapshot(){ state.undo.push({html:app.innerHTML, n:state.changes.length}); }
 function stage(c){ state.changes.push(c); renderChanges(); }
 function undo(){
-  const s = state.undo.pop(); if (!s) return;
-  clearHandles();
-  app.innerHTML = s.html;
-  state.changes.length = s.n;
-  state.sel=null; hov=null;
-  document.querySelectorAll('.cx-origin').forEach(o=>o.remove()); originMark=null;
-  renderChanges();
+  const s = state.undo.pop(); if(!s) return;
+  clearLine(); app.innerHTML=s.html; state.changes.length=s.n;
+  state.sel=null; hov=null; renderChanges();
 }
 function renderChanges(){
   $('count').textContent = `(${state.changes.length})`;
@@ -373,18 +520,31 @@ function renderResults(){
   const med = a => a.length ? (a.slice().sort((x,y)=>x-y)[Math.floor(a.length/2)]/1000).toFixed(1)+'s' : '—';
   const gave = a => rows.filter(r=>r.arm===a && r.outcome==='gaveup').length;
   $('results').innerHTML = `<table class="res"><tr><th>arm</th><th>n</th><th>median</th><th>gave up</th></tr>`+
-    `<tr><td>freeform</td><td>${by('drag').length}</td><td>${med(by('drag'))}</td><td>${gave('drag')}</td></tr>`+
-    `<tr><td>prompt</td><td>${by('prompt').length}</td><td>${med(by('prompt'))}</td><td>${gave('prompt')}</td></tr></table>`;
+    `<tr><td>drag</td><td>${by('drag').length}</td><td>${med(by('drag'))}</td><td>${gave('drag')}</td></tr>`+
+    `<tr><td>prompt</td><td>${by('prompt').length}</td><td>${med(by('prompt'))}</td><td>${gave('prompt')}</td></tr></table>`+
+    `<div class="muted" style="margin-top:6px">order: ${state.armOrder?.join(' → ') ?? '—'}</div>`;
 }
 $('exportBtn').onclick = ()=>{
-  navigator.clipboard.writeText(JSON.stringify({ranAt:new Date().toISOString(),results:state.results},null,2));
+  navigator.clipboard.writeText(JSON.stringify({
+    ranAt:new Date().toISOString(), armOrder:state.armOrder,
+    moveBeforeNative:HAS_MOVE_BEFORE, userAgent:navigator.userAgent,
+    results:state.results,
+  },null,2));
   $('exportBtn').textContent='copied ✓'; setTimeout(()=>$('exportBtn').textContent='Copy results JSON',1200);
 };
 $('doneBtn').onclick = ()=>record('done');
 $('giveUpBtn').onclick = ()=>record('gaveup');
 $('startBtn').onclick = ()=>{
-  state.results=[]; state.taskIdx=-1; setArm('drag'); $('startBtn').disabled=true;
-  alert('Arm 1 of 2: FREEFORM.\n\nDrag an element and it lifts out of flow and follows your cursor — nothing snaps, nothing bounces back. It stays where you drop it.\nCorner handle resizes. Delete removes. ⌘Z undoes.\n\nPress "Task done" the moment the task is expressed.');
+  // Counterbalance the order. The previous revision always started with drag,
+  // so the second arm always benefited from already knowing the ten tasks.
+  const dragFirst = confirm('Arm order for this participant.\n\nOK  = drag first, then prompt\nCancel = prompt first, then drag\n\nAlternate this between participants.');
+  state.armOrder = dragFirst ? ['drag','prompt'] : ['prompt','drag'];
+  state.results=[]; state.taskIdx=-1; setArm(state.armOrder[0]); $('startBtn').disabled=true;
+  alert(`Arm 1 of 2: ${state.armOrder[0]==='drag'?'DIRECT MANIPULATION':'SELECTION-ASSISTED PROMPTING'}.\n\n`+
+    (state.armOrder[0]==='drag'
+      ? 'Drag an element and it moves among its siblings — a blue line shows where it will land. Alt+drag breaks it out of layout; F puts it back. Delete removes. ⌘Z undoes.\n\n'
+      : 'Click the element you mean, then type the instruction.\n\n')+
+    'Press "Task done" the moment the task is expressed.');
   startTask();
 };
 setArm('drag');
