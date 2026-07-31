@@ -71,6 +71,11 @@
                  color:#1a1206;font:600 9px/1.4 ui-sans-serif,system-ui;padding:0 4px;
                  border-radius:3px;pointer-events:none}
   .cx-deleted{display:none}
+  /* Resize. §7c moved this from non-goal to in-scope on user decision; the §7e
+     rebuild dropped it, which made tasks 5 and 10 unachievable and forced two
+     give-ups that read as drag failures when they were missing features. */
+  .cx-handle{position:fixed;width:11px;height:11px;background:var(--select);
+             border:1.5px solid #fff;border-radius:2px;z-index:71;cursor:nwse-resize}
 </style>
 
 <header>
@@ -136,9 +141,18 @@
 
     <div class="card" id="typePanel" hidden>
       <h3>Selection-assisted prompt</h3>
-      <div class="muted" id="selHint">Click an element to attach it, then type the instruction.</div>
+      <div class="muted" style="margin-bottom:8px;line-height:1.5">
+        <b style="color:var(--ink)">1.</b> Click the element you mean on the page.<br>
+        <b style="color:var(--ink)">2.</b> Type the instruction.<br>
+        <b style="color:var(--ink)">3.</b> Press <b style="color:var(--ink)">Send to Claude</b> — that ends the task.
+      </div>
+      <div class="muted" id="selHint">nothing attached</div>
       <textarea id="prompt" rows="4" placeholder="e.g. move this above the table"></textarea>
-      <button id="submitPrompt" class="primary" style="margin-top:8px">Submit</button>
+      <button id="submitPrompt" class="primary" style="margin-top:8px;width:100%">Send to Claude ⏎</button>
+      <div class="muted" style="margin-top:8px;line-height:1.45">
+        The clock stops when you send. Claude's reply is deliberately not timed —
+        that cost is additive to the drag arm, so excluding it favours dragging.
+      </div>
     </div>
 
     <div class="card">
@@ -346,10 +360,46 @@ function returnToFlow(el){
   stage({verb:'return-to-flow', what:label(el)});
 }
 
+/* ── resize (§7c: in scope) ────────────────────────────────────────────────
+   A corner handle on the selection. Width/height only — no reflow subtleties,
+   because the container recomputes around the new size natively. */
+let handleEl = null, resize = null;
+function clearHandle(){ handleEl?.remove(); handleEl = null; }
+function placeHandle(){
+  clearHandle();
+  const el = state.sel;
+  if (!el || state.arm !== 'drag') return;
+  const r = el.getBoundingClientRect();
+  handleEl = document.createElement('div');
+  handleEl.className = 'cx-handle';
+  handleEl.style.left = (r.right-5)+'px'; handleEl.style.top = (r.bottom-5)+'px';
+  handleEl.addEventListener('pointerdown', ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    snapshot();
+    resize = { el, x0:ev.clientX, y0:ev.clientY, w0:r.width, h0:r.height };
+  });
+  document.body.appendChild(handleEl);
+}
+window.addEventListener('pointermove', e => {
+  if (!resize) return;
+  const w = Math.max(24, resize.w0 + (e.clientX - resize.x0));
+  const h = Math.max(16, resize.h0 + (e.clientY - resize.y0));
+  resize.el.style.width = w+'px'; resize.el.style.height = h+'px';
+  placeHandle();
+});
+window.addEventListener('pointerup', () => {
+  if (!resize) return;
+  const r = resize.el.getBoundingClientRect();
+  stage({verb:'resize', what:label(resize.el), to:`${Math.round(r.width)}×${Math.round(r.height)}`});
+  resize = null; placeHandle();
+});
+window.addEventListener('scroll', placeHandle, true);
+
 /* ── hover + select (both arms) ── */
 function select(el){
   state.sel?.classList.remove('cx-sel'); state.sel = el; el?.classList.add('cx-sel');
   if (state.arm === 'prompt') $('selHint').textContent = el ? 'attached: '+label(el) : 'nothing attached';
+  else placeHandle();
 }
 app.addEventListener('pointermove', e=>{
   if (drag) return;
@@ -375,7 +425,7 @@ window.addEventListener('pointermove', e=>{
     if (Math.hypot(e.clientX-d.x0, e.clientY-d.y0) < THRESHOLD) return;
     d.moved = true; snapshot();
     hov?.classList.remove('cx-hover'); hov=null;
-    d.el.classList.add('cx-dragging');
+    d.el.classList.add('cx-dragging'); clearHandle();
     const lp = layoutParent(d.el);
     d.container = (qualifies(lp) && canAccept(lp, d.el)) ? lp : null;
   }
@@ -419,6 +469,7 @@ window.addEventListener('pointerup', ()=>{
            to:`${d.container.dataset.n||d.container.tagName.toLowerCase()}[${[...d.container.children].indexOf(d.el)}]`,
            sameDomParent: d.container === d.homeParent});
   } else { clearLine(); d.el.style.transform=''; }
+  placeHandle();
 });
 
 // e.target is not always an Element — a keydown dispatched at window has
@@ -478,12 +529,16 @@ function setArm(a){
   $('armPill').textContent='arm: '+(a==='drag'?'DIRECT MANIPULATION':'SELECTION-ASSISTED PROMPT');
   $('armPill').className='pill on';
   $('dragPanel').hidden = a!=='drag'; $('typePanel').hidden = a!=='prompt';
-  clearLine();
+  // One completion action per arm. In the prompt arm, sending IS finishing —
+  // leaving "Task done" visible alongside Send is what made the end of the task
+  // ambiguous and produced give-ups on already-solved tasks.
+  $('doneBtn').hidden = a === 'prompt';
+  clearLine(); clearHandle();
 }
 
 const PRISTINE = app.innerHTML;
 function resetApp(){
-  clearLine();
+  clearLine(); clearHandle(); resize=null;
   app.innerHTML = PRISTINE;
   state.changes=[]; state.undo=[]; state.sel=null; hov=null;
   $('refuse').textContent='';
@@ -495,7 +550,8 @@ function snapshot(){ state.undo.push({html:app.innerHTML, n:state.changes.length
 function stage(c){ state.changes.push(c); renderChanges(); }
 function undo(){
   const s = state.undo.pop(); if(!s) return;
-  clearLine(); app.innerHTML=s.html; state.changes.length=s.n;
+  clearLine(); clearHandle(); resize=null;
+  app.innerHTML=s.html; state.changes.length=s.n;
   state.sel=null; hov=null; renderChanges();
 }
 function renderChanges(){
@@ -507,9 +563,18 @@ function renderChanges(){
 $('undoBtn').onclick = undo;
 $('sendBtn').onclick = ()=>alert('Would send to Claude:\n\n'+JSON.stringify(state.changes,null,2)+
   '\n\n(Resolution time is deliberately NOT counted — that biases in favour of drag.)');
+/* Sending IS the completion signal for this arm — the task is expressed the
+   moment the instruction goes. The previous revision popped an alert and left
+   the participant to also press "Task done", which made the end of the task
+   ambiguous and produced give-ups on tasks the same person had already solved
+   by dragging. Each arm now has its natural completion action: the drag arm
+   has no send moment so it keeps "Task done"; this arm ends on send. */
 $('submitPrompt').onclick = ()=>{
-  if(!$('prompt').value.trim()) return alert('Type the instruction first.');
-  alert('Would send to Claude:\n\nselection: '+(state.sel?label(state.sel):'(none)')+'\ninstruction: '+$('prompt').value.trim());
+  if (!state.running) return;
+  const text = $('prompt').value.trim();
+  if (!text){ $('selHint').textContent = 'Type the instruction first.'; $('prompt').focus(); return; }
+  state.changes.push({verb:'prompt', what:state.sel?label(state.sel):'(nothing attached)', to:text});
+  record('done');
 };
 
 /* ── results ── */
@@ -532,6 +597,9 @@ $('exportBtn').onclick = ()=>{
   },null,2));
   $('exportBtn').textContent='copied ✓'; setTimeout(()=>$('exportBtn').textContent='Copy results JSON',1200);
 };
+document.getElementById('prompt').addEventListener('keydown', e=>{
+  if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); $('submitPrompt').click(); }
+});
 $('doneBtn').onclick = ()=>record('done');
 $('giveUpBtn').onclick = ()=>record('gaveup');
 $('startBtn').onclick = ()=>{
