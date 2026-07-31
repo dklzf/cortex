@@ -1,0 +1,24 @@
+cortex-editor/scripts/m0c-speed-test.html
+  s_5e8694f8230a1e::t_f267160175c665 428,472,541,553-554,600-602
+  s_5e8694f8230a1e::t_6a4abc5193fe65 532-536
+  s_5e8694f8230a1e::t_df7b05ee8fb3db 74-78
+  s_5e8694f8230a1e::t_ba9d6954158c50 144-149,151-155
+  s_5e8694f8230a1e::t_8e2b04ab63d784 363-397,402
+  s_5e8694f8230a1e::t_f3a08587dd0044 566-571,573-577
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "2a1599e79a5968b6c0fa21685e922b36bb1f95ea",
+  "prompts": {},
+  "sessions": {
+    "s_5e8694f8230a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87a92ee1-e0d9-47e2-b76d-40e62755ec17",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
