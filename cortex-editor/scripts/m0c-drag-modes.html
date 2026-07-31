@@ -266,31 +266,107 @@ function axisOf(c){ const cs=getComputedStyle(c), d=cs.display;
 const siblings = (c, el) => [...c.children].filter(k => k!==el && k!==lineEl && !isAbs(k));
 
 /* ── SIZING MODES — the panel and the handles share these ─────────────────── */
-function widthMode(el){
-  if (isAbs(el)) return 'abs';
-  if (el.style.flex === '1 1 0%' || el.style.flexGrow === '1') return 'fill';
-  if (el.style.width) return 'fixed';
-  return 'hug';
-}
-const heightMode = el => el.style.height ? 'fixed' : 'hug';
+/* ── SIZING: the axis's ROLE decides the property ──────────────────────────
+   "Objects inside get resized when I resize the parent" is real, and it has
+   THREE causes, not one. Measured (Chromium, cross-checked Firefox/WebKit):
 
-function setWidth(el, px){
-  el.style.flex = ''; el.style.flexGrow = '';
-  el.style.width = Math.max(24, Math.round(px)) + 'px';
-  // Height is NOT written. Leaving it hugging is what makes a narrowed element
-  // grow taller instead of clipping — that IS the reflow.
+   1. STRETCH — cross axis of a flex parent. Column parent 400->250->120px, a
+      child with no width authored: 380 -> 230 -> 100. It tracks the parent.
+      With `width:fit-content` (or `align-self:flex-start`): 29.13 constant.
+      This is Figma's "Fill" applied to every child by default; Figma defaults
+      children to Hug. That mismatch is the whole complaint.
+
+   2. FLEX-SHRINK — main axis, and NOT the same thing. Row parent 600->380px:
+      a child with `width:120px` shrank to 29.45px. An explicit pixel width is
+      NOT fixed on the main axis unless shrink is killed.
+
+   3. GRID TRACKS — this fixture's `.board` is `1fr 1fr`, so `.card` is
+      fill-by-construction regardless of anything written on it.
+
+   Fixing only (1) would have left the row's chips still collapsing.
+
+   Landmines the measurement caught, each of which I would have walked into:
+   - `fit-content` is shrink-to-fit, NOT content size, so it still tracks the
+     parent when content would overflow. It is correct for the CROSS axis only.
+   - Main-axis hug must be `width:auto` + `flex-shrink:0`. `fit-content` there
+     FILLS the parent and flex-shrink:0 cannot stop it.
+   - Computed `align-items` is the string `'normal'`, never `'stretch'`, in all
+     three engines. Any check for `=== 'stretch'` silently never matches.
+   - In grid, `align-self` does nothing to width; the inline axis is
+     `justify-self`.
+   - In a BLOCK parent, `width:auto` is FILL, not hug, and `align-self` is inert. */
+function axisRole(el){
+  const p = el.parentElement;
+  if (!p) return { kind:'block', main:null };
+  const cs = getComputedStyle(p), d = cs.display;
+  if (d.includes('flex')) return { kind:'flex', main: (cs.flexDirection||'row').startsWith('column') ? 'height' : 'width' };
+  if (d.includes('grid')) return { kind:'grid', main:null };
+  return { kind:'block', main:null };
 }
-function setWidthMode(el, mode){
-  el.style.flex=''; el.style.flexGrow=''; el.style.width='';
-  if (mode === 'fixed') el.style.width = Math.round(el.getBoundingClientRect().width)+'px';
-  else if (mode === 'fill') el.style.flex = '1 1 0%';
-  else if (mode === 'abs') { makeAbsolute(el); return; }
-  if (isAbs(el) && mode !== 'abs') returnToFlow(el);
+
+function modeOf(el, axis){
+  if (axis === 'width' && isAbs(el)) return 'abs';
+  const s = el.style, role = axisRole(el), cross = axis !== role.main;
+  const len = axis === 'width' ? s.width : s.height;
+  if (len === 'fit-content' || len === 'max-content') return 'hug';
+  // `auto` is truthy but is NOT a fixed length — Fill writes width:auto, and the
+  // old check reported it as Fixed.
+  if (len && len !== 'auto') return 'fixed';
+  if (role.kind === 'flex' && cross)
+    return (s.alignSelf === 'flex-start' || s.alignSelf === 'start') ? 'hug' : 'fill';
+  if (role.kind === 'flex' && !cross)
+    return (s.flexGrow === '1' || s.flex.startsWith('1')) ? 'fill' : 'hug';
+  if (role.kind === 'grid')
+    return (axis === 'width' ? s.justifySelf : s.alignSelf) === 'start' ? 'hug' : 'fill';
+  return axis === 'width' ? 'fill' : 'hug';   // block parent
 }
-function setHeightMode(el, mode){
-  if (mode === 'hug') el.style.height = '';
-  else el.style.height = Math.round(el.getBoundingClientRect().height)+'px';
+const widthMode  = el => modeOf(el, 'width');
+const heightMode = el => modeOf(el, 'height');
+
+/* Clear EVERY property this axis can own before writing. The previous version
+   cleared flex/flexGrow/width but never alignSelf, so Fill -> Hug left the
+   stretch behind and the element kept tracking its parent. */
+function clearAxis(el, axis){
+  const s = el.style;
+  if (axis === 'width'){ s.width=''; s.justifySelf=''; }
+  else { s.height=''; }
+  const role = axisRole(el);
+  if (role.kind === 'flex'){
+    if (axis === role.main){ s.flex=''; s.flexGrow=''; s.flexShrink=''; s.flexBasis=''; }
+    else s.alignSelf='';
+  } else if (role.kind === 'grid'){
+    if (axis === 'width') s.justifySelf=''; else s.alignSelf='';
+  }
 }
+
+function setMode(el, axis, mode, px){
+  if (mode === 'abs'){ makeAbsolute(el); return; }
+  if (isAbs(el)) returnToFlow(el);
+  const role = axisRole(el), cross = axis !== role.main, s = el.style;
+  clearAxis(el, axis);
+
+  if (mode === 'hug'){
+    if (role.kind === 'flex' && !cross){ s[axis]='auto'; s.flexGrow='0'; s.flexShrink='0'; }
+    else if (role.kind === 'grid') (axis==='width' ? s.justifySelf='start' : s.alignSelf='start');
+    // max-content, NOT fit-content: fit-content is shrink-to-fit and still
+    // tracks the parent once content would overflow (measured 291 -> 141 when
+    // the card narrowed). max-content is Figma's Hug — size to content and
+    // refuse to shrink below it.
+    else s[axis]='max-content';
+  } else if (mode === 'fill'){
+    s[axis]='auto';
+    if (role.kind === 'flex' && !cross) s.flex='1 1 0%';
+    else if (role.kind === 'flex') s.alignSelf='stretch';
+    else if (role.kind === 'grid') (axis==='width' ? s.justifySelf='stretch' : s.alignSelf='stretch');
+  } else {                                // fixed
+    const n = Math.max(16, Math.round(px ?? el.getBoundingClientRect()[axis]));
+    s[axis] = n+'px';
+    // An explicit length does NOT hold on the main axis — measured shrinking
+    // from 150px to 25.31px — so shrink must be killed explicitly.
+    if (role.kind === 'flex' && !cross) s.flex = `0 0 ${n}px`;
+  }
+}
+const setWidth = (el, px) => setMode(el, 'width', 'fixed', px);
 
 /* Surface a degradation once per gesture rather than spamming per frame. */
 let degraded = null;
@@ -433,7 +509,7 @@ window.addEventListener('pointermove', e => {
   if (!resize) return;
   const t0 = performance.now();
   if (resize.axis !== 'y') setWidth(resize.el, resize.w0 + (e.clientX - resize.x0));
-  if (resize.axis !== 'x') resize.el.style.height = Math.max(16, resize.h0 + (e.clientY - resize.y0))+'px';
+  if (resize.axis !== 'x') setMode(resize.el,'height','fixed', resize.h0 + (e.clientY - resize.y0));
 
   /* CONSTRAINT OWNERSHIP — a real problem, deliberately NOT detected here.
 
@@ -485,11 +561,11 @@ function syncPanel(){
 }
 $('wSeg').addEventListener('click', e => {
   const b = e.target.closest('button[data-w]'); if (!b || b.disabled || !S.sel) return;
-  snapshot(); flip(()=>setWidthMode(S.sel, b.dataset.w)); placeHandles(); syncPanel();
+  snapshot(); flip(()=>setMode(S.sel,'width', b.dataset.w)); placeHandles(); syncPanel();
 });
 $('hSeg').addEventListener('click', e => {
   const b = e.target.closest('button[data-h]'); if (!b || b.disabled || !S.sel) return;
-  snapshot(); flip(()=>setHeightMode(S.sel, b.dataset.h)); placeHandles(); syncPanel();
+  snapshot(); flip(()=>setMode(S.sel,'height', b.dataset.h)); placeHandles(); syncPanel();
 });
 $('wNum').addEventListener('change', () => {
   const v = parseFloat($('wNum').value);
