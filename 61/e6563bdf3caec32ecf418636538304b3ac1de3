@@ -1,0 +1,20 @@
+cortex-editor/scripts/m0c-drag-modes.html
+  s_5e8694f8230a1e::t_291a9d6923d6cf 104,564-569
+  s_5e8694f8230a1e::t_0c5580cf098676 318-327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "61e6563bdf3caec32ecf418636538304b3ac1de3",
+  "prompts": {},
+  "sessions": {
+    "s_5e8694f8230a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87a92ee1-e0d9-47e2-b76d-40e62755ec17",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
