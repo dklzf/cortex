@@ -24,6 +24,7 @@ import { parseEffectsValues } from './sections/EffectsSection.js'
 import { parsePositionValues } from './sections/PositionSection.js'
 import { parseAppearanceValues } from './sections/AppearanceSection.js'
 import { parseSpacingValues, ALL_DIMMING_PROPERTIES } from './sections/spacing-utils.js'
+import { readComputedSize, isSizeInert } from '../sizing-value.js'
 
 /** CSS the box model gives you that SVG GEOMETRY simply does not implement.
  *
@@ -113,8 +114,36 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   const cs = getComputedStyle(element, pseudo)
   const source = element.getAttribute('data-cortex-source') ?? ''
   const layout = parseLayoutValues(cs)
-  // Override width/height with raw override values so deriveSizingMode
-  // sees keywords like 'fit-content' / '100%' instead of resolved pixels.
+  // `parseLayoutValues` reads width/height off getComputedStyle, which returns
+  // the USED value in pixels — it cannot express a sizing mode at all (B5).
+  // Replace both with the authored (computed) value via CSS Typed OM, which
+  // reports `100%` / `fit-content` / `auto` as authored. Falls back to the used
+  // value on engines without Typed OM and for pseudo-elements; see
+  // sizing-value.ts for why that fallback is lossy but honest.
+  // Keep the USED value too. The authored value decides the MODE; the used
+  // value is the only true pixel measurement of the box, and the panel needs
+  // it for two things a mode cannot supply: the number shown in the (disabled)
+  // W/H field for a non-fixed element, and the width to seed when the user
+  // switches that element TO Fixed. Dropping it made "switch to Fixed" write
+  // `0px` and collapse the element.
+  // Bind the used values BEFORE overwriting layout.width/height. `parseLayoutValues`
+  // set them from getComputedStyle — the USED value, a pixel length wherever
+  // width/height actually applies — and the authored values installed below
+  // would otherwise clobber them. Locals rather than careful line ordering,
+  // because a data dependency that exists only as statement order is one
+  // "consolidate these four similar assignments" refactor away from silently
+  // corrupting every non-fixed element. Raised in architecture review.
+  const usedWidth = layout.width
+  const usedHeight = layout.height
+  layout.width = readComputedSize(element, 'width', pseudo)
+  layout.height = readComputedSize(element, 'height', pseudo)
+  layout.widthUsed = usedWidth
+  layout.heightUsed = usedHeight
+  // Cortex's own staged override still wins: it is the value the user just
+  // asked for and has not yet been applied to source, so it is more current
+  // than anything the cascade can report. This special case predates the Typed
+  // OM read and is now narrow rather than load-bearing — before, it was the
+  // ONLY way any keyword mode ever reached the panel.
   const widthOverride = overrideManager.get(source, 'width', pseudo)
   const heightOverride = overrideManager.get(source, 'height', pseudo)
   if (widthOverride !== undefined) layout.width = widthOverride
@@ -215,6 +244,17 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
       }
     }
     if (mixed.size === 0) mixed = undefined
+  }
+
+  // Same dead-control treatment for elements where width/height simply do not
+  // apply. MEASURED: setting `width: 300px` then `40px` on a non-replaced inline
+  // left its rendered width at 73.33px both times. Worse, once a pixel width has
+  // been written `getComputedStyle().width` echoes it back, so the element then
+  // classifies as `fixed` with an ENABLED input — a control the user can scrub
+  // forever with nothing ever moving. Dimming is the existing remedy for exactly
+  // this shape of problem.
+  if (element && !pseudo && isSizeInert(element)) {
+    dimmed = new Set([...(dimmed ?? []), 'width', 'height'])
   }
 
   // Merge in the properties SVG geometry cannot honour. Done here rather than by

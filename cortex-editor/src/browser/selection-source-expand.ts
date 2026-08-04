@@ -65,3 +65,59 @@ export function expandSharedSource(elements: Element[]): Element[] {
   }
   return result
 }
+
+/**
+ * Why a selection is sometimes expanded and sometimes not (B4).
+ *
+ * `expandSharedSource` is correct for a STYLE edit and wrong for a STRUCTURAL
+ * one, and the difference is not a preference — it falls out of how each kind
+ * of edit reaches source.
+ *
+ * A style edit is written by the CSS override layer, which keys on source:
+ * `overrideManager.set(source, prop, val)` emits ONE rule targeting
+ * `[data-cortex-source="<src>"]`, matching every instance. There is no way to
+ * style a strict subset of shared-source nodes, because they are one piece of
+ * source code. Expanding the selection makes the editor honest about that: the
+ * user sees the full set their edit will affect.
+ *
+ * A structural move is not written that way. Reordering `.map()`-rendered
+ * siblings means reordering the underlying ARRAY — an edit that acts on one
+ * instance and is perfectly expressible. So the source-keyed justification does
+ * not transfer, and expanding actively breaks the gesture: cortex's own
+ * motivating example is "grab one button out of a grouped row", which cannot
+ * happen if clicking one button selects all N.
+ *
+ * Hence an explicit opt-out rather than a global change. Default behaviour is
+ * unchanged; only a caller that knows it is performing a per-instance operation
+ * turns expansion off, and it must say so.
+ */
+export interface SelectionTargetOptions {
+  /**
+   * `true` (default) — expand to every instance sharing a `data-cortex-source`.
+   * Correct for style edits, which the override layer applies per source.
+   *
+   * `false` — take the elements exactly as given. Correct for structural moves,
+   * which act on a single instance.
+   */
+  expandShared?: boolean
+}
+
+/**
+ * Resolve the elements a selection should actually contain.
+ *
+ * Extracted as a pure function (rather than inlined in CortexApp's
+ * `setSelection`) so the expand/no-expand decision is testable on its own,
+ * without mounting the app or synthesising a drag.
+ */
+export function resolveSelectionTargets(
+  elements: Element[],
+  options?: SelectionTargetOptions,
+): Element[] {
+  // Copy, never the caller's array. `applySelectionUpdate` returns its input
+  // directly for a 'replace', so returning `elements` by reference would let
+  // selection state alias an array the caller still holds — a later mutation of
+  // that array would silently rewrite the live selection. `expandSharedSource`
+  // already allocates, so only this branch needed it.
+  if (options?.expandShared === false) return [...elements]
+  return expandSharedSource(elements)
+}

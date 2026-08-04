@@ -9,7 +9,8 @@ import { CommandStack } from '../command-stack.js'
 import { initSelection } from '../selection.js'
 import type { SelectionHandle } from '../selection.js'
 import { cortexAppReducer, initialCortexAppReducerState, applySelectionUpdate } from '../cortex-app-reducer.js'
-import { expandSharedSource } from '../selection-source-expand.js'
+import { resolveSelectionTargets } from '../selection-source-expand.js'
+import type { SelectionTargetOptions } from '../selection-source-expand.js'
 import { isStructuralEdit } from '../../schemas/pending-edit.js'
 import type { CortexAppReducerState, CortexAppAction, CortexAppEffect, EditDispatchEntry } from '../cortex-app-reducer.js'
 // @ts-ignore — tinykeys has types but exports field doesn't include a "types" condition (TODO: add declare module shim when tinykeys updates)
@@ -312,8 +313,19 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   // editing any one of them affects all N. Expanding selection up-front means
   // the UI shows the user the full set their edit will affect, instead of
   // letting them pick a subset that the override layer cannot honor.
-  const setSelection = useCallback((elements: Element[], action: 'replace' | 'add' | 'toggle' = 'replace'): void => {
-    const expanded = expandSharedSource(elements)
+  //
+  // B4: expansion is now opt-OUT-able. It is correct for style edits, which the
+  // override layer applies per source, and wrong for a structural move, which
+  // acts on one instance — reordering `.map()` siblings means reordering the
+  // underlying array, which is expressible for a single instance in a way a
+  // source-keyed CSS rule never is. A caller performing a per-instance
+  // operation passes `{ expandShared: false }`; everything else is unchanged.
+  const setSelection = useCallback((
+    elements: Element[],
+    action: 'replace' | 'add' | 'toggle' = 'replace',
+    options?: SelectionTargetOptions,
+  ): void => {
+    const expanded = resolveSelectionTargets(elements, options)
     setSelectedElementsState(prev => {
       const next = applySelectionUpdate(prev, expanded, action)
       if (next !== prev) {
