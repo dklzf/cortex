@@ -147,10 +147,17 @@ export function readComputedSize(
   axis: 'width' | 'height',
   pseudo?: string,
 ): string {
-  const used = (): string => {
-    const cs = getComputedStyle(element, pseudo)
-    return (cs as unknown as Record<string, string>)[axis] ?? ''
-  }
+  // `cs[axis]` needs no cast: lib.dom.d.ts declares `width`/`height` on
+  // CSSStyleDeclaration as named `string` properties (not via an index
+  // signature), so the union-typed `axis` indexes it natively.
+  //
+  // The `?? ''` looks provably dead against that type — and is NOT. Ambient DOM
+  // types describe the SPEC, not whichever implementation is loaded: happy-dom
+  // returns `undefined` here, and deleting the fallback on type-level reasoning
+  // alone crashed 9 panel tests with `Cannot read properties of undefined
+  // (reading 'trim')`. This codebase runs against three DOM implementations, so
+  // "the declaration says it cannot be undefined" is not a runtime guarantee.
+  const used = (): string => getComputedStyle(element, pseudo)[axis] ?? ''
 
   // Typed OM cannot address a pseudo-element. Reading the originating element
   // and labelling it as the pseudo's size would be worse than the used value.
@@ -160,7 +167,11 @@ export function readComputedSize(
     // Feature detection lives INSIDE the try: reading the property can itself
     // throw on an element with a throwing accessor, and a panel read must never
     // be able to take the panel down.
-    const withTypedOM = element as Element & { computedStyleMap?: () => { get(p: string): unknown } }
+    // Optional because TS declares `computedStyleMap` unconditionally while
+    // Firefox does not ship it — the `?` models runtime reality. The RETURN
+    // type is the real ambient one, so `.get()` yields `CSSStyleValue |
+    // undefined` rather than `unknown`.
+    const withTypedOM = element as Element & { computedStyleMap?: () => StylePropertyMapReadOnly }
     if (typeof withTypedOM.computedStyleMap !== 'function') return used()
     const value = withTypedOM.computedStyleMap().get(axis)
     if (value === undefined || value === null) return used()
@@ -201,39 +212,42 @@ export function classifySizingValue(value: string): SizingMode {
   return 'custom'
 }
 
-/** True when the panel may offer a numeric pixel input for this mode. */
-export function isEditableAsPixels(mode: SizingMode): boolean {
-  return mode === 'fixed'
-}
+/**
+ * Tags whose inline boxes are REPLACED, and therefore do honour width/height.
+ *
+ * `width` does not apply to a non-replaced inline box (CSS2.1 §10.2), but it
+ * applies normally to a replaced one — an `<img>` is `display: inline` by
+ * default and is still sized by `width`. Detecting "replaced" from computed
+ * style alone is not possible, so this is a tag allowlist, matching the
+ * existing `SVG_SIZING_CAPABLE_TAGS` / `WIDGET_TAGS` pattern in this codebase.
+ */
+const REPLACED_TAGS: ReadonlySet<string> = new Set([
+  'img', 'video', 'canvas', 'iframe', 'embed', 'object', 'audio', 'svg',
+  'input', 'select', 'textarea', 'button', 'progress', 'meter', 'marquee',
+])
 
 /**
- * The element's rendered size in pixels, as a CSS length string.
+ * True when `width`/`height` have no effect on this element whatsoever.
  *
- * `getComputedStyle().width` is the USED value — and therefore a pixel count —
- * only when `width` actually APPLIES to the element. On a non-replaced inline
- * box it does not, so the resolved value falls back to the computed one:
- * `<span style="width:100%">hello world</span>` returns `"100%"` in Chromium
- * while rendering at 73.33px. Trusting that string put "100" in the panel's W
- * field and staged `100px` when the user switched the element to Fixed.
+ * A non-replaced inline box ignores them completely — MEASURED, not inferred:
+ * setting `width: 300px` and then `width: 40px` on a `<span>` left its rendered
+ * width at 73.33px both times.
  *
- * Only in that case do we measure the border-box rect, which is always a real
- * measurement. The common path returns the computed-style value unchanged so
- * padded and bordered elements keep reporting the same box they always have.
- *
- * @param computed the element's `getComputedStyle()` value for this axis
+ * This matters more than it looks. `getComputedStyle().width` on such an element
+ * returns the COMPUTED value rather than a used pixel length, so before any edit
+ * it reports `100%`. But once a pixel width has been written it dutifully echoes
+ * `73.32px` back — which classifies as `fixed`, enables the pixel input, and
+ * leaves the user scrubbing a number that can never move anything. That is the
+ * dead-control failure this codebase already guards against for SVG geometry;
+ * the same treatment applies here.
  */
-export function usedPixelSize(
-  element: Element,
-  computed: string,
-  axis: 'width' | 'height',
-  pseudo?: string,
-): string {
-  if (PX_LENGTH.test(computed.trim().toLowerCase())) return computed
-  // A pseudo-element has no box of its own to measure — getBoundingClientRect
-  // would return the ORIGINATING element's box, a different thing entirely. Its
-  // computed style is the best answer available even when it is not a length.
-  if (pseudo) return computed
-  if (typeof element.getBoundingClientRect !== 'function') return computed
-  const rect = element.getBoundingClientRect()
-  return `${axis === 'width' ? rect.width : rect.height}px`
+export function isSizeInert(element: Element): boolean {
+  let display: string
+  try {
+    display = getComputedStyle(element).display
+  } catch {
+    return false
+  }
+  if (display !== 'inline') return false
+  return !REPLACED_TAGS.has(element.localName)
 }

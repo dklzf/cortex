@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { readComputedSize, classifySizingValue, usedPixelSize } from '../../src/browser/sizing-value.js'
+import { readComputedSize, classifySizingValue, isSizeInert } from '../../src/browser/sizing-value.js'
 
 /**
  * B5 — the Panel could not read a sizing mode.
@@ -166,34 +166,41 @@ describe('classifySizingValue', () => {
   })
 })
 
-describe('usedPixelSize', () => {
-  const withRect = (width: number, height = 0) =>
-    ({ getBoundingClientRect: () => ({ width, height }) }) as unknown as Element
+describe('isSizeInert — width/height that cannot be set at all', () => {
+  const el = (tag: string, display: string): Element => {
+    const node = document.createElement(tag)
+    ;(globalThis as Record<string, unknown>).getComputedStyle = () =>
+      ({ display }) as unknown as CSSStyleDeclaration
+    return node
+  }
 
-  it('passes a genuine pixel value straight through', () => {
-    // The common path must not perturb padded/bordered boxes by switching to a
-    // different measurement of a different box.
-    expect(usedPixelSize(withRect(999), '320px', 'width')).toBe('320px')
+  it('reports a non-replaced inline as inert', () => {
+    // MEASURED: setting `width: 300px` then `40px` on a <span> left its rendered
+    // width at 73.33px both times. The property has no effect whatsoever.
+    expect(isSizeInert(el('span', 'inline'))).toBe(true)
   })
 
-  it('measures the rect when width does not APPLY to the element', () => {
-    // Verified in Chromium 147: `<span style="width:100%">hello world</span>`
-    // resolves to "100%" (width does not apply to non-replaced inlines) while
-    // rendering at 73.33px. parseFloat('100%') === 100 put "100" in the W field
-    // and staged `100px` on switch-to-Fixed.
-    expect(usedPixelSize(withRect(73.33), '100%', 'width')).toBe('73.33px')
-  })
+  it.each([['img'], ['input'], ['button'], ['select'], ['textarea'], ['svg'], ['video'], ['canvas']])(
+    'does NOT report a REPLACED inline (%s) as inert — width applies to those',
+    (tag) => {
+      // The over-correction to guard against: an <img> is display:inline by
+      // default and is sized by width perfectly well. Dimming it would be the
+      // same dead-control mistake in reverse.
+      expect(isSizeInert(el(tag, 'inline'))).toBe(false)
+    },
+  )
 
-  it('measures the height axis from the rect, not the width', () => {
-    expect(usedPixelSize(withRect(400, 73.33), 'auto', 'height')).toBe('73.33px')
-  })
+  it.each([['block'], ['inline-block'], ['flex'], ['inline-flex'], ['grid'], ['table-cell']])(
+    'does not report display:%s as inert',
+    (display) => {
+      expect(isSizeInert(el('span', display))).toBe(false)
+    },
+  )
 
-  it('accepts scientific notation as a pixel value', () => {
-    // Chromium serialises `width: 1000000px` as `1e+06px`.
-    expect(usedPixelSize(withRect(1), '1e+06px', 'width')).toBe('1e+06px')
-  })
-
-  it('does not measure a pseudo-element — the rect belongs to its originator', () => {
-    expect(usedPixelSize(withRect(500), '100%', 'width', '::before')).toBe('100%')
+  it('does not throw when computed style is unavailable', () => {
+    const node = document.createElement('span')
+    ;(globalThis as Record<string, unknown>).getComputedStyle = () => { throw new TypeError('detached') }
+    expect(() => isSizeInert(node)).not.toThrow()
+    expect(isSizeInert(node)).toBe(false)
   })
 })

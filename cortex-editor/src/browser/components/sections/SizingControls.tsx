@@ -66,7 +66,6 @@ export interface SizingControlsProps {
  *  Used as a CLASSIFIER over arbitrary authored CSS — which is what the panel
  *  needs — that fall-through made every element read Fixed, including
  *  author-written `width: 100%`. Delegates to the real classifier now. */
-const deriveSizingMode = classifySizingValue
 
 /** Derive whether a min/max constraint is active from the raw CSS value. */
 function isMinEnabled(value: string): boolean {
@@ -90,8 +89,8 @@ export function SizingControls({
   const [aspectLocked, setAspectLocked] = useState(false)
 
   // Derive modes from values — fixes stale-state bug (Task 2 flag).
-  const widthMode = deriveSizingMode(values.width)
-  const heightMode = deriveSizingMode(values.height)
+  const widthMode = classifySizingValue(values.width)
+  const heightMode = classifySizingValue(values.height)
   const minWidthEnabled = isMinEnabled(values.minWidth)
   const maxWidthEnabled = isMaxEnabled(values.maxWidth)
   const minHeightEnabled = isMinEnabled(values.minHeight)

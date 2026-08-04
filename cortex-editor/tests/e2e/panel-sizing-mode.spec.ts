@@ -38,6 +38,15 @@ interface SizingSnapshot {
   renderedWidth: number
 }
 
+/** Make the fixture a non-replaced inline, where width does not apply at all. */
+async function makeSeedInline(page: Page): Promise<void> {
+  await page.evaluate((selector) => {
+    const el = document.querySelector<HTMLElement>(selector)
+    if (!el) throw new Error(`[panel-sizing-mode] fixture ${selector} not found`)
+    el.style.setProperty('display', 'inline')
+  }, FIXTURE_SEED_SELECTOR)
+}
+
 async function setSeedWidth(page: Page, value: string): Promise<void> {
   await page.evaluate(
     ({ selector, width }) => {
@@ -161,5 +170,60 @@ test.describe('panel sizing mode — real browser provenance', () => {
     const snap = await applyWidthAndSnapshot(page, '20rem')
     expect(snap.widthMode).toBe('px')
     expect(Number(snap.widthValue)).toBeCloseTo(320, 0)
+  })
+})
+
+test.describe('width that cannot be set at all', () => {
+  test.beforeEach(async ({ page }) => {
+    await bootWithSendSpy(page)
+  })
+
+  test('a non-replaced inline reports its width as inert, not as an editable pixel value', async ({ page }) => {
+    // MEASURED: setting `width: 300px` then `40px` on a <span> left its rendered
+    // width at 73.33px both times — the property has no effect whatsoever.
+    //
+    // The trap this guards is second-order. `getComputedStyle().width` returns
+    // `100%` for such an element BEFORE any edit, but once a pixel width has
+    // been written it echoes that value back — so the element would classify as
+    // `fixed` with an ENABLED input, and the user could scrub it forever with
+    // nothing ever moving. An earlier version of this branch created exactly
+    // that dead control by measuring getBoundingClientRect() as a fallback.
+    await makeSeedInline(page)
+    await setSeedWidth(page, '100%')
+    await selectElement(page, FIXTURE_SEED_SELECTOR)
+    await waitForElementStatePanel(page)
+
+    const dimmed = await page.evaluate(() => {
+      const host = document.querySelector('[data-cortex-host]')
+      const root = host && (host as HTMLElement & { shadowRoot: ShadowRoot | null }).shadowRoot
+      const field = root?.querySelector('.cortex-layout-section__sizing-field')
+      return field?.classList.contains('cortex-control--dimmed') ?? false
+    })
+    expect(dimmed).toBe(true)
+  })
+
+  test('a REPLACED inline is still editable — width applies to those', async ({ page }) => {
+    // The over-correction guard. An <img> is display:inline by default and is
+    // sized by width perfectly well; dimming it would be the same dead-control
+    // mistake in reverse.
+    await page.evaluate(() => {
+      const img = document.createElement('img')
+      img.setAttribute('data-cortex-source', 'fixture:img:1')
+      img.style.width = '120px'
+      img.style.height = '40px'
+      document.body.appendChild(img)
+    })
+    await selectElement(page, 'img[data-cortex-source="fixture:img:1"]')
+    await waitForElementStatePanel(page)
+
+    const state = await page.evaluate(() => {
+      const host = document.querySelector('[data-cortex-host]')
+      const root = host && (host as HTMLElement & { shadowRoot: ShadowRoot | null }).shadowRoot
+      const field = root?.querySelector('.cortex-layout-section__sizing-field')
+      const input = field?.querySelector<HTMLInputElement>('.cortex-numeric-input input')
+      return { dimmed: field?.classList.contains('cortex-control--dimmed') ?? false, disabled: input?.disabled ?? true }
+    })
+    expect(state.dimmed).toBe(false)
+    expect(state.disabled).toBe(false)
   })
 })
