@@ -192,14 +192,14 @@ describe('reResolveSelection', () => {
 
   it('returns null when source is null (never-selected element)', () => {
     const result = reResolveSelection({
-      source: null, index: -1, contentHash: '', inShadowRoot: false,
+      source: null, index: -1, contentHash: '', inShadowRoot: false, groupSize: -1,
     })
     expect(result).toBeNull()
   })
 
   it('returns null when no matches exist (element removed)', () => {
     const result = reResolveSelection({
-      source: 'src/ghost.tsx:1:1', index: 0, contentHash: 'X', inShadowRoot: false,
+      source: 'src/ghost.tsx:1:1', index: 0, contentHash: 'X', inShadowRoot: false, groupSize: 1,
     })
     expect(result).toBeNull()
   })
@@ -208,7 +208,7 @@ describe('reResolveSelection', () => {
     const source = 'src/list.tsx:10:5'
     const siblings = buildSiblings(source, ['A', 'B', 'C'])
     const result = reResolveSelection({
-      source, index: 1, contentHash: 'B', inShadowRoot: false,
+      source, index: 1, contentHash: 'B', inShadowRoot: false, groupSize: 3,
     })
     expect(result).toBe(siblings[1])
   })
@@ -218,7 +218,7 @@ describe('reResolveSelection', () => {
     const siblings = buildSiblings(source, ['B', 'C', 'A'])
     // User had selected index 0 when content was "A"; after reorder, "A" is at index 2.
     const result = reResolveSelection({
-      source, index: 0, contentHash: 'A', inShadowRoot: false,
+      source, index: 0, contentHash: 'A', inShadowRoot: false, groupSize: 3,
     })
     expect(result).toBe(siblings[2])
   })
@@ -229,7 +229,7 @@ describe('reResolveSelection', () => {
     // User had selected index 0 when content was "Hello"; content was edited to
     // "Hello, world" in place. Saved content "Hello" not found elsewhere → preserve position.
     const result = reResolveSelection({
-      source, index: 0, contentHash: 'Hello', inShadowRoot: false,
+      source, index: 0, contentHash: 'Hello', inShadowRoot: false, groupSize: 3,
     })
     expect(result).toBe(siblings[0])
   })
@@ -238,7 +238,7 @@ describe('reResolveSelection', () => {
     const source = 'src/list.tsx:10:5'
     buildSiblings(source, ['A', 'B']) // only 2 left
     const result = reResolveSelection({
-      source, index: 2, contentHash: 'C', inShadowRoot: false,
+      source, index: 2, contentHash: 'C', inShadowRoot: false, groupSize: 3,
     })
     expect(result).toBeNull()
   })
@@ -249,7 +249,7 @@ describe('reResolveSelection', () => {
     // Icon-only elements have empty textContent. Skip byContent search
     // (would false-positive on first empty sibling); preserve at index.
     const result = reResolveSelection({
-      source, index: 1, contentHash: '', inShadowRoot: false,
+      source, index: 1, contentHash: '', inShadowRoot: false, groupSize: 3,
     })
     expect(result).toBe(siblings[1])
   })
@@ -262,7 +262,7 @@ describe('reResolveSelection', () => {
     const source = 'src/list.tsx:10:5'
     const siblings = buildSiblings(source, ['A', 'A', 'B'])
     const result = reResolveSelection({
-      source, index: 2, contentHash: 'A', inShadowRoot: false,
+      source, index: 2, contentHash: 'A', inShadowRoot: false, groupSize: 3,
     })
     expect(result).toBe(siblings[1])
   })
@@ -288,6 +288,7 @@ describe('reResolveSelection', () => {
       index: 0,
       contentHash: 'Shadow content',
       inShadowRoot: true,
+      groupSize: 1,
     })
     expect(result).toBe(inner)
   })
@@ -482,5 +483,66 @@ describe('findSourceMatches with a shadow-hosted selection', () => {
     expect(meta.inShadowRoot).toBe(true)
     expect(meta.index).toBeGreaterThanOrEqual(0)
     expect(reResolveSelection(meta)).toBe(inner)
+  })
+})
+
+// C4 (sketch-mode architecture review, frontend=Critical). Named fixture, kept
+// DISTINCT from generic reorder — the review specifically called out that
+// delete-causes-slide needs its own case because it fails where reorder passes.
+describe('reResolveSelection: delete-causes-slide', () => {
+  const orphans: Element[] = []
+  afterEach(() => {
+    for (const el of orphans) el.remove()
+    orphans.length = 0
+  })
+
+  const SRC = 'src/List.tsx:3:5'
+
+  function renderList(texts: string[]): HTMLLIElement[] {
+    const wrap = document.createElement('ul')
+    document.body.appendChild(wrap)
+    orphans.push(wrap)
+    return texts.map(text => {
+      const li = document.createElement('li')
+      li.setAttribute('data-cortex-source', SRC)
+      li.textContent = text
+      wrap.appendChild(li)
+      return li
+    })
+  }
+
+  it('returns null instead of silently re-anchoring onto the next sibling', () => {
+    const [, b] = renderList(['A', 'B', 'C'])
+    const meta = captureSelectionMetadata(b!)
+    expect(meta.index).toBe(1)
+    expect(meta.groupSize).toBe(3)
+
+    b!.remove() // population 3 -> 2; C slides into index 1
+
+    // Pre-fix: returns C — a DIFFERENT element, handed back as a confident
+    // match. The selection silently jumps to the wrong row.
+    expect(reResolveSelection(meta)).toBeNull()
+  })
+
+  it('STILL resolves when the selected element edits its own text in place', () => {
+    const [, b] = renderList(['A', 'B', 'C'])
+    const meta = captureSelectionMetadata(b!)
+
+    b!.textContent = 'B-updated' // population unchanged; content hash misses
+
+    // Reaches the SAME terminal branch as the delete case. The review's stated
+    // fix ("return null when the content search comes back empty") would have
+    // broken this — editing the text of the thing you have selected is the
+    // common case, not an edge case.
+    expect(reResolveSelection(meta)).toBe(b)
+  })
+
+  it('still follows a pure reorder, where the population is unchanged', () => {
+    const [a, b, c] = renderList(['A', 'B', 'C'])
+    const meta = captureSelectionMetadata(b!)
+    const wrap = b!.parentElement!
+    wrap.append(c!, b!, a!) // reorder only — group size stays 3
+
+    expect(reResolveSelection(meta)).toBe(b)
   })
 })
