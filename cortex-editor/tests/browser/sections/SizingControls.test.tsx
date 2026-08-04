@@ -20,8 +20,12 @@ describe('SizingControls', () => {
   })
 
   const DEFAULT_VALUES: SizingControlsProps['values'] = {
-    width: '320',
-    height: '48',
+    // Units are load-bearing. getComputedStyle().width always returns a unit
+    // ("320px"), and computedStyleMap() stringifies to one, so a bare `320`
+    // cannot reach this component. It only ever passed because the old
+    // deriveSizingMode fell through to 'fixed' for anything unrecognised.
+    width: '320px',
+    height: '48px',
     minWidth: '0px',
     maxWidth: 'none',
     minHeight: '0px',
@@ -169,7 +173,7 @@ describe('SizingControls', () => {
   })
 
   it('aspect lock: changing W fires proportional H change', async () => {
-    const { onChange } = setup({ values: { ...DEFAULT_VALUES, width: '200', height: '100' } })
+    const { onChange } = setup({ values: { ...DEFAULT_VALUES, width: '200px', height: '100px' } })
     // Lock aspect
     const lockBtn = container.querySelector('.cortex-lock-btn') as HTMLElement
     expect(lockBtn).not.toBeNull()
@@ -320,15 +324,42 @@ describe('SizingControls', () => {
     expect(icon?.getAttribute('height')).toBe('14')
   })
 
-  it('handles auto width gracefully — displays 0 and shows "fixed" mode', () => {
+  // B5: this previously asserted `auto` renders as "px" (Fixed) — the bug,
+  // encoded as intended behaviour. `auto` means the browser decides; calling it
+  // Fixed told the user a pixel width was authored when none was, and left the
+  // px input enabled so editing it silently introduced one.
+  it('reports auto as "auto" and disables the pixel input', () => {
     setup({ values: { ...DEFAULT_VALUES, width: 'auto' } })
-    const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
-    expect(widthInput).not.toBeNull()
-    // isAutoWidth → value falls back to 0
-    expect(widthInput.value).toBe('0')
-    // 'auto' is not fit-content or 100%, so mode is 'fixed'
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
-    expect(modeLabels[0].textContent).toBe('px')
+    expect(modeLabels[0].textContent).toBe('auto')
+    const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
+    expect(widthInput.disabled).toBe(true)
+  })
+
+  it('reports an author-written 100% as fill — the headline B5 case', () => {
+    // Before B5 this read as Fixed, because getComputedStyle resolved it to a
+    // pixel count before the panel ever saw it.
+    setup({ values: { ...DEFAULT_VALUES, width: '100%' } })
+    const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
+    expect(modeLabels[0].textContent).toBe('fill')
+  })
+
+  it('reports a percentage that is not 100% as custom, never as a pixel count', () => {
+    // parseFloat('50%') === 50, so the pre-B5 path rendered "50 px" for an
+    // element that is half its parent's width.
+    setup({ values: { ...DEFAULT_VALUES, width: '50%' } })
+    const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
+    expect(modeLabels[0].textContent).toBe('custom')
+    const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
+    expect(widthInput.disabled).toBe(true)
+  })
+
+  it('does not offer the aspect lock when a dimension is auto', () => {
+    // canLockAspect requires BOTH axes fixed. Everything read as fixed before
+    // B5, so the lock was permanently enabled.
+    setup({ values: { ...DEFAULT_VALUES, width: 'auto', height: '48px' } })
+    const lockBtn = container.querySelector('.cortex-lock-btn') as HTMLButtonElement
+    expect(lockBtn.getAttribute('aria-disabled')).toBe('true')
   })
 
   // ZF0-1478 #4: stale prop must reach ALL 6 NumericInputs (width, height, min-w, max-w, min-h, max-h)

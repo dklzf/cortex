@@ -3,7 +3,10 @@ import { useState, useRef, useCallback, useEffect } from 'preact/hooks'
 import { computePosition, flip, shift } from '@floating-ui/dom'
 import { Check, ChevronDown } from '../icons.js'
 
-export type SizingMode = 'fixed' | 'fit' | 'fill'
+// Re-exported for existing importers. The type now lives with the classifier
+// that produces it (a pure module a component should not own).
+export type { SizingMode } from '../../sizing-value.js'
+import type { SizingMode } from '../../sizing-value.js'
 
 export interface SizingDropdownProps {
   mode: SizingMode
@@ -19,14 +22,23 @@ const MODE_LABELS: Record<SizingMode, string> = {
   fixed: 'px',
   fit: 'fit',
   fill: 'fill',
+  auto: 'auto',
+  custom: 'custom',
 }
 
 const MODE_DISPLAY: Record<SizingMode, string> = {
   fixed: 'Fixed (px)',
   fit: 'Fit contents',
   fill: 'Fill container',
+  auto: 'Auto (browser decides)',
+  custom: 'Custom value',
 }
 
+/** Modes a user can SELECT. Deliberately narrower than SizingMode: `auto` and
+ *  `custom` are states an element can be IN but not states you can switch TO.
+ *  "Make this auto" is not a coherent instruction, and `custom` covers values
+ *  (calc(), 50%, clamp()) the panel reports faithfully but has no control for.
+ *  Both still render as the trigger label so the current state is never a lie. */
 const MODES: SizingMode[] = ['fixed', 'fit', 'fill']
 
 /**

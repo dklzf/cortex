@@ -24,6 +24,7 @@ import { parseEffectsValues } from './sections/EffectsSection.js'
 import { parsePositionValues } from './sections/PositionSection.js'
 import { parseAppearanceValues } from './sections/AppearanceSection.js'
 import { parseSpacingValues, ALL_DIMMING_PROPERTIES } from './sections/spacing-utils.js'
+import { readAuthoredSize } from '../sizing-value.js'
 
 /** CSS the box model gives you that SVG GEOMETRY simply does not implement.
  *
@@ -113,8 +114,19 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   const cs = getComputedStyle(element, pseudo)
   const source = element.getAttribute('data-cortex-source') ?? ''
   const layout = parseLayoutValues(cs)
-  // Override width/height with raw override values so deriveSizingMode
-  // sees keywords like 'fit-content' / '100%' instead of resolved pixels.
+  // `parseLayoutValues` reads width/height off getComputedStyle, which returns
+  // the USED value in pixels — it cannot express a sizing mode at all (B5).
+  // Replace both with the authored (computed) value via CSS Typed OM, which
+  // reports `100%` / `fit-content` / `auto` as authored. Falls back to the used
+  // value on engines without Typed OM and for pseudo-elements; see
+  // sizing-value.ts for why that fallback is lossy but honest.
+  layout.width = readAuthoredSize(element, 'width', pseudo)
+  layout.height = readAuthoredSize(element, 'height', pseudo)
+  // Cortex's own staged override still wins: it is the value the user just
+  // asked for and has not yet been applied to source, so it is more current
+  // than anything the cascade can report. This special case predates the Typed
+  // OM read and is now narrow rather than load-bearing — before, it was the
+  // ONLY way any keyword mode ever reached the panel.
   const widthOverride = overrideManager.get(source, 'width', pseudo)
   const heightOverride = overrideManager.get(source, 'height', pseudo)
   if (widthOverride !== undefined) layout.width = widthOverride

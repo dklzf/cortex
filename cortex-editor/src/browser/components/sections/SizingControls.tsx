@@ -24,7 +24,8 @@ import type { SectionChange } from './types.js'
 import { NumericInput } from '../controls/NumericInput.js'
 import { SizingDropdown } from '../controls/SizingDropdown.js'
 import { Check, Lock, LockOpen, X } from '../icons.js'
-import type { SizingMode } from '../controls/SizingDropdown.js'
+import type { SizingMode } from '../../sizing-value.js'
+import { classifySizingValue } from '../../sizing-value.js'
 
 export type SizingChange = SectionChange
 
@@ -55,12 +56,14 @@ export interface SizingControlsProps {
   stale?: boolean
 }
 
-/** Derive the SizingDropdown mode from the raw CSS value — pure, no state. */
-function deriveSizingMode(value: string): SizingMode {
-  if (value === 'fit-content') return 'fit'
-  if (value === '100%') return 'fill'
-  return 'fixed'
-}
+/** Derive the SizingDropdown mode from the raw CSS value — pure, no state.
+ *
+ *  Previously this was a DECODER of cortex's own write vocabulary
+ *  (`fit-content` / `100%` / `<n>px`) whose fall-through was `return 'fixed'`.
+ *  Used as a CLASSIFIER over arbitrary authored CSS — which is what the panel
+ *  needs — that fall-through made every element read Fixed, including
+ *  author-written `width: 100%`. Delegates to the real classifier now. */
+const deriveSizingMode = classifySizingValue
 
 /** Derive whether a min/max constraint is active from the raw CSS value. */
 function isMinEnabled(value: string): boolean {
@@ -91,8 +94,11 @@ export function SizingControls({
   const minHeightEnabled = isMinEnabled(values.minHeight)
   const maxHeightEnabled = isMaxEnabled(values.maxHeight)
 
-  const widthNum = parseFloat(values.width)
-  const heightNum = parseFloat(values.height)
+  // Only a `fixed` value is a pixel count. Parsing `50%` yields 50 and would
+  // render "50 px" for an element that is half its parent's width; parsing
+  // `auto` yields NaN and renders "0". Both are worse than showing nothing.
+  const widthNum = widthMode === 'fixed' ? parseFloat(values.width) : NaN
+  const heightNum = heightMode === 'fixed' ? parseFloat(values.height) : NaN
   const isAutoWidth = isNaN(widthNum)
   const isAutoHeight = isNaN(heightNum)
 
