@@ -1,0 +1,37 @@
+cortex-editor/src/shared/composite-key.ts
+  s_5e8694f8230a1e::t_375444a6087be6 1-29
+cortex-editor/src/browser/hooks/useEditStagingBuffer.ts
+  s_5e8694f8230a1e::t_375444a6087be6 3
+cortex-editor/src/core/staged-edits.ts
+  s_5e8694f8230a1e::t_375444a6087be6 4
+  s_5e8694f8230a1e::t_f9185d292c29e7 51-85,149
+cortex-editor/src/schemas/pending-edit.ts
+  s_01c6dff6289e45::t_34ea73031af653 214-219
+  s_5e8694f8230a1e::t_375444a6087be6 118-136,203-213,220
+cortex-editor/tests/schemas/structural-intent.test.ts
+  s_5e8694f8230a1e::t_3bd6ac98489edb 135-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "04276729b382d0f041b8e10bae1deae7cb4fa754",
+  "prompts": {},
+  "sessions": {
+    "s_01c6dff6289e45": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcde7-1105-72e3-9bc1-30cb5225c718",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    },
+    "s_5e8694f8230a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87a92ee1-e0d9-47e2-b76d-40e62755ec17",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
