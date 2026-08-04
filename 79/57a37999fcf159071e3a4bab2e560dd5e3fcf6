@@ -1,0 +1,38 @@
+cortex-editor/src/browser/hooks/useEditStagingBuffer.ts
+  s_5e8694f8230a1e::t_168891c8826e8c 2,84-92,94,197,304-311
+  s_5e8694f8230a1e::t_8149efc064ef5a 312
+cortex-editor/src/browser/components/Panel.tsx
+  s_5e8694f8230a1e::t_c559be5958a84b 46,104-113
+  s_5e8694f8230a1e::t_63d9ff67f8f77b 45,925-930
+  s_5e8694f8230a1e::t_98476b4e246244 984
+  s_5e8694f8230a1e::t_2418198e9abb6b 876
+  s_5e8694f8230a1e::t_958d2355783809 854,877
+cortex-editor/src/browser/components/CortexApp.tsx
+  s_5e8694f8230a1e::t_eff495e6dcda30 13,748-753
+  s_5e8694f8230a1e::t_21368f2750ea6a 754
+cortex-editor/tests/schemas/structural-intent.test.ts
+  s_5e8694f8230a1e::t_e98d962f173ecb 1-16,18-134
+  s_5e8694f8230a1e::t_0d8d5dd4b1b1f5 17
+cortex-editor/src/core/staged-edits.ts
+  s_5e8694f8230a1e::t_236f6ae282acb5 3,11-21,23
+  s_5e8694f8230a1e::t_119eb72bd8a5f8 260-291
+cortex-editor/src/schemas/pending-edit.ts
+  s_5e8694f8230a1e::t_bbf08c5164f76d 157,170-192
+  s_5e8694f8230a1e::t_8fcfe7bfe8923c 94-131,142-156,158-169,200-217,220-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "7957a37999fcf159071e3a4bab2e560dd5e3fcf6",
+  "prompts": {},
+  "sessions": {
+    "s_5e8694f8230a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87a92ee1-e0d9-47e2-b76d-40e62755ec17",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
