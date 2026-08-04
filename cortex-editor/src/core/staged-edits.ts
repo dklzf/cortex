@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { PendingEdit } from '../adapters/types.js'
-import { pendingEditSchema, MAX_FULL_SYNC_SIZE } from '../schemas/pending-edit.js'
+import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
 import { isPreviewSource } from '../shared/preview-source.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
@@ -8,8 +8,19 @@ import type { EditPipeline } from './edit-pipeline.js'
 // (kept there so the schema can enforce the cap at the envelope boundary
 // without an upward import from schemas/ to core/). Re-imported above.
 
-/** Composite key for last-write-wins deduplication — matches browser hook semantics. */
+/** Composite key for last-write-wins deduplication — matches browser hook semantics.
+ *
+ *  STRUCTURAL intents are deliberately exempt (B2). Last-write-wins is correct
+ *  for a style edit — the newest value for `color` at one locus is the only one
+ *  that matters. It is WRONG for a move: "put A before B, then put B before C"
+ *  is an ordered sequence, and collapsing it by locus destroys the log the
+ *  agent has to replay. Keying on the (unique) intentId makes every structural
+ *  intent its own entry, so the Map's insertion order IS the move log.
+ *
+ *  The `structural\0` prefix keeps the namespaces disjoint: an intentId can
+ *  never collide with a `source\0property\0pseudo` triple. */
 function compositeKey(edit: PendingEdit): string {
+  if (isStructuralEdit(edit)) return `structural\0${edit.intentId}`
   return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
 }
 
@@ -244,6 +255,38 @@ async function applyOne(
   const intent = cache.getById(intentId)
   if (!intent) {
     return { intentId, status: 'failed' as const, error: 'intent not found' }
+  }
+
+  // Structural intents have no deterministic path by construction (B2). The
+  // schema already forces applyMode 'agent-resolve', so they would fall into
+  // the branch below anyway — but the generic message does not say "this is a
+  // move", and the difference matters: the mechanizable edit here is
+  // `style={{ order: N }}`, which changes visual order WITHOUT changing DOM
+  // order and silently breaks screen-reader sequence and tab order. Spelling
+  // that out is the difference between Claude reordering the JSX and Claude
+  // reaching for the CSS property that looks equivalent.
+  //
+  // Placed before the agent-resolve check so it wins, and so TypeScript narrows
+  // the remainder of this function to style intents.
+  if (isStructuralEdit(intent)) {
+    const { parentSource, fromIndex, toIndex } = intent.structural
+    return {
+      intentId,
+      status: 'needs-source-edit' as const,
+      intent,
+      reason:
+        `Structural move: within the container at ${parentSource}, the child currently at ` +
+        `position ${fromIndex} (source ${intent.source}) must move to position ${toIndex}. ` +
+        `Positions index the parent's ELEMENT children, ignoring text nodes.\n\n` +
+        `Reorder the SOURCE so the DOM order changes. If those children are rendered by a ` +
+        `.map(), reorder the underlying array — the siblings share one source location, so ` +
+        `editing the JSX cannot move a single instance. If they are hand-authored siblings, ` +
+        `reorder the JSX elements.\n\n` +
+        `Do NOT express this with CSS 'order', 'flex-direction: *-reverse', or absolute ` +
+        `positioning. Those change visual order only; the accessibility tree and tab order ` +
+        `keep following the original DOM sequence, which is a real regression that looks ` +
+        `correct in a screenshot.`,
+    }
   }
 
   if (isAgentResolvedIntent(intent)) {

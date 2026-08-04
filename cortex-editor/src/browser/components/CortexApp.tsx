@@ -10,6 +10,7 @@ import { initSelection } from '../selection.js'
 import type { SelectionHandle } from '../selection.js'
 import { cortexAppReducer, initialCortexAppReducerState, applySelectionUpdate } from '../cortex-app-reducer.js'
 import { expandSharedSource } from '../selection-source-expand.js'
+import { isStructuralEdit } from '../../schemas/pending-edit.js'
 import type { CortexAppReducerState, CortexAppAction, CortexAppEffect, EditDispatchEntry } from '../cortex-app-reducer.js'
 // @ts-ignore — tinykeys has types but exports field doesn't include a "types" condition (TODO: add declare module shim when tinykeys updates)
 import { tinykeys } from 'tinykeys'
@@ -743,6 +744,13 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // Match by full source (data-cortex-source includes :line:col).
         const el = elBySource.get(edit.source)
         if (!el) continue  // element not in DOM — leave intent for user to handle
+
+        // Convergence asks "did the live value become what this intent wanted".
+        // A structural intent wants a POSITION, not a value, so the question is
+        // ill-formed for it and answering it against a property it lacks would
+        // be worse than not answering. Left for the user to discard, which is
+        // the same conservative direction the exact-match below is chosen for.
+        if (isStructuralEdit(edit)) continue
 
         const pseudo = edit.pseudo ?? null
         const liveValue = override.readSourceValue(el, edit.property, pseudo).trim()

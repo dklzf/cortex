@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'preact/hooks'
+import { isStructuralEdit } from '../../schemas/pending-edit.js'
 import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
 
@@ -80,8 +81,17 @@ export interface StagingBufferHandle {
 
 const MAX_ENTRIES = 500
 
-/** Composite key for last-write-wins deduplication. */
+/** Composite key for last-write-wins deduplication.
+ *
+ *  Must stay in lockstep with `StagedEditsCache.compositeKey` in
+ *  core/staged-edits.ts — the server merges this buffer's full-state sync by
+ *  the same key, so a divergence would silently drop or duplicate entries.
+ *
+ *  STRUCTURAL intents key on their unique intentId so they are never collapsed
+ *  (B2): a move log is ordered ("A before B, then B before C"), and folding it
+ *  by locus destroys the sequence the agent replays. */
 function compositeKey(edit: PendingEdit): string {
+  if (isStructuralEdit(edit)) return `structural\0${edit.intentId}`
   return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
 }
 
@@ -184,7 +194,7 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         console.warn(
           '[cortex] Staging buffer evicted oldest intent (max 500):',
           evicted.source,
-          evicted.property,
+          isStructuralEdit(evicted) ? `${evicted.structural.op} → ${evicted.structural.toIndex}` : evicted.property,
         )
       }
     }
@@ -290,6 +300,15 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         divergent.push(edit)
         continue
       }
+
+      // Divergence for a STRUCTURAL intent is a different question — not "has
+      // this property changed under me" but "is this element still at the
+      // position I recorded". Answering it needs a sibling-index recomputation
+      // against a source that may map to N elements, so it is deliberately not
+      // attempted here: a structural intent is never reported divergent rather
+      // than being reported WRONGLY divergent on a property it does not have.
+      // The element-missing check above still applies to it.
+      if (isStructuralEdit(edit)) continue
 
       const pseudo = edit.pseudo ?? null
       const currentValue = readSourceValue(el, edit.property, pseudo).trim()

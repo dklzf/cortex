@@ -42,6 +42,8 @@ import type { CortexChannel, ConnectionDisplay } from '../../adapters/types.js'
 import { computePanelStyleSnapshot } from './panel-style-snapshot.js'
 import { ALL_DIMMING_PROPERTIES } from './sections/spacing-utils.js'
 import type { PendingEdit, StagingBufferHandle } from '../hooks/useEditStagingBuffer.js'
+import { isStructuralEdit } from '../../schemas/pending-edit.js'
+import type { StyleEditSchema } from '../../schemas/pending-edit.js'
 import { generateId } from '../uuid.js'
 import { StagingDriftBanner } from './StagingDriftBanner.js'
 import { SpacingTokensContext } from '../tokens/TokenContext.js'
@@ -99,7 +101,16 @@ export function ConnectionStatusFooter({ status }: { status?: ConnectionDisplay 
 
 const HIGHLIGHT_ATTR = 'data-cortex-blast-radius'
 
-function pendingEditTargetFields(target: ElementEditTarget): Partial<PendingEdit> {
+/** The two fields this helper actually sets.
+ *
+ *  Deliberately NOT `Partial<PendingEdit>`: PendingEdit is a discriminated
+ *  union (B2), and `Partial<A | B>` distributes to `Partial<A> | Partial<B>`,
+ *  so the return type carried an optional `kind` that could be `'structural'`.
+ *  Spread into a style-edit literal it silently widened the discriminator and
+ *  broke the union match. Naming the two fields is both tighter and correct. */
+type PendingEditTargetFields = Partial<Pick<StyleEditSchema, 'applyMode' | 'sourceResolutionHint'>>
+
+function pendingEditTargetFields(target: ElementEditTarget): PendingEditTargetFields {
   if (target.applyMode === 'direct') return {}
   return {
     applyMode: target.applyMode,
@@ -840,6 +851,7 @@ export function Panel({
         for (const c of changes) {
           if (c.source !== elSource) continue // mirrors single-select branch
           pendingEdits.push({
+            kind: 'style' as const,
             intentId: generateId(),
             source: elSource,
             property: c.property,
@@ -861,7 +873,8 @@ export function Panel({
       const instanceSources = isShared
         ? editSourcesForElements(sharedInfo!.elements)
         : undefined
-      pendingEdits = editedProps.map(c => ({
+      pendingEdits = editedProps.map((c): PendingEdit => ({
+        kind: 'style' as const,
         intentId: generateId(),
         source,
         property: c.property,
@@ -909,6 +922,12 @@ export function Panel({
       // Pre-pivot, this clear happened in CortexApp.handleEditDispatch when the edit
       // went out via channel.send. Now that the edit is buffer-appended, dispatch
       // doesn't fire — so we re-establish the contract here.
+      // Panel only authors style edits, so this branch is not reachable for a
+      // structural intent today. Guarded rather than asserted: the divergence
+      // card is keyed source+property, and a structural intent has no property
+      // to key on — if a future caller routes one through here, skipping is
+      // correct and a crash is not.
+      if (isStructuralEdit(edit)) continue
       onDismissError?.(`${edit.source}${SEP}${edit.property}`)
     }
 
@@ -962,6 +981,7 @@ export function Panel({
         // intents identifiable in debug output.
         const intentId = `test-${generateId()}`
         buffer.append({
+          kind: 'style' as const,
           intentId,
           source,
           property,

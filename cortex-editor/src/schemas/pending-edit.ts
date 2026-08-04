@@ -91,13 +91,46 @@ const sourceResolutionHintSchema = z.object({
  * multi-byte characters (e.g. 4-byte emoji at 4 UTF-8 bytes each) are counted
  * correctly — JS `.max(N)` measures UTF-16 code units, not bytes.
  */
-export const pendingEditSchema = z.object({
+/**
+ * A structural intent — an edit that changes the SHAPE of the tree rather than
+ * a CSS property on one node (B2).
+ *
+ * ## Why this cannot be a style edit
+ *
+ * The mechanizable edit for "move this button left" is `style={{ order: 2 }}`,
+ * and it is dishonest. CSS `order` changes VISUAL order without changing DOM
+ * order, so screen readers and sequential focus still follow the original
+ * sequence. Shipping it would be a real a11y regression that looks correct in
+ * a screenshot. A move must reach source as a move.
+ *
+ * ## Why positions, not sibling sources
+ *
+ * The obvious encoding is "insert before sibling X". It is ambiguous in exactly
+ * the case that matters: JSX inside a `.map()` produces N siblings that all
+ * share ONE `data-cortex-source`, so "before X" does not identify a slot.
+ * Positions among the parent's element children are unambiguous for both
+ * shapes, and translate directly to the two real edits — reorder the data array
+ * for a `.map()`, reorder the JSX for hand-authored siblings.
+ *
+ * `source` (on the base) identifies the element being moved; `parentSource`
+ * identifies the container whose children are being reordered. Both are carried
+ * for the agent's benefit — it needs to find the JSX, not just the indices.
+ */
+export const structuralIntentSchema = z.object({
+  op: z.literal('move'),
+  parentSource: z.string().min(1).refine((v) => utf8Bytes(v) <= MAX_INTENT_SOURCE_BYTES, { message: `parentSource exceeds ${MAX_INTENT_SOURCE_BYTES} UTF-8 bytes` }),
+  /** Index of the moved element among its parent's ELEMENT children, before the move. */
+  fromIndex: z.number().int().nonnegative().finite(),
+  /** Index the element should occupy among those children after the move. */
+  toIndex: z.number().int().nonnegative().finite(),
+})
+
+export type StructuralIntent = z.infer<typeof structuralIntentSchema>
+
+/** Fields common to every intent kind. */
+const intentBase = {
   intentId: intentIdSchema,
   source: z.string().min(1).refine((v) => utf8Bytes(v) <= MAX_INTENT_SOURCE_BYTES, { message: `source exceeds ${MAX_INTENT_SOURCE_BYTES} UTF-8 bytes` }),
-  property: z.string().min(1).refine((v) => utf8Bytes(v) <= MAX_INTENT_PROPERTY_BYTES, { message: `property exceeds ${MAX_INTENT_PROPERTY_BYTES} UTF-8 bytes` }),
-  value: z.string().refine((v) => utf8Bytes(v) <= MAX_INTENT_VALUE_BYTES, { message: `value exceeds ${MAX_INTENT_VALUE_BYTES} UTF-8 bytes` }),
-  previousValue: z.string().refine((v) => utf8Bytes(v) <= MAX_INTENT_VALUE_BYTES, { message: `previousValue exceeds ${MAX_INTENT_VALUE_BYTES} UTF-8 bytes` }),
-  pseudo: z.enum(['::before', '::after']).optional(),
   scope: z.enum(['instance', 'all']).optional(),
   applyMode: z.enum(['direct', 'agent-resolve']).optional(),
   sourceResolutionHint: sourceResolutionHintSchema.optional(),
@@ -106,7 +139,57 @@ export const pendingEditSchema = z.object({
     .max(MAX_INTENT_INSTANCE_SOURCES)
     .optional(),
   timestamp: z.number().finite(),
-}).superRefine((edit, ctx) => {
+}
+
+/**
+ * A style intent — one CSS property/value pair at one locus. The original and
+ * still overwhelmingly common shape.
+ *
+ * `kind` is OPTIONAL and defaults to 'style' on read, so every intent written
+ * by an older browser bundle continues to validate unchanged. New structural
+ * intents carry `kind: 'structural'` explicitly, which an older MCP server will
+ * REJECT at validation rather than silently mis-apply — fail-closed is the
+ * correct behaviour for a version skew between the injected bundle and a
+ * separately-installed `cortex mcp`.
+ */
+export const styleEditSchema = z.object({
+  ...intentBase,
+  kind: z.literal('style'),
+  property: z.string().min(1).refine((v) => utf8Bytes(v) <= MAX_INTENT_PROPERTY_BYTES, { message: `property exceeds ${MAX_INTENT_PROPERTY_BYTES} UTF-8 bytes` }),
+  value: z.string().refine((v) => utf8Bytes(v) <= MAX_INTENT_VALUE_BYTES, { message: `value exceeds ${MAX_INTENT_VALUE_BYTES} UTF-8 bytes` }),
+  previousValue: z.string().refine((v) => utf8Bytes(v) <= MAX_INTENT_VALUE_BYTES, { message: `previousValue exceeds ${MAX_INTENT_VALUE_BYTES} UTF-8 bytes` }),
+  pseudo: z.enum(['::before', '::after']).optional(),
+})
+
+export const structuralEditSchema = z.object({
+  ...intentBase,
+  kind: z.literal('structural'),
+  structural: structuralIntentSchema,
+})
+
+/**
+ * `kind` is optional on the wire for back-compat, but a discriminated union
+ * needs it PRESENT to select a branch. Normalising it here — rather than using
+ * a plain `z.union` — is what preserves error quality: `z.union` attempts every
+ * member and reports a nested `invalid_union`, so a bad `timestamp` stopped
+ * rejecting at path ['timestamp'] and became unreadable. `z.discriminatedUnion`
+ * picks the branch first and reports only that branch's issues, so every
+ * existing error path is unchanged.
+ *
+ * Non-object inputs pass through untouched so the union reports its own
+ * "expected object" error rather than this preprocessing throwing.
+ */
+const withDefaultKind = (value: unknown): unknown => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  if (record.kind === undefined) return { ...record, kind: 'style' }
+  return value
+}
+
+export const pendingEditSchema = z.preprocess(
+  withDefaultKind,
+  z.discriminatedUnion('kind', [structuralEditSchema, styleEditSchema]),
+).superRefine((edit, ctx) => {
   if ((edit.applyMode === 'agent-resolve' || isPreviewSource(edit.source)) && !edit.sourceResolutionHint) {
     ctx.addIssue({
       code: 'custom',
@@ -114,6 +197,31 @@ export const pendingEditSchema = z.object({
       message: 'sourceResolutionHint is required for agent-resolve or preview-source intents',
     })
   }
+  // A structural intent has no deterministic rewriter and must never acquire
+  // one silently — `set_inline_style` writing `style={{order}}` is the exact
+  // a11y regression this type exists to prevent. Enforced at the envelope so
+  // no producer can route a move to the direct path.
+  if (edit.kind === 'structural' && edit.applyMode !== 'agent-resolve') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['applyMode'],
+      message: "structural intents must use applyMode 'agent-resolve' — there is no deterministic move rewriter",
+    })
+  }
+  if (edit.kind === 'structural' && edit.structural.fromIndex === edit.structural.toIndex) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['structural', 'toIndex'],
+      message: 'structural move is a no-op: fromIndex equals toIndex',
+    })
+  }
 })
 
+/** True when the intent changes tree shape rather than a CSS property. */
+export function isStructuralEdit(edit: PendingEditSchema): edit is StructuralEditSchema {
+  return edit.kind === 'structural'
+}
+
+export type StyleEditSchema = z.infer<typeof styleEditSchema>
+export type StructuralEditSchema = z.infer<typeof structuralEditSchema>
 export type PendingEditSchema = z.infer<typeof pendingEditSchema>
