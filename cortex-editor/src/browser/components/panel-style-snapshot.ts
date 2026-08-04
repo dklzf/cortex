@@ -120,6 +120,14 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   // reports `100%` / `fit-content` / `auto` as authored. Falls back to the used
   // value on engines without Typed OM and for pseudo-elements; see
   // sizing-value.ts for why that fallback is lossy but honest.
+  // Keep the USED value too. The authored value decides the MODE; the used
+  // value is the only true pixel measurement of the box, and the panel needs
+  // it for two things a mode cannot supply: the number shown in the (disabled)
+  // W/H field for a non-fixed element, and the width to seed when the user
+  // switches that element TO Fixed. Dropping it made "switch to Fixed" write
+  // `0px` and collapse the element.
+  layout.widthUsed = layout.width
+  layout.heightUsed = layout.height
   layout.width = readAuthoredSize(element, 'width', pseudo)
   layout.height = readAuthoredSize(element, 'height', pseudo)
   // Cortex's own staged override still wins: it is the value the user just

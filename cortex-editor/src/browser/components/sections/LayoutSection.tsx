@@ -40,6 +40,12 @@ export interface LayoutValues {
   justifyItems: string
   width: string
   height: string
+  /** Used (rendered) pixel size, from getComputedStyle. `width`/`height` carry
+   *  the AUTHORED value and so may be `100%` / `fit-content` / `auto`, which
+   *  are not measurements. Optional: callers that only have computed styles
+   *  (tests, the empty-selection snapshot) may omit it. */
+  widthUsed?: string
+  heightUsed?: string
   minWidth: string
   maxWidth: string
   minHeight: string
@@ -262,6 +268,8 @@ export function LayoutSection({
             values={{
               width: values.width,
               height: values.height,
+              widthUsed: values.widthUsed,
+              heightUsed: values.heightUsed,
               minWidth: values.minWidth,
               maxWidth: values.maxWidth,
               minHeight: values.minHeight,

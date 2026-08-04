@@ -354,6 +354,55 @@ describe('SizingControls', () => {
     expect(widthInput.disabled).toBe(true)
   })
 
+  // ── B5 follow-up: the authored value gives the MODE, not the MEASUREMENT ──
+  // Deriving the mode correctly is only half the job. `100%` and `fit-content`
+  // are not numbers, so the panel still needs the used pixel size — otherwise
+  // it fabricates one.
+
+  it('shows the element\'s rendered width for a fill element, not 0', () => {
+    setup({ values: { ...DEFAULT_VALUES, width: '100%', widthUsed: '1264px' } })
+    const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
+    expect(widthInput.value).toBe('1264')
+    expect(widthInput.disabled).toBe(true)
+  })
+
+  it('shows the rendered width for a fit-content element too', () => {
+    setup({ values: { ...DEFAULT_VALUES, width: 'fit-content', widthUsed: '86px' } })
+    const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
+    expect(widthInput.value).toBe('86')
+  })
+
+  it('falls back to 0 only when there is no measurement at all', () => {
+    setup({ values: { ...DEFAULT_VALUES, width: 'auto' } })
+    const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
+    expect(widthInput.value).toBe('0')
+  })
+
+  it('pins a fill element at its rendered width when switched to Fixed', async () => {
+    // The regression this guards: seeding from the authored value wrote "0px"
+    // and collapsed the element, because a `100%` width parses to NaN.
+    const { onChange } = setup({ values: { ...DEFAULT_VALUES, width: '100%', widthUsed: '1264px' } })
+    const triggers = container.querySelectorAll('.cortex-sizing-trigger')
+    ;(triggers[0] as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fixed"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fixed"]') as HTMLElement).click()
+    expect(onChange).toHaveBeenCalledWith({ property: 'width', value: '1264px' })
+    expect(onChange).not.toHaveBeenCalledWith({ property: 'width', value: '0px' })
+  })
+
+  it('pins height at its rendered size when switched to Fixed', async () => {
+    const { onChange } = setup({ values: { ...DEFAULT_VALUES, height: 'fit-content', heightUsed: '40px' } })
+    const triggers = container.querySelectorAll('.cortex-sizing-trigger')
+    ;(triggers[1] as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fixed"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fixed"]') as HTMLElement).click()
+    expect(onChange).toHaveBeenCalledWith({ property: 'height', value: '40px' })
+  })
+
   it('does not offer the aspect lock when a dimension is auto', () => {
     // canLockAspect requires BOTH axes fixed. Everything read as fixed before
     // B5, so the lock was permanently enabled.

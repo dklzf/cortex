@@ -36,6 +36,9 @@ export interface SizingControlsProps {
   values: {
     width: string
     height: string
+    /** Used (rendered) pixel size. See LayoutValues.widthUsed. */
+    widthUsed?: string
+    heightUsed?: string
     minWidth: string
     maxWidth: string
     minHeight: string
@@ -101,6 +104,18 @@ export function SizingControls({
   const heightNum = heightMode === 'fixed' ? parseFloat(values.height) : NaN
   const isAutoWidth = isNaN(widthNum)
   const isAutoHeight = isNaN(heightNum)
+
+  // The element's true rendered size. For a non-fixed element this is the ONLY
+  // honest number available: `100%` and `fit-content` are not measurements, and
+  // showing 0 in their place fabricates a width for a box that plainly has one.
+  // Figma does the same — a Fill/Hug element still reports its current size.
+  const usedWidthNum = parseFloat(values.widthUsed ?? '')
+  const usedHeightNum = parseFloat(values.heightUsed ?? '')
+  // What the W/H fields display. Fixed shows its authored value; anything else
+  // shows the measured one. Falls back to 0 only when there is no measurement
+  // at all (empty selection).
+  const widthDisplay = isAutoWidth ? (isNaN(usedWidthNum) ? 0 : usedWidthNum) : widthNum
+  const heightDisplay = isAutoHeight ? (isNaN(usedHeightNum) ? 0 : usedHeightNum) : heightNum
 
   const canLockAspect = widthMode === 'fixed' && heightMode === 'fixed'
   const widthDisabled = widthMode !== 'fixed'
@@ -190,14 +205,17 @@ export function SizingControls({
   const handleWidthModeChange = useCallback((mode: SizingMode) => {
     if (mode === 'fit') onChange({ property: 'width', value: 'fit-content' })
     else if (mode === 'fill') onChange({ property: 'width', value: '100%' })
-    else onChange({ property: 'width', value: `${isAutoWidth ? 0 : widthNum}px` })
-  }, [onChange, isAutoWidth, widthNum])
+    // Switching TO Fixed must pin the element at the size it currently RENDERS.
+    // Seeding from `widthNum` wrote `0px` for every non-fixed element, because
+    // widthNum is NaN unless the value was authored in pixels.
+    else onChange({ property: 'width', value: `${widthDisplay}px` })
+  }, [onChange, widthDisplay])
 
   const handleHeightModeChange = useCallback((mode: SizingMode) => {
     if (mode === 'fit') onChange({ property: 'height', value: 'fit-content' })
     else if (mode === 'fill') onChange({ property: 'height', value: '100%' })
-    else onChange({ property: 'height', value: `${isAutoHeight ? 0 : heightNum}px` })
-  }, [onChange, isAutoHeight, heightNum])
+    else onChange({ property: 'height', value: `${heightDisplay}px` })
+  }, [onChange, heightDisplay])
 
   // ── Min/max handlers ────────────────────────────────────────────
   const handleMinWidthChange = useCallback(
@@ -255,7 +273,7 @@ export function SizingControls({
       <div class="cortex-layout-section__sizing">
         <div class={`cortex-layout-section__sizing-field${isDimmed(dimmedProperties, 'width', 'min-width', 'max-width') ? ' cortex-control--dimmed' : ''}`}>
           <NumericInput
-            value={isAutoWidth ? 0 : widthNum}
+            value={widthDisplay}
             label="W"
             tooltip={widthDisabled ? DIMENSION_REQUIRES_FIXED_TOOLTIP : 'Width'}
             min={0}
@@ -278,7 +296,7 @@ export function SizingControls({
         </div>
         <div class={`cortex-layout-section__sizing-field${isDimmed(dimmedProperties, 'height', 'min-height', 'max-height') ? ' cortex-control--dimmed' : ''}`}>
           <NumericInput
-            value={isAutoHeight ? 0 : heightNum}
+            value={heightDisplay}
             label="H"
             tooltip={heightDisabled ? DIMENSION_REQUIRES_FIXED_TOOLTIP : 'Height'}
             min={0}
