@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { expandSharedSource } from '../../src/browser/selection-source-expand.js'
+import { expandSharedSource, resolveSelectionTargets } from '../../src/browser/selection-source-expand.js'
 
 describe('expandSharedSource (ZF0-1195 Follow-up A)', () => {
   beforeEach(() => {
@@ -85,5 +85,79 @@ describe('expandSharedSource (ZF0-1195 Follow-up A)', () => {
     document.body.append(a1, a2, b)
     const result = expandSharedSource([a1, b])
     expect(new Set(result)).toEqual(new Set([a1, a2, b]))
+  })
+})
+
+describe('resolveSelectionTargets — per-instance selection for moves (B4)', () => {
+  beforeEach(() => {
+    while (document.body.firstChild) document.body.removeChild(document.body.firstChild)
+  })
+
+  /** A row of three buttons rendered from one .map() — they share a source. */
+  function mappedRow(): { row: HTMLElement; buttons: HTMLElement[] } {
+    const row = document.createElement('div')
+    row.setAttribute('data-cortex-source', 'src/App.tsx:10:div')
+    const buttons = ['Export', 'Sort', 'Filter'].map(label => {
+      const b = document.createElement('button')
+      b.setAttribute('data-cortex-source', 'src/App.tsx:12:button')
+      b.textContent = label
+      row.appendChild(b)
+      return b
+    })
+    document.body.appendChild(row)
+    return { row, buttons }
+  }
+
+  it('expands by default — a style edit reaches every instance, so selection must say so', () => {
+    // The override layer keys on source: one rule matches all three buttons.
+    // Letting the user select a subset would promise an edit cortex cannot make.
+    const { buttons } = mappedRow()
+    expect(resolveSelectionTargets([buttons[0]!])).toHaveLength(3)
+  })
+
+  it('expands by default when options are given but expandShared is not set', () => {
+    const { buttons } = mappedRow()
+    expect(resolveSelectionTargets([buttons[0]!], {})).toHaveLength(3)
+  })
+
+  it('selects exactly ONE mapped button when expansion is opted out', () => {
+    // The motivating gesture: grab one button out of a grouped row. Impossible
+    // while clicking one selects all N. A move acts on a single instance
+    // because reordering .map() output means reordering the ARRAY — an edit
+    // that a source-keyed CSS rule can never express.
+    const { buttons } = mappedRow()
+    const targets = resolveSelectionTargets([buttons[1]!], { expandShared: false })
+    expect(targets).toEqual([buttons[1]])
+  })
+
+  it('keeps the clicked element as the primary when it does expand', () => {
+    // Regression guard on the existing contract: document order would otherwise
+    // put a sibling first and silently shift which element is primary.
+    const { buttons } = mappedRow()
+    expect(resolveSelectionTargets([buttons[2]!])[0]).toBe(buttons[2])
+  })
+
+  it('opting out is a no-op for elements that never shared a source', () => {
+    const a = document.createElement('div')
+    a.setAttribute('data-cortex-source', 'src/A.tsx:1:div')
+    document.body.appendChild(a)
+    expect(resolveSelectionTargets([a], { expandShared: false })).toEqual([a])
+    expect(resolveSelectionTargets([a])).toEqual([a])
+  })
+
+  it('never returns the caller’s array by reference', () => {
+    // Selection state can be assigned this array directly, so aliasing it would
+    // let a later mutation by the caller silently rewrite the live selection.
+    const a = document.createElement('div')
+    document.body.appendChild(a)
+    const input = [a]
+    const out = resolveSelectionTargets(input, { expandShared: false })
+    expect(out).toEqual(input)
+    expect(out).not.toBe(input)
+  })
+
+  it('preserves the empty-selection clear path in both modes', () => {
+    expect(resolveSelectionTargets([])).toEqual([])
+    expect(resolveSelectionTargets([], { expandShared: false })).toEqual([])
   })
 })
