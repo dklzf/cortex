@@ -182,7 +182,7 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         console.warn(
           '[cortex] Staging buffer evicted oldest intent (max 500):',
           evicted.source,
-          isStructuralEdit(evicted) ? `${evicted.structural.op} → ${evicted.structural.toIndex}` : evicted.property,
+          isStructuralEdit(evicted) ? `${evicted.structural.op} ${evicted.structural.parentSource}` : evicted.property,
         )
       }
     }
@@ -289,14 +289,24 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         continue
       }
 
-      // Divergence for a STRUCTURAL intent is a different question — not "has
-      // this property changed under me" but "is this element still at the
-      // position I recorded". Answering it needs a sibling-index recomputation
-      // against a source that may map to N elements, so it is deliberately not
-      // attempted here: a structural intent is never reported divergent rather
-      // than being reported WRONGLY divergent on a property it does not have.
-      // The element-missing check above still applies to it.
-      if (isStructuralEdit(edit)) continue
+      // Divergence for a STRUCTURAL intent asks a different question — not
+      // "has this property changed under me" but "does the tree I described
+      // still exist". The intent carries the children it saw at capture, so the
+      // answer is a direct comparison. External review flagged that skipping
+      // this let a stale intent reorder whatever happened to be there: if
+      // another file inserts a sibling, an untouched intent still looks clean
+      // and moves the WRONG element.
+      if (isStructuralEdit(edit)) {
+        const parent = el.parentElement
+        const live = parent
+          ? Array.from(parent.children).map(c => c.getAttribute('data-cortex-source') ?? '')
+          : []
+        const { baseline } = edit.structural
+        const drifted = live.length !== baseline.length
+          || baseline.some((source, i) => live[i] !== source)
+        if (drifted) divergent.push(edit)
+        continue
+      }
 
       const pseudo = edit.pseudo ?? null
       const currentValue = readSourceValue(el, edit.property, pseudo).trim()

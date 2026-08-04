@@ -3,27 +3,36 @@ import { pendingEditSchema, isStructuralEdit } from '../../src/schemas/pending-e
 import { StagedEditsCache } from '../../src/core/staged-edits.js'
 
 /**
- * B2 — the pipeline can now carry a structural intent.
+ * B2 — the pipeline can carry a structural intent.
  *
- * Two properties matter and neither is expressible in the style shape:
- *   1. A move must never be routed to the deterministic path. The mechanizable
- *      edit is `style={{ order: N }}`, which changes visual order WITHOUT
- *      changing DOM order and silently breaks screen-reader sequence and tab
- *      order. Enforced in the schema so no producer can opt out.
- *   2. A move log is ORDERED. Last-write-wins dedupe by locus is correct for a
- *      style edit and destroys a move sequence.
+ * The encoding states a container's intended final child ORDER rather than a
+ * relative move. External review took the first cut (`fromIndex → toIndex`)
+ * apart: relative coordinates are only meaningful against a baseline, and
+ * nothing pinned it — applying a subset, discarding one intent, retrying after
+ * a crash, merging two tabs, or evicting the oldest entry each silently
+ * invalidated every later index and produced a confidently wrong reorder.
+ *
+ * Absolute intents make each of those a non-issue by construction, which is
+ * what most of this file pins.
  */
 
-const HINT = { tagName: 'button', textPreview: 'Export', domSelector: 'div > button:nth-child(1)' }
+const HINT = { tagName: 'li', textPreview: 'Item A', domSelector: 'ul > li:nth-child(1)' }
 
-function structural(over: Record<string, unknown> = {}) {
+function structural(over: Record<string, unknown> = {}, inner: Record<string, unknown> = {}) {
   return {
     kind: 'structural',
     intentId: '11111111-1111-4111-8111-111111111111',
     source: 'src/App.tsx:12:4',
     applyMode: 'agent-resolve',
     sourceResolutionHint: HINT,
-    structural: { op: 'move', parentSource: 'src/App.tsx:10:2', fromIndex: 0, toIndex: 2 },
+    structural: {
+      op: 'reorder',
+      parentSource: 'src/App.tsx:10:2',
+      parentKey: 'body>div:nth-child(1)>ul',
+      baseline: ['src/App.tsx:12:4', 'src/App.tsx:12:4', 'src/App.tsx:12:4'],
+      order: [2, 0, 1],
+      ...inner,
+    },
     timestamp: 1,
     ...over,
   }
@@ -42,14 +51,14 @@ function style(over: Record<string, unknown> = {}) {
 }
 
 describe('structural intent — schema', () => {
-  it('accepts a well-formed move', () => {
-    const parsed = pendingEditSchema.safeParse(structural())
-    expect(parsed.success).toBe(true)
+  it('accepts a well-formed reorder', () => {
+    expect(pendingEditSchema.safeParse(structural()).success).toBe(true)
   })
 
   it('REJECTS a structural intent routed to the deterministic path', () => {
-    // The a11y guarantee. If this ever passes, a move can reach
-    // InlineStyleRewriter and be written as `style={{ order: N }}`.
+    // The a11y guarantee. If this passes, a reorder can reach
+    // InlineStyleRewriter and be written as `style={{ order: N }}` — visually
+    // right, but DOM order is untouched, so screen readers and tab order break.
     const parsed = pendingEditSchema.safeParse(structural({ applyMode: 'direct' }))
     expect(parsed.success).toBe(false)
     if (!parsed.success) {
@@ -57,20 +66,32 @@ describe('structural intent — schema', () => {
     }
   })
 
-  it('rejects a no-op move rather than staging an intent that changes nothing', () => {
-    const parsed = pendingEditSchema.safeParse(
-      structural({ structural: { op: 'move', parentSource: 'src/App.tsx:10:2', fromIndex: 1, toIndex: 1 } }),
-    )
-    expect(parsed.success).toBe(false)
+  it('rejects the identity permutation rather than staging a no-op reorder', () => {
+    expect(pendingEditSchema.safeParse(structural({}, { order: [0, 1, 2] })).success).toBe(false)
   })
 
-  it('rejects a negative or fractional index', () => {
-    for (const bad of [-1, 1.5]) {
-      const parsed = pendingEditSchema.safeParse(
-        structural({ structural: { op: 'move', parentSource: 'src/App.tsx:10:2', fromIndex: 0, toIndex: bad } }),
-      )
-      expect(parsed.success).toBe(false)
-    }
+  it.each([
+    ['a duplicate index', [0, 0, 1]],
+    ['an out-of-range index', [0, 1, 9]],
+    ['a length mismatch', [1, 0]],
+  ])('rejects %s — order must be a real permutation of baseline', (_label, order) => {
+    // Anything that is not a permutation describes a tree that cannot exist and
+    // would leave the agent guessing.
+    expect(pendingEditSchema.safeParse(structural({}, { order })).success).toBe(false)
+  })
+
+  it('requires a parentKey, so two renders of one component are distinguishable', () => {
+    // `<Column/>` rendered twice with identical rows gives both containers the
+    // same parentSource and every row the same source. Without parentKey the
+    // two reorders are byte-identical and the agent cannot tell which backing
+    // array to edit.
+    expect(pendingEditSchema.safeParse(structural({}, { parentKey: '' })).success).toBe(false)
+  })
+
+  it('carries the baseline it was captured against, so staleness is detectable', () => {
+    const parsed = pendingEditSchema.parse(structural())
+    expect(isStructuralEdit(parsed)).toBe(true)
+    if (isStructuralEdit(parsed)) expect(parsed.structural.baseline).toHaveLength(3)
   })
 })
 
@@ -82,9 +103,8 @@ describe('back-compat — style intents are unchanged on the wire', () => {
   })
 
   it('still rejects a bad timestamp at path "timestamp", not inside a union blob', () => {
-    // Regression guard: a plain z.union attempts every member and reports a
-    // nested invalid_union, which destroyed the specific path the UI shows.
-    // The discriminated union must keep reporting the real field.
+    // A plain z.union attempts every member and reports a nested invalid_union,
+    // which destroyed the specific path the UI shows.
     const parsed = pendingEditSchema.safeParse(style({ timestamp: Number.NaN }))
     expect(parsed.success).toBe(false)
     if (!parsed.success) {
@@ -101,26 +121,38 @@ describe('back-compat — style intents are unchanged on the wire', () => {
   })
 })
 
-describe('the move log survives the staging buffer', () => {
-  const move = (id: string, fromIndex: number, toIndex: number, timestamp: number) =>
-    structural({ intentId: id, structural: { op: 'move', parentSource: 'src/App.tsx:10:2', fromIndex, toIndex }, timestamp })
+describe('absolute intents make the replay failures impossible', () => {
+  const reorder = (id: string, key: string, order: number[], timestamp: number) =>
+    pendingEditSchema.parse(structural({ intentId: id, timestamp }, { parentKey: key, order })) as never
 
-  it('keeps every move on ONE element, in order', () => {
-    // The defect this exists to prevent: last-write-wins keyed by locus
-    // collapses "A→2 then A→0" to a single entry, so replaying the log lands
-    // the element somewhere the user never dragged it.
+  it('collapses repeated drags in ONE container to the latest intended order', () => {
+    // Three drags in the same row leave one intent describing where things
+    // ended up, not three that must be replayed in sequence. This is what
+    // removes the ordered-log failure class AND the unbounded growth that
+    // unique-per-drag keys caused.
     const cache = new StagedEditsCache()
-    cache.append(pendingEditSchema.parse(move('aaaaaaaa-1111-4111-8111-111111111111', 0, 2, 1)) as never)
-    cache.append(pendingEditSchema.parse(move('bbbbbbbb-2222-4222-8222-222222222222', 2, 0, 2)) as never)
+    const KEY = 'body>ul'
+    cache.append(reorder('aaaaaaaa-1111-4111-8111-111111111111', KEY, [1, 0, 2], 1))
+    cache.append(reorder('bbbbbbbb-2222-4222-8222-222222222222', KEY, [2, 1, 0], 2))
+    cache.append(reorder('cccccccc-3333-4333-8333-333333333333', KEY, [0, 2, 1], 3))
 
     const list = cache.list()
-    expect(list).toHaveLength(2)
-    expect(list.map(e => (e as { structural: { toIndex: number } }).structural.toIndex)).toEqual([2, 0])
+    expect(list).toHaveLength(1)
+    expect((list[0] as { structural: { order: number[] } }).structural.order).toEqual([0, 2, 1])
+  })
+
+  it('keeps reorders of DIFFERENT container instances separate', () => {
+    // The parentKey payoff: two renders of one component are independent
+    // containers, and collapsing them would lose one of the user's edits.
+    const cache = new StagedEditsCache()
+    cache.append(reorder('aaaaaaaa-1111-4111-8111-111111111111', 'body>ul:nth-child(1)', [1, 0, 2], 1))
+    cache.append(reorder('bbbbbbbb-2222-4222-8222-222222222222', 'body>ul:nth-child(2)', [2, 1, 0], 2))
+    expect(cache.list()).toHaveLength(2)
   })
 
   it('still collapses repeated STYLE edits at one locus', () => {
-    // The other half of the contract: exempting structural must not disable
-    // dedupe for the case it was built for.
+    // The other half of the contract: the structural key must not disturb the
+    // dedupe style edits have always relied on.
     const cache = new StagedEditsCache()
     cache.append(pendingEditSchema.parse(style({ value: 'red', timestamp: 1 })) as never)
     cache.append(pendingEditSchema.parse(
@@ -135,13 +167,10 @@ describe('the move log survives the staging buffer', () => {
 
 describe('review findings — hardening', () => {
   it('does not throw when `kind` is a throwing getter', () => {
-    // safeParse must never throw. Reading `.kind` invokes accessors, and this
-    // propagated synchronously out of parseOrFail into the dev-server hot
-    // handler. Not reachable from JSON callers, but the contract is the point.
-    const hostile = {
-      ...style(),
-      get kind(): string { throw new Error('boom') },
-    }
+    // safeParse must never throw. Returning the ORIGINAL value from the catch
+    // was not enough: the discriminated union reads `.kind` itself, so the same
+    // accessor threw again one frame later.
+    const hostile = { ...style(), get kind(): string { throw new Error('boom') } }
     expect(() => pendingEditSchema.safeParse(hostile)).not.toThrow()
     expect(pendingEditSchema.safeParse(hostile).success).toBe(false)
   })
@@ -152,19 +181,17 @@ describe('review findings — hardening', () => {
   })
 
   it('bounds the server cache so a lost eviction sync cannot leak forever', () => {
-    // The cache had NO cap and relied on the browser mirroring its own FIFO
-    // eviction across two separate channel sends. Structural intents never
-    // collapse under dedupe, so every drag is a permanent key — the leak
-    // compounds fastest on exactly this traffic.
+    // The cache had no cap and relied on the browser mirroring its FIFO across
+    // two separate channel sends; if the tab died between them the orphan was
+    // permanent, and mergeFullSync cannot delete keys absent from a payload.
     const cache = new StagedEditsCache()
     for (let i = 0; i < 1200; i++) {
       const id = `${i.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`
       cache.append(pendingEditSchema.parse(
-        structural({ intentId: id, structural: { op: 'move', parentSource: 'src/App.tsx:10:2', fromIndex: 0, toIndex: 1 }, timestamp: i }),
+        structural({ intentId: id, timestamp: i }, { parentKey: `body>ul:nth-child(${i})` }),
       ) as never)
     }
     expect(cache.list().length).toBeLessThanOrEqual(1000)
-    // Oldest-first eviction: the most recent intents must survive.
     const kept = cache.list() as Array<{ timestamp: number }>
     expect(Math.max(...kept.map(e => e.timestamp))).toBe(1199)
   })

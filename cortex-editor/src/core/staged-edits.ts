@@ -291,15 +291,19 @@ async function applyOne(
   // Placed before the agent-resolve check so it wins, and so TypeScript narrows
   // the remainder of this function to style intents.
   if (isStructuralEdit(intent)) {
-    const { parentSource, fromIndex, toIndex } = intent.structural
+    const { parentSource, parentKey, baseline, order } = intent.structural
+    const described = order.map((from, to) => `${to} <- ${from} (${baseline[from] ?? '?'})`).join(', ')
     return {
       intentId,
       status: 'needs-source-edit' as const,
       intent,
       reason:
-        `Structural move: within the container at ${parentSource}, the child currently at ` +
-        `position ${fromIndex} (source ${intent.source}) must move to position ${toIndex}. ` +
-        `Positions index the parent's ELEMENT children, ignoring text nodes.\n\n` +
+        `Structural reorder: the container at ${parentSource} (runtime instance ${parentKey}) ` +
+        `must end up with its children in this order — ${described}. Indices refer to the ` +
+        `children's positions BEFORE the edit; the list describes the intended RESULT, not a ` +
+        `sequence of moves, so apply it as a whole.\n\n` +
+        `Children as observed when the user dragged: ${baseline.join(', ')}. If the source no ` +
+        `longer matches that, stop and report the drift rather than reordering what is there.\n\n` +
         `Reorder the SOURCE so the DOM order changes. If those children are rendered by a ` +
         `.map(), reorder the underlying array — the siblings share one source location, so ` +
         `editing the JSX cannot move a single instance. If they are hand-authored siblings, ` +

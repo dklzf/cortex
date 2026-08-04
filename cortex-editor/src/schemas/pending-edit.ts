@@ -103,45 +103,78 @@ const sourceResolutionHintSchema = z.object({
  * sequence. Shipping it would be a real a11y regression that looks correct in
  * a screenshot. A move must reach source as a move.
  *
- * ## Why positions, not sibling sources
+ * ## Why a whole-container ORDER, not a from/to index pair
  *
- * The obvious encoding is "insert before sibling X". It is ambiguous in exactly
- * the case that matters: JSX inside a `.map()` produces N siblings that all
- * share ONE `data-cortex-source`, so "before X" does not identify a slot.
- * Positions among the parent's element children are unambiguous for both
- * shapes, and translate directly to the two real edits — reorder the data array
- * for a `.map()`, reorder the JSX for hand-authored siblings.
+ * The first cut of this encoded a move as `fromIndex → toIndex`. External
+ * review took it apart, and every finding was the same flaw wearing different
+ * clothes: those are RELATIVE coordinates, and nothing pinned the baseline they
+ * are relative to. Applying a subset, applying out of order, discarding one
+ * intent, retrying after a crash, merging two tabs' logs, or evicting the
+ * oldest entry each silently invalidated every later index — producing a
+ * confidently wrong reorder rather than a visible failure.
  *
- * `source` (on the base) identifies the element being moved; `parentSource`
- * identifies the container whose children are being reordered. Both are carried
- * for the agent's benefit — it needs to find the JSX, not just the indices.
+ * Enforcing ordering, completeness, idempotency and single-writer semantics
+ * across the whole pipeline would be four new invariants. Stating the INTENDED
+ * RESULT instead removes the need for all four: one intent describes one
+ * container's final child order, so it is idempotent, order-independent, and
+ * unaffected by any other intent being dropped. It also restores plain
+ * last-write-wins dedupe — the newest order for a container is the only one
+ * that matters — which is why structural intents no longer need an ordered log.
  *
- * ## Known limitation: DOM index is not always a JSX child slot
+ * `baseline` carries the children as they were when the user dragged, so drift
+ * is detectable: if the live children no longer match, the intent describes a
+ * tree that no longer exists and is discarded rather than applied to whatever
+ * is there now.
  *
- * These indices are computed in the BROWSER against live DOM; the agent edits
- * SOURCE. The two correspond only when each JSX child renders exactly one
- * element. They diverge for conditional children, fragments, and components
- * that return multiple roots. Concretely, for parent JSX
- * `[A, {flag && <B/>}, C, D]` with `flag === false`, the live DOM has three
- * element children `[A, C, D]`, so dragging D reports "position 2 → 0" while
- * counting raw JSX children would move C.
+ * ## Why sources cannot identify a slot on their own
  *
- * `sourceResolutionHint` identifies the MOVED element but says nothing about
- * the destination's neighbours, so it does not close this gap. The agent must
- * therefore treat the indices as a description of the INTENDED RESULT — the
- * observable order the user asked for — and verify against the source it reads,
- * rather than applying them as raw JSX offsets. The `needs-source-edit` reason
- * in staged-edits.ts states this. Raised in architecture review and recorded
- * rather than silently assumed; it is the first thing to revisit when the move
- * gesture lands a producer.
+ * JSX inside a `.map()` renders N siblings sharing ONE `data-cortex-source`, so
+ * "insert before sibling X" names no slot. Positions within `baseline` are
+ * unambiguous, and `parentKey` disambiguates WHICH runtime container is meant
+ * when one source renders more than once.
+ *
+ * ## Known limitation: a DOM child is not always a JSX child
+ *
+ * `baseline`/`order` index the live DOM's element children, while the agent
+ * edits source. They correspond only when each JSX child renders exactly one
+ * element; conditional children, fragments and multi-root components break the
+ * correspondence. For `[A, {flag && <B/>}, C, D]` with `flag === false` the DOM
+ * has three children, so the agent must treat the order as the intended RESULT
+ * and verify against the source it reads, not as raw JSX offsets.
  */
 export const structuralIntentSchema = z.object({
-  op: z.literal('move'),
+  op: z.literal('reorder'),
+  /** Source location of the container whose children are reordered. */
   parentSource: z.string().min(1).refine((v) => utf8Bytes(v) <= MAX_INTENT_SOURCE_BYTES, { message: `parentSource exceeds ${MAX_INTENT_SOURCE_BYTES} UTF-8 bytes` }),
-  /** Index of the moved element among its parent's ELEMENT children, before the move. */
-  fromIndex: z.number().int().nonnegative().finite(),
-  /** Index the element should occupy among those children after the move. */
-  toIndex: z.number().int().nonnegative().finite(),
+  /**
+   * Which RUNTIME INSTANCE of `parentSource` this is.
+   *
+   * One source location can render many times — `<Column/>` twice, each with
+   * identical rows, gives both containers the same `parentSource` and every row
+   * the same `source`. Without this, reordering the left column and reordering
+   * the right produce byte-identical payloads and the agent cannot know which
+   * backing array to touch. Opaque to the schema; the producer supplies a
+   * stable per-instance identifier (e.g. a DOM path from a known ancestor).
+   */
+  parentKey: z.string().min(1).refine((v) => utf8Bytes(v) <= MAX_INTENT_SOURCE_BYTES, { message: `parentKey exceeds ${MAX_INTENT_SOURCE_BYTES} UTF-8 bytes` }),
+  /**
+   * The children's `data-cortex-source` values in DOM order AT CAPTURE TIME.
+   *
+   * This is the baseline the reorder is stated against, carried so staleness is
+   * DETECTABLE rather than assumed. If the live children no longer match, the
+   * intent describes a tree that no longer exists and must be discarded instead
+   * of applied to whatever happens to be there now.
+   */
+  baseline: z.array(z.string()).min(2).max(MAX_INTENT_INSTANCE_SOURCES),
+  /**
+   * The desired final order, as a permutation of `baseline`'s INDICES.
+   *
+   * `order[i] === j` means "the child at baseline position j ends up at
+   * position i". Absolute, not relative: it describes the intended RESULT, so
+   * it is idempotent, independent of any other intent, and unaffected by the
+   * order intents are applied or by one being discarded.
+   */
+  order: z.array(z.number().int().nonnegative().finite()).min(2).max(MAX_INTENT_INSTANCE_SOURCES),
 })
 
 export type StructuralIntent = z.infer<typeof structuralIntentSchema>
@@ -242,12 +275,32 @@ export const pendingEditSchema = z.preprocess(
       message: "structural intents must use applyMode 'agent-resolve' — there is no deterministic move rewriter",
     })
   }
-  if (edit.kind === 'structural' && edit.structural.fromIndex === edit.structural.toIndex) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['structural', 'toIndex'],
-      message: 'structural move is a no-op: fromIndex equals toIndex',
-    })
+  if (edit.kind === 'structural') {
+    const { baseline, order } = edit.structural
+    // `order` must be a genuine permutation of `baseline`'s indices. Anything
+    // else — a duplicate, an out-of-range index, a length mismatch — describes
+    // a tree that cannot exist, and the agent would have to guess.
+    if (order.length !== baseline.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['structural', 'order'],
+        message: `order has ${order.length} entries but baseline has ${baseline.length}`,
+      })
+    } else if (new Set(order).size !== order.length || order.some(i => i >= baseline.length)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['structural', 'order'],
+        message: 'order must be a permutation of baseline indices — no duplicates, none out of range',
+      })
+    } else if (order.every((sourceIndex, position) => sourceIndex === position)) {
+      // The identity permutation changes nothing; staging it would send the
+      // agent to rewrite source for a reorder the user did not make.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['structural', 'order'],
+        message: 'reorder is a no-op: order is the identity permutation',
+      })
+    }
   }
 })
 
