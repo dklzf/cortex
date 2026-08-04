@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PendingEdit } from '../adapters/types.js'
 import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
+import { compositeKey } from '../shared/composite-key.js'
 import { isPreviewSource } from '../shared/preview-source.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
@@ -8,21 +9,6 @@ import type { EditPipeline } from './edit-pipeline.js'
 // (kept there so the schema can enforce the cap at the envelope boundary
 // without an upward import from schemas/ to core/). Re-imported above.
 
-/** Composite key for last-write-wins deduplication — matches browser hook semantics.
- *
- *  STRUCTURAL intents are deliberately exempt (B2). Last-write-wins is correct
- *  for a style edit — the newest value for `color` at one locus is the only one
- *  that matters. It is WRONG for a move: "put A before B, then put B before C"
- *  is an ordered sequence, and collapsing it by locus destroys the log the
- *  agent has to replay. Keying on the (unique) intentId makes every structural
- *  intent its own entry, so the Map's insertion order IS the move log.
- *
- *  The `structural\0` prefix keeps the namespaces disjoint: an intentId can
- *  never collide with a `source\0property\0pseudo` triple. */
-function compositeKey(edit: PendingEdit): string {
-  if (isStructuralEdit(edit)) return `structural\0${edit.intentId}`
-  return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
-}
 
 /** Defensive snapshot of a PendingEdit — callers mutating the returned object
  *  cannot affect the cache's internal state. structuredClone makes this
@@ -62,6 +48,41 @@ export class StagedEditsCache {
       this.store.delete(key)
     }
     this.store.set(key, snapshot(edit))
+    this.evictOverflow()
+  }
+
+  /**
+   * Bound the cache independently of the browser.
+   *
+   * This cache previously had NO cap, relying entirely on the browser mirroring
+   * its own 500-entry FIFO eviction. That mirror is two separate channel sends
+   * (syncAdd then syncRemove); if the tab closes, reloads, or the socket drops
+   * between them, the server never learns of the eviction and the orphan is
+   * permanent — `mergeFullSync` cannot heal it, because it only adds and
+   * updates keys present in the payload and never deletes absent ones (an empty
+   * sync is deliberately a no-op so a rehydrating tab cannot wipe a peer's
+   * edits).
+   *
+   * Dedupe used to hide this: repeated style edits at one locus collapse onto a
+   * single key, so the store grew slowly. Structural intents are exempt by
+   * design — every drag is a new permanent key — so the leak compounds fastest
+   * on exactly the traffic this change introduces. Raised in architecture
+   * review.
+   *
+   * Cap is MAX_FULL_SYNC_SIZE: the server already refuses to ingest a sync
+   * larger than this, so holding more than it would accept is incoherent.
+   * Eviction is oldest-first, matching the browser's FIFO.
+   */
+  private evictOverflow(): void {
+    while (this.store.size > MAX_FULL_SYNC_SIZE) {
+      const oldest = this.store.keys().next()
+      if (oldest.done) return
+      this.store.delete(oldest.value)
+      console.warn(
+        `[cortex] StagedEditsCache evicted oldest intent (cap ${MAX_FULL_SYNC_SIZE}) — ` +
+        'the browser buffer is the canonical store; this bound exists so a lost eviction sync cannot leak indefinitely',
+      )
+    }
   }
 
   /**
@@ -125,6 +146,7 @@ export class StagedEditsCache {
         this.store.set(key, snapshot(edit))
       }
     }
+    this.evictOverflow()
   }
 
   /** Empty the cache. */

@@ -115,6 +115,25 @@ const sourceResolutionHintSchema = z.object({
  * `source` (on the base) identifies the element being moved; `parentSource`
  * identifies the container whose children are being reordered. Both are carried
  * for the agent's benefit — it needs to find the JSX, not just the indices.
+ *
+ * ## Known limitation: DOM index is not always a JSX child slot
+ *
+ * These indices are computed in the BROWSER against live DOM; the agent edits
+ * SOURCE. The two correspond only when each JSX child renders exactly one
+ * element. They diverge for conditional children, fragments, and components
+ * that return multiple roots. Concretely, for parent JSX
+ * `[A, {flag && <B/>}, C, D]` with `flag === false`, the live DOM has three
+ * element children `[A, C, D]`, so dragging D reports "position 2 → 0" while
+ * counting raw JSX children would move C.
+ *
+ * `sourceResolutionHint` identifies the MOVED element but says nothing about
+ * the destination's neighbours, so it does not close this gap. The agent must
+ * therefore treat the indices as a description of the INTENDED RESULT — the
+ * observable order the user asked for — and verify against the source it reads,
+ * rather than applying them as raw JSX offsets. The `needs-source-edit` reason
+ * in staged-edits.ts states this. Raised in architecture review and recorded
+ * rather than silently assumed; it is the first thing to revisit when the move
+ * gesture lands a producer.
  */
 export const structuralIntentSchema = z.object({
   op: z.literal('move'),
@@ -181,9 +200,24 @@ export const structuralEditSchema = z.object({
  */
 const withDefaultKind = (value: unknown): unknown => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
-  const record = value as Record<string, unknown>
-  if (record.kind === undefined) return { ...record, kind: 'style' }
-  return value
+  try {
+    // Reading a property invokes accessors, and spreading does too. An object
+    // with a throwing `kind` getter would propagate synchronously out of
+    // safeParse — breaking zod's never-throws contract and this function's own
+    // promise to pass odd input through. Not reachable from today's callers
+    // (every one feeds JSON.parse output, and JSON cannot encode accessors),
+    // but a landmine for any future in-process caller.
+    const record = value as Record<string, unknown>
+    if (record.kind === undefined) return { ...record, kind: 'style' }
+    return value
+  } catch {
+    // Returning the original value here would NOT be safe: the discriminated
+    // union reads `.kind` itself, so the same accessor would throw again,
+    // uncaught. Hand back an object whose discriminator is readable and
+    // invalid, so validation fails cleanly with "invalid discriminator" instead
+    // of propagating out of safeParse.
+    return { kind: '__unreadable__' }
+  }
 }
 
 export const pendingEditSchema = z.preprocess(

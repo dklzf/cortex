@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'preact/hooks'
 import { isStructuralEdit } from '../../schemas/pending-edit.js'
+import { compositeKey } from '../../shared/composite-key.js'
 import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
 
@@ -81,19 +82,6 @@ export interface StagingBufferHandle {
 
 const MAX_ENTRIES = 500
 
-/** Composite key for last-write-wins deduplication.
- *
- *  Must stay in lockstep with `StagedEditsCache.compositeKey` in
- *  core/staged-edits.ts — the server merges this buffer's full-state sync by
- *  the same key, so a divergence would silently drop or duplicate entries.
- *
- *  STRUCTURAL intents key on their unique intentId so they are never collapsed
- *  (B2): a move log is ordered ("A before B, then B before C"), and folding it
- *  by locus destroys the sequence the agent replays. */
-function compositeKey(edit: PendingEdit): string {
-  if (isStructuralEdit(edit)) return `structural\0${edit.intentId}`
-  return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
-}
 
 /** Default reader used when no `readSourceValue` callback is provided.
  *  Inline-style first (skipped for pseudo-elements, which have none), then

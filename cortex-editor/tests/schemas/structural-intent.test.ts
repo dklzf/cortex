@@ -132,3 +132,40 @@ describe('the move log survives the staging buffer', () => {
     expect((list[0] as { value: string }).value).toBe('green')
   })
 })
+
+describe('review findings — hardening', () => {
+  it('does not throw when `kind` is a throwing getter', () => {
+    // safeParse must never throw. Reading `.kind` invokes accessors, and this
+    // propagated synchronously out of parseOrFail into the dev-server hot
+    // handler. Not reachable from JSON callers, but the contract is the point.
+    const hostile = {
+      ...style(),
+      get kind(): string { throw new Error('boom') },
+    }
+    expect(() => pendingEditSchema.safeParse(hostile)).not.toThrow()
+    expect(pendingEditSchema.safeParse(hostile).success).toBe(false)
+  })
+
+  it.each([[null], [[]], ['a string'], [42]])('passes non-object input %s through without throwing', (input) => {
+    expect(() => pendingEditSchema.safeParse(input)).not.toThrow()
+    expect(pendingEditSchema.safeParse(input).success).toBe(false)
+  })
+
+  it('bounds the server cache so a lost eviction sync cannot leak forever', () => {
+    // The cache had NO cap and relied on the browser mirroring its own FIFO
+    // eviction across two separate channel sends. Structural intents never
+    // collapse under dedupe, so every drag is a permanent key — the leak
+    // compounds fastest on exactly this traffic.
+    const cache = new StagedEditsCache()
+    for (let i = 0; i < 1200; i++) {
+      const id = `${i.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`
+      cache.append(pendingEditSchema.parse(
+        structural({ intentId: id, structural: { op: 'move', parentSource: 'src/App.tsx:10:2', fromIndex: 0, toIndex: 1 }, timestamp: i }),
+      ) as never)
+    }
+    expect(cache.list().length).toBeLessThanOrEqual(1000)
+    // Oldest-first eviction: the most recent intents must survive.
+    const kept = cache.list() as Array<{ timestamp: number }>
+    expect(Math.max(...kept.map(e => e.timestamp))).toBe(1199)
+  })
+})
