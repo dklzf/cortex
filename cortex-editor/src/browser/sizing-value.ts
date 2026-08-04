@@ -33,9 +33,32 @@
  * also ~3,000x cheaper than walking (0.0045ms for a 17-property snapshot vs
  * 13.5ms for a filtered walk over a real Tailwind + Bootstrap page).
  *
- * Firefox 148 does not implement it, so we fall back to the used value there.
- * That fallback is lossy by construction: on Firefox a `100%` element still
- * reports a pixel length and classifies as Fixed. Stated rather than hidden.
+ * ## Known limitations, stated rather than hidden
+ *
+ * **1. Units do not survive.** Typed OM returns the COMPUTED value, and
+ * computed-value time absolutises lengths. Measured in Chromium 147:
+ * `20rem` -> `320px`, `50vw` -> `640px`, `10em` -> `160px`. So a rem- or
+ * token-authored width is indistinguishable from a hand-written pixel width: it
+ * reports Fixed, and editing it writes px and breaks the linkage. Percentages
+ * and keywords DO survive, which is what makes mode detection work at all.
+ * Recovering the original unit needs the SPECIFIED value — a cascade walk —
+ * which is out of scope (plan §9b).
+ *
+ * **2. Where Typed OM is unavailable, the mode is unknowable and we say Fixed.**
+ * That applies on Firefox 148 (no `computedStyleMap`) and to pseudo-elements
+ * (no pseudo support). Both fall back to the used pixel value, which classifies
+ * as `fixed`, so the pixel input stays enabled — a `::before { width: 50% }`
+ * can still be edited into a fixed pixel width.
+ *
+ * This is a deliberate choice, not an oversight. Classifying the fallback as
+ * `custom` would be more truthful, but `custom` disables the pixel input, which
+ * would remove width editing ENTIRELY on Firefox and for every pseudo-element.
+ * That trades a labelling inaccuracy for the loss of a working feature. Neither
+ * behaviour is a regression — before this module every element reported Fixed
+ * on every engine. Revisit if Firefox ships Typed OM, or if the panel grows a
+ * read-only presentation that can show a mode without enabling its editor.
+ *
+ * Both limitations were raised in external review and consciously deferred.
  */
 
 /**
