@@ -1,0 +1,24 @@
+cortex-editor/src/browser/components/sections/SizingControls.tsx
+  s_5e8694f8230a1e::t_aa57d8f1e94e61 27,205,214
+cortex-editor/src/browser/components/controls/SizingDropdown.tsx
+  s_5e8694f8230a1e::t_aa57d8f1e94e61 8-9,15,42,97
+cortex-editor/src/browser/sizing-value.ts
+  s_5e8694f8230a1e::t_aa57d8f1e94e61 76-86
+  s_5e8694f8230a1e::t_68ab08d96a7a52 75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "461da349dd226f3c8ca4febdedbc298a77cf0024",
+  "prompts": {},
+  "sessions": {
+    "s_5e8694f8230a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87a92ee1-e0d9-47e2-b76d-40e62755ec17",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
