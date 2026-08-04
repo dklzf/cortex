@@ -5,14 +5,14 @@ import { Check, ChevronDown } from '../icons.js'
 
 // Re-exported for existing importers. The type now lives with the classifier
 // that produces it (a pure module a component should not own).
-export type { SizingMode } from '../../sizing-value.js'
-import type { SizingMode } from '../../sizing-value.js'
+export type { SizingMode, SelectableSizingMode } from '../../sizing-value.js'
+import type { SizingMode, SelectableSizingMode } from '../../sizing-value.js'
 
 export interface SizingDropdownProps {
   mode: SizingMode
   minEnabled: boolean
   maxEnabled: boolean
-  onModeChange: (mode: SizingMode) => void
+  onModeChange: (mode: SelectableSizingMode) => void
   onToggleMin: () => void
   onToggleMax: () => void
   dimension?: string
@@ -39,7 +39,7 @@ const MODE_DISPLAY: Record<SizingMode, string> = {
  *  "Make this auto" is not a coherent instruction, and `custom` covers values
  *  (calc(), 50%, clamp()) the panel reports faithfully but has no control for.
  *  Both still render as the trigger label so the current state is never a lie. */
-const MODES: SizingMode[] = ['fixed', 'fit', 'fill']
+const MODES: SelectableSizingMode[] = ['fixed', 'fit', 'fill']
 
 /**
  * Purpose-built dropdown for dimension sizing modes.
@@ -94,7 +94,7 @@ export function SizingDropdown({
   const close = useCallback(() => { setIsOpen(false) }, [])
 
   const handleModeClick = useCallback(
-    (m: SizingMode) => {
+    (m: SelectableSizingMode) => {
       // Selecting the mode that is already active is a no-op, not a write.
       // Without this, any value that merely CLASSIFIES as fill/fit gets silently
       // rewritten to cortex's canonical value by a click the user reads as

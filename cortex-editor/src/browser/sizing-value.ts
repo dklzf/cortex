@@ -73,6 +73,18 @@
 export type SizingMode = 'fixed' | 'fit' | 'fill' | 'auto' | 'custom'
 
 /**
+ * The modes a user can SWITCH TO — a strict subset of {@link SizingMode}.
+ *
+ * Separate type, not just a narrower array, so the invariant is enforced by the
+ * compiler instead of by convention. `SizingControls.handleWidthModeChange`
+ * branches `fit` / `fill` / else-write-pixels; handed `custom` or `auto` it
+ * would take the else branch and pin a pixel width on an element the user never
+ * asked to make fixed. Typing the callback with this makes that unrepresentable
+ * rather than merely unlikely.
+ */
+export type SelectableSizingMode = Extract<SizingMode, 'fixed' | 'fit' | 'fill'>
+
+/**
  * `fill` and `fit` are SELECTABLE modes, so the only values that may map to them
  * are the exact values cortex writes back — `100%` and `fit-content`.
  *

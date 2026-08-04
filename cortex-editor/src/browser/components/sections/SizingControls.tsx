@@ -24,7 +24,7 @@ import type { SectionChange } from './types.js'
 import { NumericInput } from '../controls/NumericInput.js'
 import { SizingDropdown } from '../controls/SizingDropdown.js'
 import { Check, Lock, LockOpen, X } from '../icons.js'
-import type { SizingMode } from '../../sizing-value.js'
+import type { SelectableSizingMode } from '../../sizing-value.js'
 import { classifySizingValue } from '../../sizing-value.js'
 
 export type SizingChange = SectionChange
@@ -202,7 +202,7 @@ export function SizingControls({
   }, [canLockAspect])
 
   // ── Mode change handlers ────────────────────────────────────────
-  const handleWidthModeChange = useCallback((mode: SizingMode) => {
+  const handleWidthModeChange = useCallback((mode: SelectableSizingMode) => {
     if (mode === 'fit') onChange({ property: 'width', value: 'fit-content' })
     else if (mode === 'fill') onChange({ property: 'width', value: '100%' })
     // Switching TO Fixed must pin the element at the size it currently RENDERS.
@@ -211,7 +211,7 @@ export function SizingControls({
     else onChange({ property: 'width', value: `${widthDisplay}px` })
   }, [onChange, widthDisplay])
 
-  const handleHeightModeChange = useCallback((mode: SizingMode) => {
+  const handleHeightModeChange = useCallback((mode: SelectableSizingMode) => {
     if (mode === 'fit') onChange({ property: 'height', value: 'fit-content' })
     else if (mode === 'fill') onChange({ property: 'height', value: '100%' })
     else onChange({ property: 'height', value: `${heightDisplay}px` })
