@@ -32,8 +32,10 @@ describe('LayoutSection', () => {
     gridTemplateRows: 'none',
     gridAutoFlow: 'row',
     justifyItems: 'stretch',
-    width: '320',
-    height: '48',
+    // Units matter: getComputedStyle().width always returns one, so a bare
+    // `320` cannot reach this component. See SizingControls.test.tsx.
+    width: '320px',
+    height: '48px',
     minWidth: '0px',
     maxWidth: 'none',
     minHeight: '0px',
@@ -151,8 +153,8 @@ describe('LayoutSection', () => {
     const group = container.querySelector('[role="radiogroup"]')!
     const options = group.querySelectorAll('[role="radio"]')
     expect(options.length).toBe(5)
-    expect(options[0].textContent).toBe('block')
-    expect(options[4].textContent).toBe('none')
+    expect(options[0]?.textContent).toBe('block')
+    expect(options[4]?.textContent).toBe('none')
   })
 
   it('emits width change with px suffix', () => {
@@ -170,13 +172,15 @@ describe('LayoutSection', () => {
     expect(widthCall![0].value).toBe('400px')
   })
 
-  it('handles auto width gracefully — SizingControls renders with fallback value', () => {
+  // B5: previously asserted `auto` renders as "px". LayoutSection passes
+  // values straight through to SizingControls, so the mode it shows is the
+  // mode SizingControls derives — this is the pass-through half of the same
+  // contract asserted in SizingControls.test.tsx.
+  it('passes auto width through to SizingControls, which reports it as auto', () => {
     setup({ values: { ...DEFAULT_VALUES, width: 'auto' } })
-    const sizingControls = container.querySelector('[data-testid="sizing-controls"]')
-    expect(sizingControls).not.toBeNull()
-    // auto width shows sizing dropdown in 'fixed' mode (px)
+    expect(container.querySelector('[data-testid="sizing-controls"]')).not.toBeNull()
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
-    expect(modeLabels[0]?.textContent).toBe('px')
+    expect(modeLabels[0]?.textContent).toBe('auto')
   })
 
   it('renders sizing dropdown triggers for W and H', () => {

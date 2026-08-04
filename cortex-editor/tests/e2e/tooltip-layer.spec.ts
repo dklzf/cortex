@@ -26,6 +26,23 @@ test('NumericInput tooltip escapes panel-body clipping without Native Popover AP
   // A 600px-tall viewport guarantees the panel overflows regardless.
   await page.setViewportSize({ width: 1280, height: 600 })
   await bootWithSendSpy(page)
+
+  // Give the fixture an explicit pixel width so the W input is genuinely in
+  // Fixed mode and therefore carries the "Width" tooltip this spec hovers.
+  //
+  // This precondition used to hold by accident: the panel derived its sizing
+  // mode from getComputedStyle().width, which is always pixels, so EVERY
+  // element read as Fixed and every W input was enabled. B5 fixed that — the
+  // unstyled fixture now correctly reports `auto`, which disables the input and
+  // swaps its tooltip to "Switch to Fixed (px) to edit dimensions". Nothing
+  // about tooltip clipping changed; this spec was just relying on a bug to
+  // reach the control it wanted.
+  await page.evaluate((selector) => {
+    const el = document.querySelector<HTMLElement>(selector)
+    if (!el) throw new Error(`[test] fixture ${selector} not found`)
+    el.style.setProperty('width', '320px')
+  }, FIXTURE_SEED_SELECTOR)
+
   await selectElement(page, FIXTURE_SEED_SELECTOR)
   await waitForElementStatePanel(page)
 

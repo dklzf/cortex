@@ -3,13 +3,16 @@ import { useState, useRef, useCallback, useEffect } from 'preact/hooks'
 import { computePosition, flip, shift } from '@floating-ui/dom'
 import { Check, ChevronDown } from '../icons.js'
 
-export type SizingMode = 'fixed' | 'fit' | 'fill'
+// Re-exported for existing importers. The type now lives with the classifier
+// that produces it (a pure module a component should not own).
+export type { SizingMode, SelectableSizingMode } from '../../sizing-value.js'
+import type { SizingMode, SelectableSizingMode } from '../../sizing-value.js'
 
 export interface SizingDropdownProps {
   mode: SizingMode
   minEnabled: boolean
   maxEnabled: boolean
-  onModeChange: (mode: SizingMode) => void
+  onModeChange: (mode: SelectableSizingMode) => void
   onToggleMin: () => void
   onToggleMax: () => void
   dimension?: string
@@ -19,15 +22,24 @@ const MODE_LABELS: Record<SizingMode, string> = {
   fixed: 'px',
   fit: 'fit',
   fill: 'fill',
+  auto: 'auto',
+  custom: 'custom',
 }
 
 const MODE_DISPLAY: Record<SizingMode, string> = {
   fixed: 'Fixed (px)',
   fit: 'Fit contents',
   fill: 'Fill container',
+  auto: 'Auto (browser decides)',
+  custom: 'Custom value',
 }
 
-const MODES: SizingMode[] = ['fixed', 'fit', 'fill']
+/** Modes a user can SELECT. Deliberately narrower than SizingMode: `auto` and
+ *  `custom` are states an element can be IN but not states you can switch TO.
+ *  "Make this auto" is not a coherent instruction, and `custom` covers values
+ *  (calc(), 50%, clamp()) the panel reports faithfully but has no control for.
+ *  Both still render as the trigger label so the current state is never a lie. */
+const MODES: SelectableSizingMode[] = ['fixed', 'fit', 'fill']
 
 /**
  * Purpose-built dropdown for dimension sizing modes.
@@ -82,11 +94,18 @@ export function SizingDropdown({
   const close = useCallback(() => { setIsOpen(false) }, [])
 
   const handleModeClick = useCallback(
-    (m: SizingMode) => {
+    (m: SelectableSizingMode) => {
+      // Selecting the mode that is already active is a no-op, not a write.
+      // Without this, any value that merely CLASSIFIES as fill/fit gets silently
+      // rewritten to cortex's canonical value by a click the user reads as
+      // "confirm what's already selected". classifySizingValue now maps only
+      // exact matches to selectable modes, so this is belt-and-braces — but it
+      // is the invariant that makes adding a new classification safe.
+      if (m === mode) { close(); return }
       onModeChange(m)
       close()
     },
-    [onModeChange, close],
+    [onModeChange, close, mode],
   )
 
   const handleKeyDown = useCallback(
