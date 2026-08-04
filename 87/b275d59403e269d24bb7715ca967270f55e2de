@@ -1,0 +1,31 @@
+cortex-editor/src/browser/components/sections/SizingControls.tsx
+  s_5e8694f8230a1e::t_c30eaf0dfcc144 92-93
+cortex-editor/src/browser/sizing-value.ts
+  s_5e8694f8230a1e::t_68c4e20c405c08 152-160
+  s_5e8694f8230a1e::t_36844af3a865bb 216,218-222,224-252
+  s_5e8694f8230a1e::t_c30eaf0dfcc144 150-151,170-174
+cortex-editor/tests/e2e/panel-sizing-mode.spec.ts
+  s_5e8694f8230a1e::t_e1d9f1850db5ba 41-49,175-228
+  s_5e8694f8230a1e::t_a7db561b22e3b3 229
+cortex-editor/tests/browser/sizing-value.test.ts
+  s_5e8694f8230a1e::t_215ed100a8969c 2,169-204
+cortex-editor/src/browser/components/panel-style-snapshot.ts
+  s_5e8694f8230a1e::t_8ab6a9b5855778 27,129-137,140-141,249-257
+  s_5e8694f8230a1e::t_416f629033bc7d 258-259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "87b275d59403e269d24bb7715ca967270f55e2de",
+  "prompts": {},
+  "sessions": {
+    "s_5e8694f8230a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87a92ee1-e0d9-47e2-b76d-40e62755ec17",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
