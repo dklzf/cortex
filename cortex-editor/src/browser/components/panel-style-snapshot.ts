@@ -24,7 +24,7 @@ import { parseEffectsValues } from './sections/EffectsSection.js'
 import { parsePositionValues } from './sections/PositionSection.js'
 import { parseAppearanceValues } from './sections/AppearanceSection.js'
 import { parseSpacingValues, ALL_DIMMING_PROPERTIES } from './sections/spacing-utils.js'
-import { readAuthoredSize } from '../sizing-value.js'
+import { readComputedSize, usedPixelSize } from '../sizing-value.js'
 
 /** CSS the box model gives you that SVG GEOMETRY simply does not implement.
  *
@@ -126,10 +126,10 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   // W/H field for a non-fixed element, and the width to seed when the user
   // switches that element TO Fixed. Dropping it made "switch to Fixed" write
   // `0px` and collapse the element.
-  layout.widthUsed = layout.width
-  layout.heightUsed = layout.height
-  layout.width = readAuthoredSize(element, 'width', pseudo)
-  layout.height = readAuthoredSize(element, 'height', pseudo)
+  layout.widthUsed = usedPixelSize(element, layout.width, 'width', pseudo)
+  layout.heightUsed = usedPixelSize(element, layout.height, 'height', pseudo)
+  layout.width = readComputedSize(element, 'width', pseudo)
+  layout.height = readComputedSize(element, 'height', pseudo)
   // Cortex's own staged override still wins: it is the value the user just
   // asked for and has not yet been applied to source, so it is more current
   // than anything the cascade can report. This special case predates the Typed

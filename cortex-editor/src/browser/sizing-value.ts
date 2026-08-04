@@ -49,14 +49,51 @@
  */
 export type SizingMode = 'fixed' | 'fit' | 'fill' | 'auto' | 'custom'
 
-/** Values that mean "take the space my parent gives me". */
-const FILL_KEYWORDS = new Set(['100%', 'stretch', '-webkit-fill-available'])
+/**
+ * `fill` and `fit` are SELECTABLE modes, so the only values that may map to them
+ * are the exact values cortex writes back — `100%` and `fit-content`.
+ *
+ * This is narrower than "values that mean roughly this", deliberately. Selecting
+ * an already-active mode fires an unconditional write, so any value folded in
+ * here is silently rewritten to the canonical one the moment the user clicks the
+ * mode that is already showing:
+ *
+ *   - `stretch` sizes the MARGIN box; `100%` sizes the content box. Folding them
+ *     together turned a 200px content-box child with 20px padding and 5px
+ *     borders into a 250px overflowing one, from a click that looked like a
+ *     no-op. (css-sizing-4 §stretch-fit-sizing)
+ *   - `min-content` and `max-content` are distinct intrinsic sizes, measured at
+ *     33.78px and 93.30px for identical content in Chromium. Folding them into
+ *     `fit` rewrote them to `fit-content`.
+ *
+ * Everything else that means "fill-ish" or "fit-ish" classifies as `custom`:
+ * reported faithfully, never silently rewritten. Verified in Chromium 147 —
+ * Typed OM returns `stretch`, `min-content` and `max-content` verbatim, so they
+ * genuinely do reach this function.
+ */
+const FILL_VALUE = '100%'
+const FIT_VALUE = 'fit-content'
 
-/** Prefixes that mean "size to my content". `fit-content(<len>)` is included. */
-const FIT_PREFIXES = ['fit-content', 'max-content', 'min-content']
+/** A CSS <length> in px, including the scientific notation Chromium emits for
+ *  large values (`width: 1000000px` serialises as `1e+06px`). */
+const PX_LENGTH = /^-?(?:\d*\.?\d+|\d*\.?\d+e[+-]?\d+)px$/
 
 /**
- * Read an element's authored (computed) size for one axis.
+ * Read an element's COMPUTED size for one axis.
+ *
+ * Computed, not authored — the distinction is load-bearing and this function was
+ * originally misnamed `readAuthoredSize`. Computed-value time absolutises
+ * lengths, so the original unit does not survive: measured in Chromium 147,
+ * `width: 20rem` comes back `320px`, `50vw` comes back `640px`, `10em` comes
+ * back `160px`. Percentages and keywords DO survive (`100%`, `stretch`,
+ * `min-content`), which is what makes mode detection possible at all.
+ *
+ * Consequence, stated rather than implied: a token- or rem-authored width is
+ * indistinguishable from a hand-written pixel width, so it reports `fixed` and
+ * editing it writes px, breaking the unit linkage. Recovering unit provenance
+ * needs the specified value (a cascade walk), which is out of scope here — see
+ * the plan's §9b B5 scope note. This is pre-existing behaviour, not a
+ * regression: before this module every element reported `fixed`.
  *
  * Falls back to the used pixel value — which cannot express a mode — when:
  *   - the engine lacks Typed OM (Firefox)
@@ -70,7 +107,7 @@ const FIT_PREFIXES = ['fit-content', 'max-content', 'min-content']
  * `fixed`, which on Firefox is the pre-existing behaviour rather than a
  * regression.
  */
-export function readAuthoredSize(
+export function readComputedSize(
   element: Element,
   axis: 'width' | 'height',
   pseudo?: string,
@@ -84,10 +121,12 @@ export function readAuthoredSize(
   // and labelling it as the pseudo's size would be worse than the used value.
   if (pseudo) return used()
 
-  const withTypedOM = element as Element & { computedStyleMap?: () => { get(p: string): unknown } }
-  if (typeof withTypedOM.computedStyleMap !== 'function') return used()
-
   try {
+    // Feature detection lives INSIDE the try: reading the property can itself
+    // throw on an element with a throwing accessor, and a panel read must never
+    // be able to take the panel down.
+    const withTypedOM = element as Element & { computedStyleMap?: () => { get(p: string): unknown } }
+    if (typeof withTypedOM.computedStyleMap !== 'function') return used()
     const value = withTypedOM.computedStyleMap().get(axis)
     if (value === undefined || value === null) return used()
     return String(value)
@@ -115,25 +154,51 @@ export function classifySizingValue(value: string): SizingMode {
   // An absent value is not a fixed size. Treated as `auto`, the CSS initial.
   if (v === '' || v === 'auto') return 'auto'
 
-  if (FILL_KEYWORDS.has(v)) return 'fill'
-  if (FIT_PREFIXES.some(p => v === p || v.startsWith(`${p}(`))) return 'fit'
+  if (v === FILL_VALUE) return 'fill'
+  if (v === FIT_VALUE) return 'fit'
 
   // A length, and only a length. `50%` and `100vw` deliberately fail this —
   // parseFloat would accept both and report them as pixel counts.
-  if (v.endsWith('px')) {
-    const n = Number.parseFloat(v)
-    if (Number.isFinite(n) && `${n}px` === v) return 'fixed'
-    // Tolerate serialisation differences (e.g. `12.50px`) without accepting
-    // anything that merely starts with a number.
-    if (Number.isFinite(n) && /^-?\d*\.?\d+px$/.test(v)) return 'fixed'
-  }
+  if (PX_LENGTH.test(v)) return 'fixed'
 
-  // Percentages, calc(), clamp(), min()/max(), viewport units, and anything
-  // else the panel can display faithfully but cannot offer a control for.
+  // Percentages, calc(), clamp(), min()/max(), stretch, the intrinsic sizes,
+  // and anything else the panel can display faithfully but has no control for.
   return 'custom'
 }
 
 /** True when the panel may offer a numeric pixel input for this mode. */
 export function isEditableAsPixels(mode: SizingMode): boolean {
   return mode === 'fixed'
+}
+
+/**
+ * The element's rendered size in pixels, as a CSS length string.
+ *
+ * `getComputedStyle().width` is the USED value — and therefore a pixel count —
+ * only when `width` actually APPLIES to the element. On a non-replaced inline
+ * box it does not, so the resolved value falls back to the computed one:
+ * `<span style="width:100%">hello world</span>` returns `"100%"` in Chromium
+ * while rendering at 73.33px. Trusting that string put "100" in the panel's W
+ * field and staged `100px` when the user switched the element to Fixed.
+ *
+ * Only in that case do we measure the border-box rect, which is always a real
+ * measurement. The common path returns the computed-style value unchanged so
+ * padded and bordered elements keep reporting the same box they always have.
+ *
+ * @param computed the element's `getComputedStyle()` value for this axis
+ */
+export function usedPixelSize(
+  element: Element,
+  computed: string,
+  axis: 'width' | 'height',
+  pseudo?: string,
+): string {
+  if (PX_LENGTH.test(computed.trim().toLowerCase())) return computed
+  // A pseudo-element has no box of its own to measure — getBoundingClientRect
+  // would return the ORIGINATING element's box, a different thing entirely. Its
+  // computed style is the best answer available even when it is not a length.
+  if (pseudo) return computed
+  if (typeof element.getBoundingClientRect !== 'function') return computed
+  const rect = element.getBoundingClientRect()
+  return `${axis === 'width' ? rect.width : rect.height}px`
 }

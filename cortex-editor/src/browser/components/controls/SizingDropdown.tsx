@@ -95,10 +95,17 @@ export function SizingDropdown({
 
   const handleModeClick = useCallback(
     (m: SizingMode) => {
+      // Selecting the mode that is already active is a no-op, not a write.
+      // Without this, any value that merely CLASSIFIES as fill/fit gets silently
+      // rewritten to cortex's canonical value by a click the user reads as
+      // "confirm what's already selected". classifySizingValue now maps only
+      // exact matches to selectable modes, so this is belt-and-braces — but it
+      // is the invariant that makes adding a new classification safe.
+      if (m === mode) { close(); return }
       onModeChange(m)
       close()
     },
-    [onModeChange, close],
+    [onModeChange, close, mode],
   )
 
   const handleKeyDown = useCallback(

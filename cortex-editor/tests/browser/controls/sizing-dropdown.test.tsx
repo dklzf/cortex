@@ -146,4 +146,35 @@ describe('SizingDropdown', () => {
       expect(getMenu()).toBeNull()
     }, { timeout: 500 })
   })
+
+  it('does not fire onModeChange when the already-active mode is selected', async () => {
+    // A click on the active item reads as "confirm what's selected". If it
+    // writes, any value that merely classifies as fill/fit is silently
+    // rewritten to cortex's canonical value — e.g. `stretch` became `100%`.
+    const onModeChange = vi.fn()
+    render(
+      <SizingDropdown mode="fill" onModeChange={onModeChange} />,
+      container,
+    )
+    ;(container.querySelector('.cortex-sizing-trigger') as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fill"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fill"]') as HTMLElement).click()
+    expect(onModeChange).not.toHaveBeenCalled()
+  })
+
+  it('still fires when a DIFFERENT mode is selected', async () => {
+    const onModeChange = vi.fn()
+    render(
+      <SizingDropdown mode="fill" onModeChange={onModeChange} />,
+      container,
+    )
+    ;(container.querySelector('.cortex-sizing-trigger') as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fixed"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fixed"]') as HTMLElement).click()
+    expect(onModeChange).toHaveBeenCalledWith('fixed')
+  })
 })
