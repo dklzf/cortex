@@ -254,7 +254,16 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
     let elBySource: Map<string, Element> | null = null
 
     for (const edit of bufferRef.current.values()) {
-      if (!changedSet.has(stripLineCol(edit.source))) continue
+      // A structural intent also has to be re-checked when its CONTAINER's
+      // file changes, not only its own. The child and the parent frequently
+      // live in different files — `List.tsx` renders rows defined in
+      // `Card.tsx` — so filtering on `edit.source` alone means an edit to the
+      // list never revalidates the reorder staged inside it, and a stale intent
+      // reorders whatever is there now. Caught in review.
+      const watched = isStructuralEdit(edit)
+        ? [edit.source, edit.structural.parentSource]
+        : [edit.source]
+      if (!watched.some(src => changedSet.has(stripLineCol(src)))) continue
 
       if (elBySource === null) {
         elBySource = new Map()

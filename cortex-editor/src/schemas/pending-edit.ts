@@ -197,8 +197,10 @@ const intentBase = {
  * A style intent — one CSS property/value pair at one locus. The original and
  * still overwhelmingly common shape.
  *
- * `kind` is OPTIONAL and defaults to 'style' on read, so every intent written
- * by an older browser bundle continues to validate unchanged. New structural
+ * `kind` is REQUIRED on this schema but optional ON THE WIRE: `withDefaultKind`
+ * normalises a missing `kind` to 'style' before the union discriminates, so
+ * every intent written by an older browser bundle continues to validate
+ * unchanged while in-repo producers still get compile-time enforcement. New structural
  * intents carry `kind: 'structural'` explicitly, which an older MCP server will
  * REJECT at validation rather than silently mis-apply — fail-closed is the
  * correct behaviour for a version skew between the injected bundle and a

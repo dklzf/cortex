@@ -96,10 +96,15 @@ describe('structural intent — schema', () => {
 })
 
 describe('back-compat — style intents are unchanged on the wire', () => {
-  it('accepts a style intent with NO kind field, as older bundles send', () => {
+  it('accepts a style intent with NO kind field and NORMALISES it to "style"', () => {
+    // Asserting `!isStructuralEdit` alone would also pass if `kind` came back
+    // undefined, which is the bug this normalisation exists to prevent.
     const parsed = pendingEditSchema.safeParse(style())
     expect(parsed.success).toBe(true)
-    if (parsed.success) expect(isStructuralEdit(parsed.data)).toBe(false)
+    if (parsed.success) {
+      expect(parsed.data.kind).toBe('style')
+      expect(isStructuralEdit(parsed.data)).toBe(false)
+    }
   })
 
   it('still rejects a bad timestamp at path "timestamp", not inside a union blob', () => {
