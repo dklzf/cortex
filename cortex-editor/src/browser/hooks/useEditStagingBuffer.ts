@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'preact/hooks'
+import { isStructuralEdit } from '../../schemas/pending-edit.js'
+import { compositeKey } from '../../shared/composite-key.js'
 import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
 
@@ -80,10 +82,6 @@ export interface StagingBufferHandle {
 
 const MAX_ENTRIES = 500
 
-/** Composite key for last-write-wins deduplication. */
-function compositeKey(edit: PendingEdit): string {
-  return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
-}
 
 /** Default reader used when no `readSourceValue` callback is provided.
  *  Inline-style first (skipped for pseudo-elements, which have none), then
@@ -184,7 +182,7 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         console.warn(
           '[cortex] Staging buffer evicted oldest intent (max 500):',
           evicted.source,
-          evicted.property,
+          isStructuralEdit(evicted) ? `${evicted.structural.op} ${evicted.structural.parentSource}` : evicted.property,
         )
       }
     }
@@ -256,7 +254,16 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
     let elBySource: Map<string, Element> | null = null
 
     for (const edit of bufferRef.current.values()) {
-      if (!changedSet.has(stripLineCol(edit.source))) continue
+      // A structural intent also has to be re-checked when its CONTAINER's
+      // file changes, not only its own. The child and the parent frequently
+      // live in different files — `List.tsx` renders rows defined in
+      // `Card.tsx` — so filtering on `edit.source` alone means an edit to the
+      // list never revalidates the reorder staged inside it, and a stale intent
+      // reorders whatever is there now. Caught in review.
+      const watched = isStructuralEdit(edit)
+        ? [edit.source, edit.structural.parentSource]
+        : [edit.source]
+      if (!watched.some(src => changedSet.has(stripLineCol(src)))) continue
 
       if (elBySource === null) {
         elBySource = new Map()
@@ -288,6 +295,25 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
       if (!el) {
         // Element does not exist — file deleted/refactored
         divergent.push(edit)
+        continue
+      }
+
+      // Divergence for a STRUCTURAL intent asks a different question — not
+      // "has this property changed under me" but "does the tree I described
+      // still exist". The intent carries the children it saw at capture, so the
+      // answer is a direct comparison. External review flagged that skipping
+      // this let a stale intent reorder whatever happened to be there: if
+      // another file inserts a sibling, an untouched intent still looks clean
+      // and moves the WRONG element.
+      if (isStructuralEdit(edit)) {
+        const parent = el.parentElement
+        const live = parent
+          ? Array.from(parent.children).map(c => c.getAttribute('data-cortex-source') ?? '')
+          : []
+        const { baseline } = edit.structural
+        const drifted = live.length !== baseline.length
+          || baseline.some((source, i) => live[i] !== source)
+        if (drifted) divergent.push(edit)
         continue
       }
 

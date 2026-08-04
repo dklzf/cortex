@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PendingEdit } from '../adapters/types.js'
-import { pendingEditSchema, MAX_FULL_SYNC_SIZE } from '../schemas/pending-edit.js'
+import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
+import { compositeKey } from '../shared/composite-key.js'
 import { isPreviewSource } from '../shared/preview-source.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
@@ -8,10 +9,6 @@ import type { EditPipeline } from './edit-pipeline.js'
 // (kept there so the schema can enforce the cap at the envelope boundary
 // without an upward import from schemas/ to core/). Re-imported above.
 
-/** Composite key for last-write-wins deduplication — matches browser hook semantics. */
-function compositeKey(edit: PendingEdit): string {
-  return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
-}
 
 /** Defensive snapshot of a PendingEdit — callers mutating the returned object
  *  cannot affect the cache's internal state. structuredClone makes this
@@ -51,6 +48,41 @@ export class StagedEditsCache {
       this.store.delete(key)
     }
     this.store.set(key, snapshot(edit))
+    this.evictOverflow()
+  }
+
+  /**
+   * Bound the cache independently of the browser.
+   *
+   * This cache previously had NO cap, relying entirely on the browser mirroring
+   * its own 500-entry FIFO eviction. That mirror is two separate channel sends
+   * (syncAdd then syncRemove); if the tab closes, reloads, or the socket drops
+   * between them, the server never learns of the eviction and the orphan is
+   * permanent — `mergeFullSync` cannot heal it, because it only adds and
+   * updates keys present in the payload and never deletes absent ones (an empty
+   * sync is deliberately a no-op so a rehydrating tab cannot wipe a peer's
+   * edits).
+   *
+   * Dedupe used to hide this: repeated style edits at one locus collapse onto a
+   * single key, so the store grew slowly. Structural intents are exempt by
+   * design — every drag is a new permanent key — so the leak compounds fastest
+   * on exactly the traffic this change introduces. Raised in architecture
+   * review.
+   *
+   * Cap is MAX_FULL_SYNC_SIZE: the server already refuses to ingest a sync
+   * larger than this, so holding more than it would accept is incoherent.
+   * Eviction is oldest-first, matching the browser's FIFO.
+   */
+  private evictOverflow(): void {
+    while (this.store.size > MAX_FULL_SYNC_SIZE) {
+      const oldest = this.store.keys().next()
+      if (oldest.done) return
+      this.store.delete(oldest.value)
+      console.warn(
+        `[cortex] StagedEditsCache evicted oldest intent (cap ${MAX_FULL_SYNC_SIZE}) — ` +
+        'the browser buffer is the canonical store; this bound exists so a lost eviction sync cannot leak indefinitely',
+      )
+    }
   }
 
   /**
@@ -114,6 +146,7 @@ export class StagedEditsCache {
         this.store.set(key, snapshot(edit))
       }
     }
+    this.evictOverflow()
   }
 
   /** Empty the cache. */
@@ -244,6 +277,42 @@ async function applyOne(
   const intent = cache.getById(intentId)
   if (!intent) {
     return { intentId, status: 'failed' as const, error: 'intent not found' }
+  }
+
+  // Structural intents have no deterministic path by construction (B2). The
+  // schema already forces applyMode 'agent-resolve', so they would fall into
+  // the branch below anyway — but the generic message does not say "this is a
+  // move", and the difference matters: the mechanizable edit here is
+  // `style={{ order: N }}`, which changes visual order WITHOUT changing DOM
+  // order and silently breaks screen-reader sequence and tab order. Spelling
+  // that out is the difference between Claude reordering the JSX and Claude
+  // reaching for the CSS property that looks equivalent.
+  //
+  // Placed before the agent-resolve check so it wins, and so TypeScript narrows
+  // the remainder of this function to style intents.
+  if (isStructuralEdit(intent)) {
+    const { parentSource, parentKey, baseline, order } = intent.structural
+    const described = order.map((from, to) => `${to} <- ${from} (${baseline[from] ?? '?'})`).join(', ')
+    return {
+      intentId,
+      status: 'needs-source-edit' as const,
+      intent,
+      reason:
+        `Structural reorder: the container at ${parentSource} (runtime instance ${parentKey}) ` +
+        `must end up with its children in this order — ${described}. Indices refer to the ` +
+        `children's positions BEFORE the edit; the list describes the intended RESULT, not a ` +
+        `sequence of moves, so apply it as a whole.\n\n` +
+        `Children as observed when the user dragged: ${baseline.join(', ')}. If the source no ` +
+        `longer matches that, stop and report the drift rather than reordering what is there.\n\n` +
+        `Reorder the SOURCE so the DOM order changes. If those children are rendered by a ` +
+        `.map(), reorder the underlying array — the siblings share one source location, so ` +
+        `editing the JSX cannot move a single instance. If they are hand-authored siblings, ` +
+        `reorder the JSX elements.\n\n` +
+        `Do NOT express this with CSS 'order', 'flex-direction: *-reverse', or absolute ` +
+        `positioning. Those change visual order only; the accessibility tree and tab order ` +
+        `keep following the original DOM sequence, which is a real regression that looks ` +
+        `correct in a screenshot.`,
+    }
   }
 
   if (isAgentResolvedIntent(intent)) {
