@@ -25,6 +25,8 @@ const FIXTURE = `<!doctype html><body style="margin:0">
     <div id="centerChild" style="width:200px;height:40px"></div></div>
   <div id="growWrap" style="display:flex;width:600px">
     <div id="growChild" style="flex:1;width:200px;height:40px"></div></div>
+  <div id="rtlWrap" style="display:flex;direction:rtl;justify-content:flex-start;width:600px">
+    <div id="rtlChild" style="width:200px;height:40px"></div></div>
   <div id="gridWrap" style="display:grid;grid-template-columns:1fr 1fr;width:600px">
     <div id="gridChild" style="height:40px"></div><div id="gridSibling" style="height:40px"></div></div>
 </body>`
@@ -118,4 +120,17 @@ test('SHRINKING a grid item is inert — the track holds and nothing moves', asy
   expect(after.width).toBeCloseTo(250, 0)
   expect(siblingAfter.left).toBeCloseTo(siblingBefore.left, 0)
   expect(siblingAfter.width).toBeCloseTo(siblingBefore.width, 0)
+})
+
+test('an RTL row is start-anchored on the RIGHT, so the right edge is pinned', async ({ page }) => {
+  // `direction: rtl` inverts the inline axis, so a start-anchored box grows
+  // LEFTWARD. Missing this is silent — the drag still appears to work, just in
+  // the wrong direction — which is why it is measured rather than reasoned about.
+  const before = await measure(page, 'rtlChild')
+  await growBy50(page, 'rtlChild')
+  const after = await measure(page, 'rtlChild')
+
+  expect(after.width).toBeCloseTo(before.width + 50, 0)
+  expect(after.right - before.right).toBeCloseTo(0, 0)
+  expect(before.left - after.left).toBeCloseTo(50, 0)
 })

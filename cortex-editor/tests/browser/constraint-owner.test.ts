@@ -126,6 +126,21 @@ describe('alignment — the size is the element’s, but the edge may not move',
     expect(resolveConstraintOwner(child, 'left').edgeResponse).toBe(1)
   })
 
+  it('flips the pinned edge in an RTL row, where inline-start is the RIGHT edge', () => {
+    // RTL inverts the inline axis, so a start-anchored box grows leftward and
+    // its RIGHT edge is the pinned one. Missing this is silent: the drag still
+    // appears to work, just in the wrong direction.
+    const child = mount('display: flex; direction: rtl; justify-content: flex-start', 'width: 200px')
+    expect(resolveConstraintOwner(child, 'right').edgeResponse).toBe(0)
+    expect(resolveConstraintOwner(child, 'left').edgeResponse).toBe(1)
+  })
+
+  it('does NOT let RTL affect a vertical drag — direction is an inline-axis property', () => {
+    const child = mount('display: flex; flex-direction: column; direction: rtl; justify-content: flex-start', 'height: 40px')
+    expect(resolveConstraintOwner(child, 'top').edgeResponse).toBe(0)
+    expect(resolveConstraintOwner(child, 'bottom').edgeResponse).toBe(1)
+  })
+
   it('warns that setting a cross size opts the element out of stretching', () => {
     const child = mount('display: flex; flex-direction: row; align-items: stretch')
     expect(resolveConstraintOwner(child, 'bottom').reason).toMatch(/stretch/i)

@@ -105,6 +105,11 @@ function readStyle(el: Element): CSSStyleDeclaration | null {
  * the start edge moves nothing.
  */
 function edgeResponseFor(distribution: string, edge: ResizeEdge, reversed: boolean): number {
+  // `reversed` folds together the two things that can swap which PHYSICAL edge
+  // is the inline start: `flex-direction: *-reverse` and an RTL writing mode.
+  // The caller computes it from both, because either alone inverts every drag
+  // in that container — and getting it wrong is silent, since the gesture still
+  // "works", just in the wrong direction.
   const startEdge: ResizeEdge = INLINE_EDGES.has(edge)
     ? (reversed ? 'right' : 'left')
     : (reversed ? 'bottom' : 'top')
@@ -164,10 +169,13 @@ export function resolveConstraintOwner(element: Element, edge: ResizeEdge): Cons
   const isGrid = display === 'grid' || display === 'inline-grid'
 
   // ── Grid ────────────────────────────────────────────────────────────────
-  // The item's size is allocated by the TRACK. Writing `width` on the item does
-  // change the item — measured 300 → 350 — but the track stays 300, so the item
-  // overflows its cell and the sibling never reflows. The user sees motion and
-  // a broken layout, which is why this is not simply "the edit is ignored".
+  // The item's size is allocated by the TRACK, and the naive edit is wrong in
+  // BOTH directions, differently. `1fr` is `minmax(auto, 1fr)`, so the auto
+  // minimum means the track cannot be smaller than the item: growing forces the
+  // track wider and takes width from the sibling (measured, tracks
+  // `300px 300px` → `350px 250px`), while shrinking leaves the track at 300px so
+  // the item shrinks inside it and nothing visibly moves. Surprising one way,
+  // inert the other — never what the user asked for.
   if (isGrid) {
     return {
       target: 'grid-track',
@@ -186,7 +194,11 @@ export function resolveConstraintOwner(element: Element, edge: ResizeEdge): Cons
   // ── Flex ────────────────────────────────────────────────────────────────
   if (isFlex) {
     const direction = parentStyle.flexDirection || 'row'
-    const reversed = direction.endsWith('-reverse')
+    // RTL flips the inline axis, so an RTL row is start-anchored on the RIGHT.
+    // Only the INLINE axis is affected — `direction` says nothing about block
+    // flow — so it must not be folded in for a vertical drag. Raised in review.
+    const rtl = inline && parentStyle.direction === 'rtl'
+    const reversed = direction.endsWith('-reverse') !== rtl
     const mainIsInline = direction.startsWith('row')
     const draggingMainAxis = mainIsInline === inline
 
