@@ -150,6 +150,19 @@ describe('classifySizingValue', () => {
     expect(classifySizingValue(value)).toBe(expected)
   })
 
+  it.each([['1e300px'], ['999999999px'], ['-1e300px']])(
+    'refuses an absurd magnitude (%s) rather than seeding it into an edit',
+    (value) => {
+      // These reach us from a page cortex does not control, via prototype
+      // methods that page can override.
+      expect(classifySizingValue(value)).toBe('custom')
+    },
+  )
+
+  it('still accepts a large but plausible layout value', () => {
+    expect(classifySizingValue('50000px')).toBe('fixed')
+  })
+
   it('does not report a percentage as a pixel length', () => {
     // Regression guard: parseFloat('50%') === 50, so a naive implementation
     // renders "50 px" for an element that is half its parent's width.

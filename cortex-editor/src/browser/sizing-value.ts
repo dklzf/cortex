@@ -45,7 +45,9 @@
  * which is out of scope (plan §9b).
  *
  * **2. Where Typed OM is unavailable, the mode is unknowable and we say Fixed.**
- * That applies on Firefox 148 (no `computedStyleMap`) and to pseudo-elements
+ * That applies on any engine without `computedStyleMap` — Firefox 148 AND
+ * WebKit/Safari, which has never shipped it, so this is two of the three major
+ * engines rather than one; the earlier framing understated it — and to pseudo-elements
  * (no pseudo support). Both fall back to the used pixel value, which classifies
  * as `fixed`, so the pixel input stays enabled — a `::before { width: 50% }`
  * can still be edited into a fixed pixel width.
@@ -120,7 +122,10 @@ const PX_LENGTH = /^-?(?:\d*\.?\d+|\d*\.?\d+e[+-]?\d+)px$/
  * originally misnamed `readAuthoredSize`. Computed-value time absolutises
  * lengths, so the original unit does not survive: measured in Chromium 147,
  * `width: 20rem` comes back `320px`, `50vw` comes back `640px`, `10em` comes
- * back `160px`. Percentages and keywords DO survive (`100%`, `stretch`,
+ * back `160px`. So viewport and font-relative units reach `classifySizingValue`
+ * as plain pixel strings and report `fixed` — the `custom` bucket never sees
+ * them in practice, and its `100vw` test case documents the classifier's
+ * behaviour on an input the real pipeline cannot deliver. Percentages and keywords DO survive (`100%`, `stretch`,
  * `min-content`), which is what makes mode detection possible at all.
  *
  * Consequence, stated rather than implied: a token- or rem-authored width is
@@ -205,7 +210,17 @@ export function classifySizingValue(value: string): SizingMode {
 
   // A length, and only a length. `50%` and `100vw` deliberately fail this —
   // parseFloat would accept both and report them as pixel counts.
-  if (PX_LENGTH.test(v)) return 'fixed'
+  //
+  // The magnitude guard is defence-in-depth, not paranoia about CSS: these
+  // values come from a page cortex does not control, and `computedStyleMap` /
+  // `getComputedStyle` are page-overridable prototype methods. A hijacked one
+  // returning `1e300px` would otherwise classify as fixed and seed that number
+  // into a staged edit. Raised in security review; bounded well above any real
+  // layout (100 million px) so it cannot reject a legitimate value.
+  if (PX_LENGTH.test(v)) {
+    const n = Number.parseFloat(v)
+    return Number.isFinite(n) && Math.abs(n) <= 1e8 ? 'fixed' : 'custom'
+  }
 
   // Percentages, calc(), clamp(), min()/max(), stretch, the intrinsic sizes,
   // and anything else the panel can display faithfully but has no control for.
