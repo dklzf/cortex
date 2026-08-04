@@ -145,6 +145,17 @@ describe('resolveSelectionTargets — per-instance selection for moves (B4)', ()
     expect(resolveSelectionTargets([a])).toEqual([a])
   })
 
+  it('never returns the caller’s array by reference', () => {
+    // Selection state can be assigned this array directly, so aliasing it would
+    // let a later mutation by the caller silently rewrite the live selection.
+    const a = document.createElement('div')
+    document.body.appendChild(a)
+    const input = [a]
+    const out = resolveSelectionTargets(input, { expandShared: false })
+    expect(out).toEqual(input)
+    expect(out).not.toBe(input)
+  })
+
   it('preserves the empty-selection clear path in both modes', () => {
     expect(resolveSelectionTargets([])).toEqual([])
     expect(resolveSelectionTargets([], { expandShared: false })).toEqual([])

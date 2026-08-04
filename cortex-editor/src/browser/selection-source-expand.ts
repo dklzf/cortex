@@ -113,6 +113,11 @@ export function resolveSelectionTargets(
   elements: Element[],
   options?: SelectionTargetOptions,
 ): Element[] {
-  if (options?.expandShared === false) return elements
+  // Copy, never the caller's array. `applySelectionUpdate` returns its input
+  // directly for a 'replace', so returning `elements` by reference would let
+  // selection state alias an array the caller still holds — a later mutation of
+  // that array would silently rewrite the live selection. `expandSharedSource`
+  // already allocates, so only this branch needed it.
+  if (options?.expandShared === false) return [...elements]
   return expandSharedSource(elements)
 }
