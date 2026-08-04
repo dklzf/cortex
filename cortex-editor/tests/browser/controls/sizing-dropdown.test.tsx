@@ -153,7 +153,14 @@ describe('SizingDropdown', () => {
     // rewritten to cortex's canonical value — e.g. `stretch` became `100%`.
     const onModeChange = vi.fn()
     render(
-      <SizingDropdown mode="fill" onModeChange={onModeChange} />,
+      <SizingDropdown
+        mode="fill"
+        minEnabled={false}
+        maxEnabled={false}
+        onModeChange={onModeChange}
+        onToggleMin={() => {}}
+        onToggleMax={() => {}}
+      />,
       container,
     )
     ;(container.querySelector('.cortex-sizing-trigger') as HTMLElement).click()
@@ -167,7 +174,14 @@ describe('SizingDropdown', () => {
   it('still fires when a DIFFERENT mode is selected', async () => {
     const onModeChange = vi.fn()
     render(
-      <SizingDropdown mode="fill" onModeChange={onModeChange} />,
+      <SizingDropdown
+        mode="fill"
+        minEnabled={false}
+        maxEnabled={false}
+        onModeChange={onModeChange}
+        onToggleMin={() => {}}
+        onToggleMax={() => {}}
+      />,
       container,
     )
     ;(container.querySelector('.cortex-sizing-trigger') as HTMLElement).click()

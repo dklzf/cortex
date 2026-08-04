@@ -24,6 +24,18 @@
     // twice because of it. Widening to tests/** is blocked on ~479 pre-existing
     // type errors across the suite (tracked in tasks/todo.md).
     "adapters/next-type-contract.test.ts",
+    // COMPILE-TIME CONTRACT — added in B5. These four mount panel components
+    // directly with inline props. A missing REQUIRED prop is invisible to
+    // vitest (Preact renders `undefined` happily) and was invisible to tsc too,
+    // because the root tsconfig excludes `tests/` and this allowlist did not
+    // name them — so the files sat outside EVERY program. CodeRabbit caught a
+    // <SizingDropdown> mount missing four required props that both `tsc -p
+    // tsconfig.json` and a green test run had passed over. Same failure mode as
+    // the contract tests above; same remedy.
+    "browser/sizing-value.test.ts",
+    "browser/controls/sizing-dropdown.test.tsx",
+    "browser/sections/SizingControls.test.tsx",
+    "browser/sections/layout-section.test.tsx",
     "../src/**/*.ts",
     "../src/**/*.tsx"
   ],

@@ -285,7 +285,7 @@ describe('SizingControls', () => {
       container,
     )
     const triggers1 = container.querySelectorAll('.cortex-sizing-trigger__label')
-    expect(triggers1[0].textContent).toBe('fill')
+    expect(triggers1[0]?.textContent).toBe('fill')
 
     // Re-render with width=320px — dropdown must update to "px" (fixed)
     render(
@@ -296,7 +296,7 @@ describe('SizingControls', () => {
       container,
     )
     const triggers2 = container.querySelectorAll('.cortex-sizing-trigger__label')
-    expect(triggers2[0].textContent).toBe('px')
+    expect(triggers2[0]?.textContent).toBe('px')
   })
 
   // ── REGRESSION TEST: stale min/max ──────────────────────────────
@@ -331,7 +331,7 @@ describe('SizingControls', () => {
   it('reports auto as "auto" and disables the pixel input', () => {
     setup({ values: { ...DEFAULT_VALUES, width: 'auto' } })
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
-    expect(modeLabels[0].textContent).toBe('auto')
+    expect(modeLabels[0]?.textContent).toBe('auto')
     const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
     expect(widthInput.disabled).toBe(true)
   })
@@ -341,7 +341,7 @@ describe('SizingControls', () => {
     // pixel count before the panel ever saw it.
     setup({ values: { ...DEFAULT_VALUES, width: '100%' } })
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
-    expect(modeLabels[0].textContent).toBe('fill')
+    expect(modeLabels[0]?.textContent).toBe('fill')
   })
 
   it('reports a percentage that is not 100% as custom, never as a pixel count', () => {
@@ -349,7 +349,7 @@ describe('SizingControls', () => {
     // element that is half its parent's width.
     setup({ values: { ...DEFAULT_VALUES, width: '50%' } })
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
-    expect(modeLabels[0].textContent).toBe('custom')
+    expect(modeLabels[0]?.textContent).toBe('custom')
     const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
     expect(widthInput.disabled).toBe(true)
   })

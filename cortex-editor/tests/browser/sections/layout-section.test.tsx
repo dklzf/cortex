@@ -153,8 +153,8 @@ describe('LayoutSection', () => {
     const group = container.querySelector('[role="radiogroup"]')!
     const options = group.querySelectorAll('[role="radio"]')
     expect(options.length).toBe(5)
-    expect(options[0].textContent).toBe('block')
-    expect(options[4].textContent).toBe('none')
+    expect(options[0]?.textContent).toBe('block')
+    expect(options[4]?.textContent).toBe('none')
   })
 
   it('emits width change with px suffix', () => {
