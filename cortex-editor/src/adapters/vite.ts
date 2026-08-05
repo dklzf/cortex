@@ -927,6 +927,65 @@ export function cortexEditor(_options?: CortexEditorOptions): Plugin {
     configResolved(resolved) {
       config = resolved
 
+      // ── Plugin-order audit ──────────────────────────────────────────────
+      // `enforce: 'pre'` is a BUCKET in Vite, not a phase guarantee. Within a
+      // bucket Vite preserves plain array order, so `plugins: [react(), cortex()]`
+      // runs plugin-react's transform first and hands cortex a rewritten string.
+      // Every line:col cortex then records is measured against text the apply
+      // side will never see (COR-28: a 19-line refresh preamble shifted every
+      // anchor onto an unrelated element).
+      //
+      // The provenance guard in source-transform.ts REFUSES in that situation,
+      // which makes the failure safe but not self-explanatory. This turns it
+      // into an actionable one, at boot, naming the plugin responsible.
+      //
+      // webpack and Next need no equivalent: webpack's `enforce: 'pre'` is a
+      // real phase (pre-loaders always precede normal loaders, webpack.ts) and
+      // the Next adapter appends its loader last to exploit right-to-left chain
+      // order (next.ts). Vite is the only adapter where ordering is advisory.
+      try {
+        // Only meaningful while serving — the transform is a no-op for `build`,
+        // so a build-time warning would be pure noise.
+        if (resolved.command === 'serve') {
+          // getSortedPlugins('transform') returns the EFFECTIVE execution order
+          // for this hook, which is what actually matters. The raw
+          // `resolved.plugins` array is a different order: Vite re-sorts per hook
+          // by `transform.order`, so scanning the raw array both MISSES a
+          // later-listed plugin that declares `order: 'pre'` and FALSELY ACCUSES
+          // an earlier-listed one that declares `order: 'post'`.
+          const sorted = typeof resolved.getSortedPlugins === 'function'
+            ? resolved.getSortedPlugins('transform')
+            : (resolved.plugins ?? [])
+          const selfIndex = sorted.findIndex(p => p?.name === 'cortex-editor')
+          if (selfIndex > 0) {
+            const before = sorted.slice(0, selfIndex).map(p => p?.name).filter(Boolean)
+            if (before.length > 0) {
+              // Warn, never throw: running after another transform is not proof
+              // of harm — it may not touch .jsx/.tsx at all. The provenance guard
+              // in source-transform.ts is the enforcing check, per file and on
+              // evidence. This exists to make that refusal self-explanatory.
+              //
+              // Remediation is stated generically on purpose. An earlier version
+              // tried to synthesise a call expression from the plugin name and
+              // turned `vite:react-babel` into `react-babel()` — a function that
+              // does not exist. Plugin NAMES are not factory names, and guessing
+              // produces advice that cannot be followed.
+              console.warn(
+                `[cortex] cortex-editor's transform runs AFTER ${before.length} other transform hook(s): ` +
+                `${before.join(', ')}.\n` +
+                `[cortex] cortex declares transform.order='pre', so this means one of them also declares ` +
+                `'pre' and is listed earlier. If it rewrites JSX, cortex will refuse to annotate those ` +
+                `files rather than record positions that point at the wrong element.\n` +
+                `[cortex] Fix: move cortexEditor() earlier in your plugins array than the plugin(s) above.`,
+              )
+            }
+          }
+        }
+      } catch {
+        // An audit must never break a build. Ordering is advisory here; the
+        // provenance guard is the enforcing check.
+      }
+
       // Extract aliases for source transform (CSS Module import resolution)
       aliasMap = {}
       const aliases = config.resolve?.alias
@@ -983,17 +1042,44 @@ export function cortexEditor(_options?: CortexEditorOptions): Plugin {
       },
     },
 
-    transform(code, id) {
-      if (config.command !== 'serve') return null
-      // ZF0-1851: skip source transforms when cortex is disabled (lock held);
-      // the runtime support is absent, so rewriting source would just produce
-      // dangling references.
-      if (cortexDisabledByLock) return null
-      const result = transformSource(code, id)
-      if (!result) return null
-      // Our SourceMap allows nullable optional fields (per source map spec)
-      // that Rollup's stricter types reject. Cast the map.
-      return { code: result.code, map: result.map as SourceMapInput }
+    // OBJECT-FORM hook with `order: 'pre'` — this is load-bearing, not style.
+    //
+    // Plugin-level `enforce: 'pre'` only puts cortex in the pre BUCKET; within a
+    // bucket Vite preserves plain array order, so `plugins: [react(), cortex()]`
+    // ran plugin-react first and handed us its output. Every line:col we then
+    // recorded was measured against text the apply side never sees (COR-28: a
+    // 19-line refresh preamble shifted every anchor onto an unrelated element).
+    //
+    // Hook-level order is a different, stronger mechanism. Vite's
+    // getSortedPluginsByHook splices object-form hooks declaring `order: 'pre'`
+    // ahead of every function-form hook, regardless of array position:
+    //
+    //     const hook = plugin[hookName]
+    //     if (typeof hook === "object") {
+    //       if (hook.order === "pre") { sortedPlugins.splice(pre++, 0, plugin); continue }
+    //
+    // @vitejs/plugin-react declares `transform` in object form but sets NO order,
+    // so it lands in the normal group and we now precede it — whichever way the
+    // user lists them. That makes the correct ordering a property of cortex
+    // rather than of the consumer's config, which we cannot reach.
+    //
+    // The provenance guard in source-transform.ts stays as the fallback for the
+    // case this cannot cover: another plugin that ALSO declares `order: 'pre'`
+    // and is listed before us.
+    transform: {
+      order: 'pre',
+      handler(code, id) {
+        if (config.command !== 'serve') return null
+        // ZF0-1851: skip source transforms when cortex is disabled (lock held);
+        // the runtime support is absent, so rewriting source would just produce
+        // dangling references.
+        if (cortexDisabledByLock) return null
+        const result = transformSource(code, id)
+        if (!result) return null
+        // Our SourceMap allows nullable optional fields (per source map spec)
+        // that Rollup's stricter types reject. Cast the map.
+        return { code: result.code, map: result.map as SourceMapInput }
+      },
     },
 
     configureServer(server) {

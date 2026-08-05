@@ -1,8 +1,70 @@
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSourceTransform } from '../../src/adapters/source-transform.js'
 
-const PROJECT_ROOT = '/project'
-const transformSource = createSourceTransform(PROJECT_ROOT)
+// ── Real files on disk, by design (COR-28) ──────────────────────────────────
+//
+// These tests used to pass synthetic code with a synthetic id like
+// '/project/src/App.tsx' — a path that does not exist. The transform now
+// verifies that the text it was handed IS the file at that id before stamping
+// any position (the provenance guard), because a position measured against one
+// string and applied against another is how COR-28 wrote edits to the wrong
+// element. Against nonexistent paths every one of these tests silently took the
+// refusal branch and asserted nothing about stamping.
+//
+// PROJECT_ROOT is therefore a REAL temp directory that MIRRORS the old virtual
+// layout: a virtual id '/project/src/App.tsx' maps to '<tmp>/src/App.tsx'. Since
+// the transform emits `path.relative(projectRoot, id)`, the relative path is
+// still 'src/App.tsx' and every existing assertion holds verbatim — while the
+// suite now exercises the real disk path instead of the fail-open branch.
+const TMP_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-st-'))
+const PROJECT_ROOT = path.join(TMP_BASE, 'project')
+// Sibling of PROJECT_ROOT, so ids that are meant to be OUTSIDE the project root
+// really are — otherwise the path-traversal tests would silently pass by testing
+// a path we had quietly relocated inside the root.
+const OUTSIDE_ROOT = path.join(TMP_BASE, 'outside')
+fs.mkdirSync(PROJECT_ROOT, { recursive: true })
+fs.mkdirSync(OUTSIDE_ROOT, { recursive: true })
+
+/** Map a virtual id onto a real file and write `code` there.
+ *
+ *  '/project/...' maps under PROJECT_ROOT; any other absolute id maps under
+ *  OUTSIDE_ROOT, preserving its own directory shape so basename-derivation and
+ *  containment tests still exercise what they claim to. */
+function materialize(code: string, virtualId: string): string {
+  const inProject = virtualId.startsWith('/project/')
+  const base = inProject ? PROJECT_ROOT : OUTSIDE_ROOT
+  const rel = inProject ? virtualId.slice('/project/'.length) : virtualId.replace(/^\/+/, '')
+  // Preserve any query suffix (e.g. '?v=abc') — the transform strips it itself,
+  // but the file must be written without it.
+  const qIndex = rel.indexOf('?')
+  const relPath = qIndex === -1 ? rel : rel.slice(0, qIndex)
+  const query = qIndex === -1 ? '' : rel.slice(qIndex)
+  const realPath = path.join(base, relPath)
+  fs.mkdirSync(path.dirname(realPath), { recursive: true })
+  fs.writeFileSync(realPath, code, 'utf8')
+  return realPath + query
+}
+
+/** Build a transform over the real temp root that materializes each input before
+ *  running. Drop-in replacement for a direct `createSourceTransform(root, opts)` —
+ *  call sites keep passing virtual '/project/...' ids and this maps them to real
+ *  files on disk. */
+function mk(options?: Parameters<typeof createSourceTransform>[1]) {
+  const inner = createSourceTransform(PROJECT_ROOT, options)
+  return (code: string, virtualId = '/project/src/App.tsx') =>
+    inner(code, materialize(code, virtualId))
+}
+
+/** Transform WITHOUT materializing — for provenance tests that need to control
+ *  the on-disk content and the passed-in code independently. Takes a real path. */
+const transformSource_raw = createSourceTransform(PROJECT_ROOT)
+
+// Materializes on every call, so direct `transformSource(code, id)` call sites
+// throughout this file keep working with virtual ids and no per-site edits.
+const transformSource = mk()
 
 function transform(code: string, id = '/project/src/App.tsx'): string {
   const result = transformSource(code, id)
@@ -331,19 +393,19 @@ describe('transformSource', () => {
     })
 
     it('transforms included node_modules packages', () => {
-      const t = createSourceTransform('/project', { includeNodeModules: ['@test-lib'] })
+      const t = mk({ includeNodeModules: ['@test-lib'] })
       const result = t('<div />', '/project/node_modules/@test-lib/Button.tsx')
       expect(result).not.toBeNull()
       expect(result!.code).toContain('data-cortex-source')
     })
 
     it('still skips non-included node_modules when includeNodeModules is set', () => {
-      const t = createSourceTransform('/project', { includeNodeModules: ['@test-lib'] })
+      const t = mk({ includeNodeModules: ['@test-lib'] })
       expect(t('<div />', '/project/node_modules/other-pkg/App.tsx')).toBeNull()
     })
 
     it('uses segment matching for includeNodeModules (no substring false positives)', () => {
-      const t = createSourceTransform('/project', { includeNodeModules: ['lib'] })
+      const t = mk({ includeNodeModules: ['lib'] })
       // 'my-lib' contains 'lib' as substring but not as a path segment
       expect(t('<div />', '/project/node_modules/my-lib/App.tsx')).toBeNull()
       // 'lib' as exact segment should match
@@ -583,7 +645,7 @@ describe('source map generation', () => {
   })
 
   it('source map uses basename for outside-root files (safePath)', () => {
-    const t = createSourceTransform('/project')
+    const t = mk()
     const result = t('<div />', '/etc/secrets/App.tsx')
     expect(result).not.toBeNull()
     const map = result!.map!
@@ -609,12 +671,12 @@ describe('production mode', () => {
   })
 
   it('returns null when mode is production', () => {
-    const t = createSourceTransform('/project', { mode: 'production' })
+    const t = mk({ mode: 'production' })
     expect(t('<div />', '/project/src/App.tsx')).toBeNull()
   })
 
   it('transforms when mode is development', () => {
-    const t = createSourceTransform('/project', { mode: 'development' })
+    const t = mk({ mode: 'development' })
     expect(t('<div />', '/project/src/App.tsx')).not.toBeNull()
   })
 
@@ -624,13 +686,13 @@ describe('production mode', () => {
 
   it('returns null when NODE_ENV=production and no explicit mode', () => {
     vi.stubEnv('NODE_ENV', 'production')
-    const t = createSourceTransform('/project')
+    const t = mk()
     expect(t('<div />', '/project/src/App.tsx')).toBeNull()
   })
 
   it('explicit mode=development overrides NODE_ENV=production', () => {
     vi.stubEnv('NODE_ENV', 'production')
-    const t = createSourceTransform('/project', { mode: 'development' })
+    const t = mk({ mode: 'development' })
     expect(t('<div />', '/project/src/App.tsx')).not.toBeNull()
   })
 })
@@ -639,12 +701,16 @@ describe('parse error handling', () => {
   it('calls onParseError when parsing fails (and does not warn)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const errors: Array<{ id: string; error: unknown }> = []
-    const t = createSourceTransform('/project', {
+    const t = mk({
       onParseError: (id, error) => errors.push({ id, error }),
     })
     t('const x = {', '/project/src/App.tsx')
     expect(errors).toHaveLength(1)
-    expect(errors[0].id).toBe('/project/src/App.tsx')
+    // The callback receives the id it was CALLED with, which is now the real
+    // materialized path under the temp root rather than the virtual one. Assert
+    // the suffix so the contract (callback gets the id verbatim) is still proved
+    // without pinning a per-run temp directory.
+    expect(errors[0].id.endsWith('/project/src/App.tsx')).toBe(true)
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
@@ -660,7 +726,7 @@ describe('parse error handling', () => {
 
 describe('sequential call regression', () => {
   it('produces correct offsets across sequential calls', () => {
-    const t = createSourceTransform('/project')
+    const t = mk()
     const r1 = t('<div />', '/project/src/A.tsx')
     const r2 = t('<span />', '/project/src/B.tsx')
     expect(r1!.code).toContain(':1:1"')
@@ -670,7 +736,7 @@ describe('sequential call regression', () => {
 
 describe('path traversal safety', () => {
   it('uses basename for files outside project root', () => {
-    const t = createSourceTransform('/project')
+    const t = mk()
     const result = t('<div />', '/etc/secrets/App.tsx')
     expect(result).not.toBeNull()
     expect(result!.code).toContain('data-cortex-source="App.tsx:')
@@ -678,7 +744,7 @@ describe('path traversal safety', () => {
   })
 
   it('uses relative path for files inside project root', () => {
-    const t = createSourceTransform('/project')
+    const t = mk()
     const result = t('<div />', '/project/src/deep/Component.tsx')
     expect(result).not.toBeNull()
     expect(result!.code).toContain('data-cortex-source="src/deep/Component.tsx:')
@@ -781,7 +847,7 @@ describe('CSS Module annotation', () => {
   })
 
   it('handles aliased imports via resolveAlias callback', () => {
-    const t = createSourceTransform('/project', {
+    const t = mk({
       resolveAlias: (spec) => {
         if (spec.startsWith('@/')) return spec.replace('@/', 'src/')
         return null
@@ -835,5 +901,114 @@ describe('CSS Module annotation', () => {
       '/project/src/Hero.tsx',
     )
     expect(result).not.toContain('data-cortex-css')
+  })
+})
+
+// ── Provenance guard (COR-28) ───────────────────────────────────────────────
+//
+// The transform records `node.loc` — a coordinate in THE STRING IT WAS HANDED —
+// and the apply side resolves that coordinate against THE FILE ON DISK. Those
+// are the same coordinate space only if nothing upstream rewrote the text.
+// COR-28 shipped because nothing checked: @vitejs/plugin-react prepended a
+// 19-line refresh preamble, every anchor was 19 lines off, and findJsxElementAt
+// silently returned whichever JSX node happened to occupy that offset.
+//
+// Every test here asserts REFUSAL (or non-refusal). They fail without the guard.
+describe('provenance guard', () => {
+  it('annotates when the input matches the file on disk', () => {
+    // The baseline the other branches are measured against.
+    const result = transformRaw('<div />')
+    expect(result).not.toBeNull()
+    expect(result!.code).toContain('data-cortex-source')
+  })
+
+  it('REFUSES when the input differs from the file on disk (the COR-28 case)', () => {
+    const onDisk = '<div />'
+    const realId = materialize(onDisk, '/project/src/Drift.tsx')
+    // Simulate an upstream transform: cortex is handed text with a prepended
+    // preamble while the file on disk is unchanged. This is exactly what
+    // plugin-react does, and every position in `rewritten` is shifted.
+    const rewritten = `import RefreshRuntime from "/@react-refresh";\n${onDisk}`
+    const mismatches: Array<{ id: string; reason: string }> = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (id, d) => mismatches.push({ id, reason: d.reason }),
+    })
+    expect(t(rewritten, realId)).toBeNull()
+    expect(mismatches).toHaveLength(1)
+    expect(mismatches[0]!.reason).toBe('mismatch')
+  })
+
+  it('reports the line delta so a preamble is identifiable from the log', () => {
+    const onDisk = '<div />'
+    const realId = materialize(onDisk, '/project/src/Delta.tsx')
+    const details: Array<{ inputLines: number; diskLines: number }> = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => details.push(d),
+    })
+    t(`${'\n'.repeat(19)}${onDisk}`, realId)
+    expect(details).toHaveLength(1)
+    expect(details[0]!.inputLines - details[0]!.diskLines).toBe(19)
+  })
+
+  it('FAILS CLOSED when the file cannot be read', () => {
+    // Nothing was materialized at this path. An unverifiable anchor is not a
+    // weaker anchor — its presence alone forces applyMode 'direct', making it a
+    // deterministic write target. So: no anchor.
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    expect(t('<div />', path.join(PROJECT_ROOT, 'src/NeverWritten.tsx'))).toBeNull()
+    expect(reasons).toEqual(['unreadable'])
+  })
+
+  it('FAILS CLOSED on a virtual module id', () => {
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    // Rollup/Vite virtual-module convention: there is no file to compare against.
+    expect(t('<div />', '\0virtual:cortex-test.tsx')).toBeNull()
+    expect(reasons).toEqual(['virtual'])
+  })
+
+  it('does NOT refuse when only a source-map comment differs (Vite blanks it)', () => {
+    // Vite extracts and blanks a valid sourceMappingURL comment BEFORE any plugin
+    // transform, preserving length so no position moves. Refusing here would be a
+    // false refusal that reordering plugins cannot fix, because Vite does this
+    // before plugins are consulted at all.
+    const withComment = '<div />\n//# sourceMappingURL=data:application/json;base64,AAAA\n'
+    const realId = materialize(withComment, '/project/src/Mapped.tsx')
+    const blanked = withComment.replace(
+      /\/\/# sourceMappingURL=[^\n]*/,
+      m => ' '.repeat(m.length),
+    )
+    expect(blanked.length).toBe(withComment.length) // length-preserving, by construction
+    const result = transformSource_raw(blanked, realId)
+    expect(result).not.toBeNull()
+    expect(result!.code).toContain('data-cortex-source')
+  })
+
+  it('still refuses when a source-map comment differs AND real text changed', () => {
+    // Guards against the blanking normalization being over-broad: neutralizing the
+    // comment must not neutralize a genuine rewrite that happens to sit near one.
+    const onDisk = '<div />\n//# sourceMappingURL=x.map\n'
+    const realId = materialize(onDisk, '/project/src/MappedDrift.tsx')
+    const rewritten = `\n<div />\n//# sourceMappingURL=y.map\n`
+    expect(transformSource_raw(rewritten, realId)).toBeNull()
+  })
+
+  it('tolerates a BOM difference (position-preserving)', () => {
+    const onDisk = '<div />'
+    const realId = materialize(onDisk, '/project/src/Bom.tsx')
+    const result = transformSource_raw(`﻿${onDisk}`, realId)
+    expect(result).not.toBeNull()
+  })
+
+  it('tolerates CRLF vs LF (position-preserving)', () => {
+    const onDisk = '<div>\n</div>'
+    const realId = materialize(onDisk, '/project/src/Crlf.tsx')
+    const result = transformSource_raw('<div>\r\n</div>', realId)
+    expect(result).not.toBeNull()
   })
 })

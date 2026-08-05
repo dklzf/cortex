@@ -44,6 +44,25 @@ export interface SourceTransformOptions {
   resolveAlias?: (specifier: string) => string | null
   /** Package names in node_modules to instrument (for library component detection). */
   includeNodeModules?: string[]
+  /** Called when cortex refuses to annotate a file because it cannot prove the
+   *  text it was handed is the file on disk. Babel's line/column numbers are
+   *  coordinates in the string given to the parser, while the apply side resolves
+   *  them against disk — so an unproven match means any anchor could point at the
+   *  wrong element. When set, replaces the default console warning.
+   *
+   *  `reason` distinguishes the three refusal causes:
+   *   - `'virtual'`    — the module id contains `\0` (Rollup/Vite virtual module);
+   *                      there is no file to compare against
+   *   - `'unreadable'` — the file could not be read (missing, EACCES, memory-fs)
+   *   - `'mismatch'`   — the file was read and differs after position-preserving
+   *                      normalization; an upstream transform rewrote it
+   *
+   *  `diskLines` is `-1` when nothing was read (virtual/unreadable).
+   *  See the provenance guard in source-transform.ts. */
+  onProvenanceMismatch?: (
+    id: string,
+    detail: { reason: 'virtual' | 'unreadable' | 'mismatch'; inputLines: number; diskLines: number },
+  ) => void
 }
 
 export interface TransformResult {

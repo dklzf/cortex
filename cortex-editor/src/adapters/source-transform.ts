@@ -1,3 +1,4 @@
+import fs from 'fs'
 import path from 'path'
 import { parse } from '@babel/parser'
 import MagicString from 'magic-string'
@@ -12,6 +13,54 @@ import { shouldExcludeCortexSource } from './source-loader-utils.js'
 const ESCAPE_MAP: Record<string, string> = { '&': '&amp;', '"': '&quot;', "'": '&#39;', '<': '&lt;', '>': '&gt;' }
 function escapeAttr(s: string): string {
   return s.replace(/[&"'<>]/g, c => ESCAPE_MAP[c]!)
+}
+
+/** Source-map annotation comment, either `//#` or the block form. Matched so the
+ *  provenance guard can neutralize Vite's own preprocessing — see blankSourceMapComments. */
+const SOURCEMAP_COMMENT_RE = /(?:\/\/|\/\*)[#@]\s*sourceMappingURL=[^\r\n*]*(?:\*\/)?/g
+
+/** Replace source-map annotation comments with spaces of IDENTICAL length.
+ *
+ *  Vite extracts and blanks a valid `sourceMappingURL` comment before any plugin
+ *  transform runs — deliberately preserving length so every subsequent line and
+ *  column is untouched. That is a coordinate-SAFE rewrite, but a naive
+ *  whole-file equality test still sees the strings differ and refuses a file
+ *  cortex could have annotated correctly. Reordering plugins cannot fix it,
+ *  because Vite does this before plugins are consulted at all.
+ *
+ *  Blanking to the SAME length on both sides (rather than stripping) is what
+ *  makes this safe: it converges Vite's version and the disk version without
+ *  moving a single position the guard is protecting. Stripping would shift
+ *  everything after the comment and defeat the check. */
+function blankSourceMapComments(s: string): string {
+  return s.replace(SOURCEMAP_COMMENT_RE, m => ' '.repeat(m.length))
+}
+
+/** Normalize text for the provenance guard's equality test.
+ *
+ *  Strips a leading BOM and collapses CRLF to LF so a checkout with
+ *  `core.autocrlf` or an editor that writes a BOM does not read as an upstream
+ *  rewrite. Both are byte-level differences that leave every line and column
+ *  position intact, which is the only property the guard cares about. Then
+ *  blanks source-map comments so Vite's own coordinate-preserving preprocessing
+ *  does not read as a foreign rewrite.
+ *
+ *  Every transformation here MUST be position-preserving. That is the invariant:
+ *  we are allowed to ignore differences that cannot move a line or column, and
+ *  nothing else. Deliberately NOT trimmed — trailing whitespace is a real
+ *  rewrite signal, and leading whitespace would shift every position in the file. */
+function normalizeForCompare(s: string): string {
+  const noBom = s.charCodeAt(0) === 0xfeff ? s.slice(1) : s
+  return blankSourceMapComments(noBom.replace(/\r\n/g, '\n'))
+}
+
+/** Line count, for the provenance-mismatch diagnostic. Reports the shape of the
+ *  divergence (e.g. "109 lines in, 90 on disk" identifies a 19-line preamble)
+ *  without logging file contents, which may be proprietary. */
+function countLines(s: string): number {
+  let n = 1
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++
+  return n
 }
 
 /**
@@ -273,6 +322,81 @@ export function createSourceTransform(
     const cleanId = id.split('?')[0]!
     if (!/\.[jt]sx$/.test(cleanId)) return null
     if (shouldExcludeCortexSource(cleanId, options?.includeNodeModules)) return null
+
+    // ── Provenance guard ────────────────────────────────────────────────
+    // Babel's `node.loc` is a coordinate in THE STRING WE HAND THE PARSER.
+    // We write that coordinate into `data-cortex-source`, and the apply side
+    // later resolves it against THE FILE ON DISK (edit-pipeline parseSource →
+    // findJsxElementAt). Those are the same coordinate space only if nothing
+    // upstream rewrote the text.
+    //
+    // When they diverge, every stamp is silently wrong and nothing downstream
+    // can tell: findJsxElementAt does a zero-tolerance position lookup and
+    // returns whatever JSX node occupies that offset. COR-28 shipped exactly
+    // this — @vitejs/plugin-react prepends a 16-line refresh head plus a 3-line
+    // shared head, so every anchor was +19 lines and pointed at an unrelated
+    // element.
+    //
+    // A confirmed mismatch means we cannot produce a trustworthy anchor, so we
+    // produce none. Loudly absent beats silently wrong: a missing anchor routes
+    // the element to `agent-resolve`, while a wrong one rewrites the user's
+    // source at a position they never selected.
+    //
+    // FAIL CLOSED. An earlier revision proceeded when the file could not be read
+    // ("unknown is not violated"). That was wrong, and it is the exact hole this
+    // guard exists to close: the attribute we emit is not advisory. Its presence
+    // alone forces `applyMode: 'direct'` in getElementEditTarget, which makes the
+    // recorded line:col a deterministic WRITE TARGET. An anchor we cannot verify
+    // is therefore indistinguishable downstream from one we can, and unverifiable
+    // provenance is not a weaker version of correct provenance — it is the
+    // absence of the precondition the whole mechanism rests on.
+    //
+    // So: virtual ids and unreadable files get NO anchor. The element degrades to
+    // `agent-resolve` with a DOM hint, which is a designed, safe path — Claude
+    // resolves the source instead of cortex asserting it.
+    {
+      let onDisk: string | null = null
+      let reason: 'virtual' | 'unreadable' | 'mismatch' | null = null
+
+      if (id.includes('\0')) {
+        // Rollup/Vite virtual module convention. There is no file to compare to.
+        reason = 'virtual'
+      } else {
+        try {
+          onDisk = fs.readFileSync(cleanId, 'utf8')
+        } catch {
+          // Missing, EACCES, memory-fs, generated route — all the same to us:
+          // the precondition cannot be established.
+          reason = 'unreadable'
+        }
+        if (onDisk !== null && normalizeForCompare(onDisk) !== normalizeForCompare(code)) {
+          reason = 'mismatch'
+        }
+      }
+
+      if (reason !== null) {
+        const detail = {
+          reason,
+          inputLines: countLines(code),
+          diskLines: onDisk === null ? -1 : countLines(onDisk),
+        }
+        if (options?.onProvenanceMismatch) {
+          options.onProvenanceMismatch(id, detail)
+        } else if (reason === 'mismatch') {
+          // Only the mismatch case is worth a loud warning: it means a real,
+          // fixable misconfiguration. Virtual and unreadable ids are routine in
+          // many setups and would make this a log-spam machine.
+          console.warn(
+            `[cortex] Refusing to annotate ${cleanId}: the code handed to cortex is not the file on disk ` +
+            `(${detail.inputLines} lines in, ${detail.diskLines} on disk). Another plugin transformed it ` +
+            `first, so any line:col cortex records would point at the wrong element.\n` +
+            `[cortex] Fix: move cortexEditor() earlier in your plugins array than the plugin that ` +
+            `transformed this file.`,
+          )
+        }
+        return null
+      }
+    }
 
     const relativePath = path.relative(projectRoot, cleanId).replace(/\\/g, '/')
     const safePath = relativePath.startsWith('..')
