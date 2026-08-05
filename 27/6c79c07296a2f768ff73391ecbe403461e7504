@@ -1,0 +1,52 @@
+cortex-editor/tests/adapters/vite.test.ts
+  s_74df757991f395::t_4ebc31390fa074 3203-3306
+  s_74df757991f395::t_004f0dab1ad452 170-171
+  s_74df757991f395::t_3a54a67780f888 114-128
+  s_74df757991f395::t_5829b6832df2a1 304-305
+  s_74df757991f395::t_3423fdbe0c1997 179,186,193
+cortex-editor/tests/adapters/source-loader.test.ts
+  s_74df757991f395::t_b6fc01159a03c3 67,86,105,118
+  s_74df757991f395::t_ad2535d843f32d 1-3,11-28,36,38,54-60
+  s_74df757991f395::t_083c09bbde85fd 39-46
+  s_74df757991f395::t_49cebd89ad01b8 61
+cortex-editor/src/adapters/vite.ts
+  s_74df757991f395::t_9c0f626cb528fe 947-981,985
+  s_74df757991f395::t_f2479bf65a31d4 930-946,982-984,986-988
+  s_74df757991f395::t_ee28c540161c7d 1045-1082
+cortex-editor/src/adapters/source-transform.ts
+  s_74df757991f395::t_a8c4f185f3143a 1,18-65,326-399
+  s_74df757991f395::t_864c23cad6796e 400
+cortex-editor/tests/adapters/next-source-loader.test.ts
+  s_74df757991f395::t_37a4297d45967f 79-80,120-121
+  s_74df757991f395::t_5a7e6d77daffa7 1-3,11-24,30,32,41-46
+  s_74df757991f395::t_e97392e33f9f0f 52,65,93,108
+  s_74df757991f395::t_61be35aefd7274 47
+cortex-editor/tests/adapters/source-transform.test.ts
+  s_74df757991f395::t_b3b457302c9840 1-3,7-21,30,36,40-41,46-50,59,64
+  s_74df757991f395::t_ba20570db01edc 65-67
+  s_74df757991f395::t_28423e38d17af2 22-29,31-35,37-39,42-45
+  s_74df757991f395::t_9ecae55071cf4e 396,403,408,674,679,695,704,850
+  s_74df757991f395::t_96343844da0f0c 51,55-58
+  s_74df757991f395::t_01d02f10c5752c 709-713
+  s_74df757991f395::t_e507870735c8f9 906-1014
+  s_74df757991f395::t_0005efecd7bbba 648,689,729,739,747
+  s_74df757991f395::t_c2f2bf718c98e4 52-54,60-63
+cortex-editor/src/adapters/types.ts
+  s_74df757991f395::t_374c99ed341141 47-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "276c79c07296a2f768ff73391ecbe403461e7504",
+  "prompts": {},
+  "sessions": {
+    "s_74df757991f395": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "79affe67-bc90-4c86-a268-c6d68dd0c9e6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
