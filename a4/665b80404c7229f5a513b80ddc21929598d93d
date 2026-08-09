@@ -1,0 +1,39 @@
+cortex-editor/src/adapters/vite.ts
+  s_74df757991f395::t_7938b5007e9c80 949-964
+  s_74df757991f395::t_7f02188db1aa89 965
+cortex-editor/src/adapters/types.ts
+  s_74df757991f395::t_4e922b5d3abbbb 47-61
+cortex-editor/tests/adapters/source-transform.test.ts
+  s_74df757991f395::t_a8f577d1710e0f 1038,1040-1100
+  s_74df757991f395::t_6cdd162bf3232f 4,79-84,613-617,621,753-754,757
+  s_74df757991f395::t_bac8464db42640 1015-1020,1023-1033,1035-1037
+  s_74df757991f395::t_4f2919960bbeb0 1039
+cortex-editor/tests/adapters/source-loader.test.ts
+  s_74df757991f395::t_7e33a9e9486b08 4,11-13
+  s_74df757991f395::t_9196ba145c1b98 14-15
+cortex-editor/src/adapters/source-transform.ts
+  s_74df757991f395::t_48d0cbc1e36456 18-20,22-29,31-37,40-47,49-54,56-67
+  s_74df757991f395::t_a8ccd6e67fef56 382-387,389-393
+  s_74df757991f395::t_d8b6c0838d4bad 332-334
+  s_74df757991f395::t_3d8a6bfc4a7bc1 396-413
+  s_74df757991f395::t_7f22b03108ce9b 425-437
+cortex-editor/tests/adapters/next-source-loader.test.ts
+  s_74df757991f395::t_7e33a9e9486b08 4,11-13
+  s_74df757991f395::t_823b9580499af2 14-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a4665b80404c7229f5a513b80ddc21929598d93d",
+  "prompts": {},
+  "sessions": {
+    "s_74df757991f395": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "79affe67-bc90-4c86-a268-c6d68dd0c9e6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
