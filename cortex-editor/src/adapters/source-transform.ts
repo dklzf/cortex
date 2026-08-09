@@ -15,43 +15,56 @@ function escapeAttr(s: string): string {
   return s.replace(/[&"'<>]/g, c => ESCAPE_MAP[c]!)
 }
 
-/** Source-map annotation comment, either `//#` or the block form. Matched so the
- *  provenance guard can neutralize Vite's own preprocessing — see blankSourceMapComments. */
-const SOURCEMAP_COMMENT_RE = /(?:\/\/|\/\*)[#@]\s*sourceMappingURL=[^\r\n*]*(?:\*\/)?/g
+/** `convert-source-map`'s `mapFileCommentRegex`, exactly as Vite vendors it
+ *  (vite/dist/node/chunks/dep-*.js). Copied rather than approximated, because an
+ *  approximation is what broke the first attempt at this.
+ *
+ *  The load-bearing properties, each of which a looser pattern gets wrong:
+ *   - `$` with the `m` flag — the comment must END A LINE. An unanchored pattern
+ *     matches `sourceMappingURL=` inside a string literal or JSX text, mid-line.
+ *   - `[ \t]` rather than `\s` — cannot swallow newlines and merge two lines.
+ *   - `[^\s'"\`]+?` on the `//` form — stops at a quote, so a quoted URL in
+ *     source code is not treated as an annotation.
+ *   - the block form REQUIRES a closing `*​/` — an unterminated `/*#` is not a
+ *     comment and must not be blanked.
+ *
+ *  Only ever used with `String.replace`, which resets `lastIndex`; never `.test()`
+ *  on this shared `/g` object. */
+const VITE_MAP_FILE_COMMENT_RE =
+  /(?:\/\/[@#][ \t]+?sourceMappingURL=([^\s'"`]+?)[ \t]*?$)|(?:\/\*[@#][ \t]+sourceMappingURL=([^*]+?)[ \t]*?(?:\*\/){1}[ \t]*?$)/gm
 
-/** Replace source-map annotation comments with spaces of IDENTICAL length.
- *
- *  Vite extracts and blanks a valid `sourceMappingURL` comment before any plugin
- *  transform runs — deliberately preserving length so every subsequent line and
- *  column is untouched. That is a coordinate-SAFE rewrite, but a naive
- *  whole-file equality test still sees the strings differ and refuses a file
- *  cortex could have annotated correctly. Reordering plugins cannot fix it,
- *  because Vite does this before plugins are consulted at all.
- *
- *  Blanking to the SAME length on both sides (rather than stripping) is what
- *  makes this safe: it converges Vite's version and the disk version without
- *  moving a single position the guard is protecting. Stripping would shift
- *  everything after the comment and defeat the check. */
-function blankSourceMapComments(s: string): string {
-  return s.replace(SOURCEMAP_COMMENT_RE, m => ' '.repeat(m.length))
+function hasBom(s: string): boolean {
+  return s.charCodeAt(0) === 0xfeff
 }
 
-/** Normalize text for the provenance guard's equality test.
+/** Model Vite's own pre-plugin preprocessing, ONE WAY: disk text -> the text Vite
+ *  would hand a plugin.
  *
- *  Strips a leading BOM and collapses CRLF to LF so a checkout with
- *  `core.autocrlf` or an editor that writes a BOM does not read as an upstream
- *  rewrite. Both are byte-level differences that leave every line and column
- *  position intact, which is the only property the guard cares about. Then
- *  blanks source-map comments so Vite's own coordinate-preserving preprocessing
- *  does not read as a foreign rewrite.
+ *  Vite extracts a valid `sourceMappingURL` comment and blanks it to spaces of the
+ *  same length before any plugin transform runs. That is coordinate-safe, but a
+ *  plain equality test still sees a difference and refuses a file cortex could have
+ *  annotated correctly — and reordering plugins cannot help, because Vite does this
+ *  before plugins are consulted at all.
  *
- *  Every transformation here MUST be position-preserving. That is the invariant:
- *  we are allowed to ignore differences that cannot move a line or column, and
- *  nothing else. Deliberately NOT trimmed — trailing whitespace is a real
- *  rewrite signal, and leading whitespace would shift every position in the file. */
-function normalizeForCompare(s: string): string {
-  const noBom = s.charCodeAt(0) === 0xfeff ? s.slice(1) : s
-  return blankSourceMapComments(noBom.replace(/\r\n/g, '\n'))
+ *  DIRECTION IS THE WHOLE POINT. An earlier revision blanked matches on BOTH
+ *  strings, which let a genuine rewrite be erased symmetrically: given
+ *  `const s="//# sourceMappingURL=a"` on disk and `...=abcdef` incoming, both
+ *  collapsed to equal text while the real JSX after them sat at different columns.
+ *  Cortex accepted and stamped a position that resolved to a DIFFERENT element on
+ *  disk — recreating exactly the wrong-element write this guard exists to stop.
+ *
+ *  Transforming only the disk side cannot erase anything present in the incoming
+ *  text, so a real upstream rewrite still shows up as a difference. */
+function asViteInput(diskText: string): string {
+  return diskText.replace(VITE_MAP_FILE_COMMENT_RE, m => ' '.repeat(m.length))
+}
+
+/** Collapse CRLF to LF. Symmetric and position-preserving: line and column
+ *  numbering is identical either way. Deliberately NOT trimmed — trailing
+ *  whitespace is a real rewrite signal and leading whitespace shifts every
+ *  position in the file. */
+function normalizeEol(s: string): string {
+  return s.replace(/\r\n/g, '\n')
 }
 
 /** Line count, for the provenance-mismatch diagnostic. Reports the shape of the
@@ -316,6 +329,9 @@ export function createSourceTransform(
   const isProd = options?.mode === 'production' ||
     (options?.mode == null && process.env.NODE_ENV === 'production')
 
+  // One unreadable-source warning per transform instance — see the guard below.
+  let warnedUnreadable = false
+
   return function transformSource(code: string, id: string): TransformResult | null {
     if (isProd) return null
     // Strip Vite HMR query params (e.g. ?v=abc123) before extension check
@@ -363,14 +379,38 @@ export function createSourceTransform(
         reason = 'virtual'
       } else {
         try {
-          onDisk = fs.readFileSync(cleanId, 'utf8')
+          // `readSource` lets an adapter whose modules are not on the native
+          // filesystem supply the authoritative text instead. It is compared
+          // identically — a seam for proving provenance, never for skipping it.
+          onDisk = options?.readSource
+            ? options.readSource(cleanId)
+            : fs.readFileSync(cleanId, 'utf8')
         } catch {
-          // Missing, EACCES, memory-fs, generated route — all the same to us:
-          // the precondition cannot be established.
+          onDisk = null
+        }
+        if (onDisk === null) {
+          // Missing, EACCES, memory-fs with no reader, generated route — all the
+          // same to us: the precondition cannot be established, so no anchor.
           reason = 'unreadable'
         }
-        if (onDisk !== null && normalizeForCompare(onDisk) !== normalizeForCompare(code)) {
-          reason = 'mismatch'
+        if (onDisk !== null) {
+          // A BOM is a real character at offset 0, so a ONE-SIDED BOM shifts every
+          // column on line 1 by one. Stripping it asymmetrically would silently
+          // accept a file whose line-1 coordinates do not line up. Treat the
+          // asymmetry as what it is — a coordinate difference.
+          if (hasBom(onDisk) !== hasBom(code)) {
+            reason = 'mismatch'
+          } else {
+            const disk = normalizeEol(onDisk)
+            const input = normalizeEol(code)
+            // Exact first. Only if that fails do we allow the ONE narrow, known
+            // upstream rewrite: Vite blanking its own source-map comment before
+            // plugins run. Modelled one-way (disk -> input) so nothing present in
+            // the incoming text can be erased to force a match.
+            if (disk !== input && asViteInput(disk) !== input) {
+              reason = 'mismatch'
+            }
+          }
         }
       }
 
@@ -382,6 +422,19 @@ export function createSourceTransform(
         }
         if (options?.onProvenanceMismatch) {
           options.onProvenanceMismatch(id, detail)
+        } else if (reason === 'unreadable' && !warnedUnreadable) {
+          // Deduplicated to ONCE per transform instance. Unreadable ids are
+          // routine in some setups, so warning per file would be log spam — but
+          // warning never at all makes "annotation silently stopped working"
+          // undiagnosable, which is how a whole adapter can go dark unnoticed.
+          // One line naming the first case, and how to fix it, is the balance.
+          warnedUnreadable = true
+          console.warn(
+            `[cortex] Could not read ${cleanId} to verify it matches what cortex was handed, ` +
+            `so it was left unannotated (elements there fall back to agent resolution).\n` +
+            `[cortex] If this project's modules are not on the native filesystem, supply ` +
+            `\`readSource\` so cortex can verify them. Further occurrences are not logged.`,
+          )
         } else if (reason === 'mismatch') {
           // Only the mismatch case is worth a loud warning: it means a real,
           // fixable misconfiguration. Virtual and unreadable ids are routine in

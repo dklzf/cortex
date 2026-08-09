@@ -1,7 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createSourceTransform } from '../../src/adapters/source-transform.js'
 
 // ── Real files on disk, by design (COR-28) ──────────────────────────────────
@@ -75,6 +75,12 @@ function transform(code: string, id = '/project/src/App.tsx'): string {
 function transformRaw(code: string, id = '/project/src/App.tsx') {
   return transformSource(code, id)
 }
+
+// Every test materializes real files; remove the tree so repeated runs do not
+// accumulate temp directories.
+afterAll(() => {
+  fs.rmSync(TMP_BASE, { recursive: true, force: true })
+})
 
 describe('transformSource', () => {
   describe('basic JSX instrumentation', () => {
@@ -604,10 +610,15 @@ const el = <div>
       // Warmup JIT
       transformSource(code, '/project/src/Warmup.tsx')
 
+      // Materialize ONCE, outside the timed region. `transformSource` writes the
+      // fixture on every call, and timing that would measure filesystem latency
+      // rather than transform cost — the budget below is about the parser.
+      const perfId = materialize(code, '/project/src/Perf.tsx')
+
       const times: number[] = []
       for (let run = 0; run < 3; run++) {
         const start = performance.now()
-        const result = transformSource(code, '/project/src/App.tsx')
+        const result = transformSource_raw(code, perfId)
         times.push(performance.now() - start)
         expect(result).not.toBeNull()
       }
@@ -739,8 +750,11 @@ describe('path traversal safety', () => {
     const t = mk()
     const result = t('<div />', '/etc/secrets/App.tsx')
     expect(result).not.toBeNull()
+    // The transform emits forward slashes on every platform, so assert the
+    // basename form rather than building an expectation with path.sep.
     expect(result!.code).toContain('data-cortex-source="App.tsx:')
     expect(result!.code).not.toContain('..')
+    expect(result!.code).not.toContain('\\')
   })
 
   it('uses relative path for files inside project root', () => {
@@ -998,11 +1012,92 @@ describe('provenance guard', () => {
     expect(transformSource_raw(rewritten, realId)).toBeNull()
   })
 
-  it('tolerates a BOM difference (position-preserving)', () => {
+  it('REFUSES a one-sided BOM — it shifts every column on line 1', () => {
+    // A BOM is a real character at offset 0. Disk without / input with (or the
+    // reverse) means line-1 columns differ by one between the coordinate space
+    // cortex measures in and the one apply resolves in. An earlier revision
+    // stripped it on both sides and called that "position-preserving"; it is
+    // only position-preserving when SYMMETRIC.
     const onDisk = '<div />'
     const realId = materialize(onDisk, '/project/src/Bom.tsx')
-    const result = transformSource_raw(`﻿${onDisk}`, realId)
+    expect(transformSource_raw(`﻿${onDisk}`, realId)).toBeNull()
+
+    const withBom = '﻿<div />'
+    const bomId = materialize(withBom, '/project/src/BomDisk.tsx')
+    expect(transformSource_raw('<div />', bomId)).toBeNull()
+  })
+
+  it('accepts a BOM present on BOTH sides, and the coordinates still resolve', () => {
+    const withBom = '﻿<div />'
+    const realId = materialize(withBom, '/project/src/BomBoth.tsx')
+    const result = transformSource_raw(withBom, realId)
     expect(result).not.toBeNull()
+    // Assert the emitted COORDINATE, not merely that annotation happened —
+    // "it returned non-null" would pass even if the position were wrong.
+    expect(result!.code).toContain('data-cortex-source="src/BomBoth.tsx:1:')
+  })
+
+  // ── The regressions codex found (round 2, High) ─────────────────────────
+  //
+  // The first attempt at source-map tolerance blanked matches on BOTH strings
+  // with a loose, unanchored regex. That let a REAL rewrite be erased
+  // symmetrically: two files whose JSX sat at different columns normalized to
+  // equal text, cortex accepted, and the stamped position resolved to a
+  // different element on disk — recreating COR-28 through the fix for COR-28.
+  //
+  // The corrected design compares exactly first, then applies Vite's own
+  // EOL-anchored comment regex ONE WAY (disk -> input). Each test below fails
+  // against the symmetric version.
+
+  it('REFUSES when sourceMappingURL text differs INSIDE a string literal', () => {
+    // codex's exact reproduction. The comment-like text is mid-line inside a
+    // string, so it is not a source-map annotation at all; blanking it shifts
+    // the JSX that follows.
+    const onDisk = 'const s="//# sourceMappingURL=a";const x=[<a/>,<b/>]     '
+    const realId = materialize(onDisk, '/project/src/StrLit.tsx')
+    const incoming = 'const s="//# sourceMappingURL=abcdef";const x=[<a/>,<b/>]'
+    expect(onDisk.length).toBe(incoming.length) // equal length, different columns
+    expect(transformSource_raw(incoming, realId)).toBeNull()
+  })
+
+  it('REFUSES when sourceMappingURL-like text differs inside JSX text', () => {
+    const onDisk = '<div>//# sourceMappingURL=a</div>\n<span />'
+    const realId = materialize(onDisk, '/project/src/JsxText.tsx')
+    const incoming = '<div>//# sourceMappingURL=bb</div>\n<span />'
+    expect(transformSource_raw(incoming, realId)).toBeNull()
+  })
+
+  it('does not let the pattern swallow a newline and merge two lines', () => {
+    // `\s*` in the old pattern could cross a line boundary; Vite's uses [ \t].
+    const onDisk = '//# sourceMappingURL=a\n<div />'
+    const realId = materialize(onDisk, '/project/src/Newline.tsx')
+    const result = transformSource_raw(onDisk, realId)
+    expect(result).not.toBeNull()
+    // <div /> is on line 2 and must still be reported there.
+    expect(result!.code).toContain('data-cortex-source="src/Newline.tsx:2:')
+  })
+
+  it('REFUSES an unterminated block comment difference', () => {
+    // The old pattern made `*/` optional, so an unterminated `/*#` was treated
+    // as a comment and blanked. Vite's requires the terminator.
+    const onDisk = '/*# sourceMappingURL=a\n<div />'
+    const realId = materialize(onDisk, '/project/src/Unterminated.tsx')
+    expect(transformSource_raw('/*# sourceMappingURL=bbbb\n<div />', realId)).toBeNull()
+  })
+
+  it('accepts Vite blanking only in the disk -> input direction', () => {
+    // Cortex must NOT accept the reverse: an incoming file carrying a comment
+    // where disk has blanks is not something Vite produces, and treating it as
+    // equivalent would erase a difference present in the incoming text.
+    const commented = '<div />\n//# sourceMappingURL=x.map\n'
+    const blanked = commented.replace(/\/\/# sourceMappingURL=x\.map/, m => ' '.repeat(m.length))
+    expect(blanked.length).toBe(commented.length)
+
+    const diskCommented = materialize(commented, '/project/src/Dir1.tsx')
+    expect(transformSource_raw(blanked, diskCommented)).not.toBeNull() // disk -> input: allowed
+
+    const diskBlanked = materialize(blanked, '/project/src/Dir2.tsx')
+    expect(transformSource_raw(commented, diskBlanked)).toBeNull() // input -> disk: refused
   })
 
   it('tolerates CRLF vs LF (position-preserving)', () => {

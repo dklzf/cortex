@@ -1,11 +1,16 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import cortexSourceLoader, { _resetForTesting } from '../../src/adapters/next-source-loader.js'
 
 afterEach(() => {
   _resetForTesting()
+})
+
+// Tests materialize real files; remove the tree so runs do not accumulate temps.
+afterAll(() => {
+  fs.rmSync(PROJECT_ROOT, { recursive: true, force: true })
 })
 
 // Real files on disk (COR-28) — see the equivalent note in source-loader.test.ts.

@@ -44,6 +44,21 @@ export interface SourceTransformOptions {
   resolveAlias?: (specifier: string) => string | null
   /** Package names in node_modules to instrument (for library component detection). */
   includeNodeModules?: string[]
+  /** Supply the authoritative source text for a module id, replacing the default
+   *  `fs.readFileSync`. For adapters whose modules do not live on the native
+   *  filesystem — an in-memory fs, a virtual route generator, a custom bundler.
+   *
+   *  This is a provenance SEAM, not a bypass. The returned string is compared to
+   *  the incoming code exactly as a disk read would be, and returning `null` (or
+   *  throwing) still fails closed with no anchor emitted. It exists so a custom
+   *  adapter can PROVE provenance by another route, not skip proving it.
+   *
+   *  Must return the text in the same coordinate space the apply side will later
+   *  resolve against. An adapter that returns text differing from what its own
+   *  writer will reopen reintroduces exactly the wrong-element write this guard
+   *  prevents. */
+  readSource?: (id: string) => string | null
+
   /** Called when cortex refuses to annotate a file because it cannot prove the
    *  text it was handed is the file on disk. Babel's line/column numbers are
    *  coordinates in the string given to the parser, while the apply side resolves

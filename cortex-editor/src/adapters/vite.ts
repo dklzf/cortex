@@ -946,16 +946,23 @@ export function cortexEditor(_options?: CortexEditorOptions): Plugin {
       try {
         // Only meaningful while serving — the transform is a no-op for `build`,
         // so a build-time warning would be pure noise.
-        if (resolved.command === 'serve') {
-          // getSortedPlugins('transform') returns the EFFECTIVE execution order
-          // for this hook, which is what actually matters. The raw
-          // `resolved.plugins` array is a different order: Vite re-sorts per hook
-          // by `transform.order`, so scanning the raw array both MISSES a
-          // later-listed plugin that declares `order: 'pre'` and FALSELY ACCUSES
-          // an earlier-listed one that declares `order: 'post'`.
-          const sorted = typeof resolved.getSortedPlugins === 'function'
-            ? resolved.getSortedPlugins('transform')
-            : (resolved.plugins ?? [])
+        //
+        // getSortedPlugins('transform') returns the EFFECTIVE execution order for
+        // this hook, which is what actually matters. The raw `resolved.plugins`
+        // array is a different order: Vite re-sorts per hook by `transform.order`,
+        // so scanning the raw array both MISSES a later-listed plugin declaring
+        // `order: 'pre'` and FALSELY ACCUSES an earlier-listed one declaring
+        // `order: 'post'`. There is deliberately NO fallback to that array —
+        // warning from the wrong list trains users to ignore the warning. Vite
+        // 5.1, 6.4 and 7.3 all provide getSortedPlugins; if a version does not,
+        // skipping this advisory is strictly better than being confidently wrong,
+        // and the provenance guard still enforces either way.
+        //
+        // Both conditions are folded into this one `if` rather than an early
+        // return: this runs INSIDE configResolved, and returning here would skip
+        // the alias extraction and transformSource construction below.
+        if (resolved.command === 'serve' && typeof resolved.getSortedPlugins === 'function') {
+          const sorted = resolved.getSortedPlugins('transform')
           const selfIndex = sorted.findIndex(p => p?.name === 'cortex-editor')
           if (selfIndex > 0) {
             const before = sorted.slice(0, selfIndex).map(p => p?.name).filter(Boolean)
