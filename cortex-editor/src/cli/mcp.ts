@@ -618,7 +618,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async () => {
       try {
         const result = await rpc('getPending', {})
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -631,7 +631,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async () => {
       try {
         const result = await rpc('getActive', {})
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -647,7 +647,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async ({ annotationId }) => {
       try {
         const result = await rpc('getDetails', { annotationId })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -663,7 +663,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async ({ annotationId }) => {
       try {
         const result = await rpc('acknowledge', { annotationId })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -679,7 +679,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async ({ annotationId, summary }) => {
       try {
         const result = await rpc('resolve', { annotationId, summary })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -695,7 +695,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async ({ annotationId, reason }) => {
       try {
         const result = await rpc('dismiss', { annotationId, reason })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -711,7 +711,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async ({ annotationId, text }) => {
       try {
         const result = await rpc('respond', { annotationId, text })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -778,7 +778,7 @@ export async function startMCPServer(options: MCPServerOptions = {}): Promise<MC
     async ({ intentIds }) => {
       try {
         const result = await rpc('discardEdits', { intentIds })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -803,7 +803,7 @@ For user-driven abandonment, use cortex_discard_edits.`,
     async ({ intentIds }) => {
       try {
         const result = await rpc('acknowledgeSourceEdit', { intentIds })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }
@@ -825,7 +825,7 @@ etc.) — anything that means the source change did NOT land.`,
     async ({ intentIds, reason }) => {
       try {
         const result = await rpc('reportSourceEditFailed', { intentIds, reason })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }

@@ -3,6 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { startMCPServer, discoverPort, discoverToken, findProjectRoot, calculateReconnectDelay, MCP_SESSION_ID, PROTOCOL_INSTRUCTIONS, type MCPServerHandle } from '../../src/cli/mcp.js'
+import { FENCE_TAG } from '../../src/shared/untrusted-fence.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
@@ -1700,6 +1701,151 @@ describe('cortex mcp', () => {
       expect(text).toContain('SCHEMA_VIOLATION')
       expect(text).toContain('Invalid cortex-rpc envelope')
       expect(text).not.toContain('RPC timeout')
+    })
+  })
+
+  // ── COR-31: the C3 fence, enforced at the MCP tool boundary ──────────────
+  //
+  // untrusted-fence.ts was unit-tested, but nothing asserted the fence was ON
+  // THE PATH for any tool. #178 wired serializeForAgent into the two tools that
+  // returned hints at the time; COR-24 made a third start returning them and it
+  // was still on JSON.stringify. That was caught by hand, not by a test.
+  //
+  // Deliberately NOT a per-tool list. A list IS the original failure mode: it
+  // goes stale the moment a caller is added and nothing fails. This enumerates
+  // whatever is registered, synthesizes arguments from each tool's own declared
+  // schema, and asserts the invariant across all of them — so a NEW tool that
+  // starts returning hints is covered on its first run with no edit here.
+  describe('COR-31: page-derived hints are fenced at every MCP tool boundary', () => {
+    const SENTINEL = 'PAGE_DERIVED_SENTINEL_ac41f7'
+
+    function synthesizeValue(prop: Record<string, unknown>): unknown {
+      const enumVals = prop?.enum as unknown[] | undefined
+      if (Array.isArray(enumVals) && enumVals.length) return enumVals[0]
+      switch (prop?.type) {
+        case 'array':
+          return [synthesizeValue((prop.items as Record<string, unknown>) ?? { type: 'string' })]
+        case 'number':
+        case 'integer':
+          return 1
+        case 'boolean':
+          return true
+        case 'object':
+          return {}
+        default:
+          return 'synthetic-test-value'
+      }
+    }
+
+    /** Minimal arguments satisfying a tool's declared required fields, derived
+     *  from the schema rather than hard-coded — a new tool needs no edit here. */
+    function synthesizeArgs(schema: unknown): Record<string, unknown> {
+      const s = schema as { properties?: Record<string, Record<string, unknown>>; required?: string[] }
+      const args: Record<string, unknown> = {}
+      for (const key of s?.required ?? []) {
+        args[key] = synthesizeValue(s.properties?.[key] ?? {})
+      }
+      return args
+    }
+
+    /** Answer EVERY rpc method with a payload carrying page-derived hint text,
+     *  so the question becomes "does this tool fence what the server hands it",
+     *  independent of which methods happen to return hints today. */
+    function stubHintBearingRpc() {
+      mockVite.wss.on('connection', (ws) => {
+        ws.on('message', (raw) => {
+          let msg: Record<string, unknown>
+          try { msg = JSON.parse(raw.toString()) } catch { return }
+          if (msg.type !== 'cortex-rpc') return
+          ws.send(JSON.stringify({
+            type: 'cortex-rpc-result',
+            requestId: msg.requestId,
+            result: {
+              ok: true,
+              results: [{
+                intentId: 'i1',
+                status: 'needs-source-edit',
+                intent: {
+                  source: 'cortex-preview:p1',
+                  sourceResolutionHint: {
+                    tagName: 'div',
+                    className: SENTINEL,
+                    id: '',
+                    textPreview: '',
+                    domSelector: 'div',
+                  },
+                },
+              }],
+            },
+          }))
+        })
+      })
+    }
+
+    it('no registered tool emits page-derived hint text outside the fence', async () => {
+      stubHintBearingRpc()
+      const client = await startTestServer(mockVite.port)
+      await waitForConnection(mockVite)
+      await new Promise(r => setTimeout(r, 50))
+
+      const { tools } = await client.listTools()
+      expect(tools.length).toBeGreaterThan(0)
+
+      const echoed: string[] = []
+      const unfenced: string[] = []
+
+      for (const tool of tools) {
+        let text = ''
+        try {
+          const res = await client.callTool({
+            name: tool.name,
+            arguments: synthesizeArgs(tool.inputSchema),
+          })
+          text = (res.content as Array<{ text?: string }> | undefined)?.[0]?.text ?? ''
+        } catch {
+          continue // a tool that rejects synthetic args cannot leak the stub
+        }
+        if (!text.includes(SENTINEL)) continue
+        echoed.push(tool.name)
+        if (!text.trimStart().startsWith(`<${FENCE_TAG}`)) unfenced.push(tool.name)
+      }
+
+      // Guard against a vacuous pass. If argument synthesis broke and nothing
+      // echoed the stub, `unfenced` would be empty for entirely the wrong reason
+      // — the same "structurally cannot fail" shape this suite keeps finding.
+      expect(echoed.length).toBeGreaterThanOrEqual(5)
+      // Regression pin: the tool that nearly shipped unfenced (COR-24).
+      expect(echoed).toContain('cortex_get_intent_context')
+      // The invariant. Naming the offenders makes a failure immediately actionable.
+      expect(unfenced).toEqual([])
+    })
+
+    it('fencing is free when there is no hint — plain JSON, byte for byte', async () => {
+      // This is what makes "fence everywhere" safe rather than a formatting
+      // change: serializeForAgent falls through to JSON.stringify(x, null, 2)
+      // when containsPageDerivedHint is false, so converting the hintless tools
+      // altered no output. Without this, the conversion is unproven.
+      mockVite.wss.on('connection', (ws) => {
+        ws.on('message', (raw) => {
+          let msg: Record<string, unknown>
+          try { msg = JSON.parse(raw.toString()) } catch { return }
+          if (msg.type !== 'cortex-rpc') return
+          ws.send(JSON.stringify({
+            type: 'cortex-rpc-result',
+            requestId: msg.requestId,
+            result: { annotations: [{ id: 'a1', text: 'plain' }], count: 1 },
+          }))
+        })
+      })
+
+      const client = await startTestServer(mockVite.port)
+      await waitForConnection(mockVite)
+      await new Promise(r => setTimeout(r, 50))
+
+      const res = await client.callTool({ name: 'cortex_get_pending' })
+      const text = (res.content as Array<{ text: string }>)[0].text
+      expect(text).toBe(JSON.stringify({ annotations: [{ id: 'a1', text: 'plain' }], count: 1 }, null, 2))
+      expect(text).not.toContain(FENCE_TAG)
     })
   })
 })
