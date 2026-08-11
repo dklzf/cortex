@@ -1,0 +1,22 @@
+cortex-editor/src/adapters/types.ts
+  s_515b894c608172::t_5c2f8846d0e179 51-55
+cortex-editor/tests/adapters/vite.test.ts
+  s_515b894c608172::t_5006f84a1a5b1c 1
+  s_515b894c608172::t_47a902de8b1395 119-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7464c6b566d6a6a02e758277a9c80898c20b388c",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
