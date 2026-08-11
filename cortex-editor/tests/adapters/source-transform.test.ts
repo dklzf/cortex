@@ -828,6 +828,29 @@ describe('path traversal safety', () => {
     expect(reasons).toEqual(['unmappable'])
   })
 
+  it('gives serialization-specific advice, not "widen projectRoot"', () => {
+    // Both causes report `unmappable`, but the remedies differ and only one of
+    // them is actionable per case. Telling someone to widen projectRoot for a
+    // backslash filename sends them to change config, see no improvement, and
+    // conclude cortex is broken.
+    if (process.platform === 'win32') return
+
+    const dir = path.join(PROJECT_ROOT, 'src')
+    fs.mkdirSync(dir, { recursive: true })
+    const weird = path.join(dir, 'baz\\qux.tsx')
+    fs.writeFileSync(weird, '<div />', 'utf8')
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // No onProvenanceMismatch, so the default console path is what runs.
+    expect(createSourceTransform(PROJECT_ROOT)('<div />', weird)).toBeNull()
+    const msg = warn.mock.calls.map(c => String(c[0])).join('\n')
+    warn.mockRestore()
+
+    expect(msg).toContain('forward-slash path')
+    expect(msg).toContain('will NOT help')
+    expect(msg).not.toContain('point projectRoot at a directory')
+  })
+
   it('does not mistake an in-root directory named "..hidden" for an escape', () => {
     // Segment-aware containment, per this repo's path-matching rule. A bare
     // `startsWith('..')` fires on this legitimate in-root path, which under the

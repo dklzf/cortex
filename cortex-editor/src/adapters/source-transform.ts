@@ -537,14 +537,28 @@ export function createSourceTransform(
         // every file in a linked package, and per-file output would be spam. But
         // silence would make a whole package quietly lose deterministic edits.
         warnedUnmappable = true
+        // The two causes need DIFFERENT advice. Widening projectRoot fixes
+        // containment and does nothing for a filename whose forward-slash
+        // serialization names another path — sending someone to edit their config
+        // for that is worse than saying nothing, because they will change it, see
+        // no improvement, and conclude cortex is broken.
         console.warn(
-          `[cortex] Refusing to annotate ${cleanId}: it resolves outside projectRoot ` +
-          `(${canonicalRoot}), so the position cortex records could not be mapped back to ` +
-          `this file. Apply resolves stamped paths under projectRoot, so a stamp here ` +
-          `would name a DIFFERENT file.\n` +
-          `[cortex] Elements there fall back to agent resolution. If these files should be ` +
-          `editable, point projectRoot at a directory that contains them. Further ` +
-          `occurrences are not logged.`,
+          escapesRoot
+            ? `[cortex] Refusing to annotate ${cleanId}: it resolves outside projectRoot ` +
+              `(${canonicalRoot}), so the position cortex records could not be mapped back ` +
+              `to this file. Apply resolves stamped paths under projectRoot, so a stamp ` +
+              `here would name a DIFFERENT file.\n` +
+              `[cortex] Elements there fall back to agent resolution. If these files should ` +
+              `be editable, point projectRoot at a directory that contains them (following ` +
+              `symlinks — containment is checked against real paths). Further occurrences ` +
+              `are not logged.`
+            : `[cortex] Refusing to annotate ${cleanId}: its path cannot be written as a ` +
+              `forward-slash path that resolves back to it. A literal backslash in a POSIX ` +
+              `filename is the usual cause — cortex would stamp a path naming a DIFFERENT ` +
+              `file, which apply would then resolve and edit.\n` +
+              `[cortex] Elements there fall back to agent resolution. Widening projectRoot ` +
+              `will NOT help; rename the file if you need deterministic edits on it. ` +
+              `Further occurrences are not logged.`,
         )
       }
       return null
