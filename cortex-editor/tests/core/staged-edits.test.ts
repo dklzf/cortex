@@ -679,6 +679,20 @@ describe('agentResolveIntentContext', () => {
     expect(out.trimEnd().endsWith(`</${FENCE_TAG}>`)).toBe(true)
   })
 
+  it('names the right loop-closing tool, not discard', () => {
+    // cortex_discard_edits' own description says it is NOT for closing the loop
+    // after a successful Edit — that is cortex_acknowledge_source_edit. The wire
+    // effect is identical, so getting this wrong never surfaces as a bug: it
+    // silently records successful agent resolutions as user abandonments, which
+    // is the exact signal COR-4's identity hit-rate gate reads.
+    const ctx = agentResolveIntentContext(
+      makeEdit({ source: 'cortex-preview:p1', sourceResolutionHint: hint }),
+    )
+    expect(ctx.guidance).toContain('cortex_acknowledge_source_edit')
+    expect(ctx.guidance).toContain('cortex_report_source_edit_failed')
+    expect(ctx.guidance).not.toMatch(/then discard this intent/)
+  })
+
   it('strips fence markers from source and instanceSources, not just guidance', () => {
     // `source` is `cortex-preview:<id>` and `ensurePreviewId` PRESERVES an
     // existing `data-cortex-preview-id`, so page code controls the id. These are

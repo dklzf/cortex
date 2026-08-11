@@ -578,9 +578,12 @@ export function agentResolveIntentContext(intent: PendingEdit): AgentResolveInte
           ? ` whose text begins "${fenceSafe(hint.textPreview).slice(0, 60)}"`
           : '') +
         (hint.domSelector ? ` matching the selector "${fenceSafe(hint.domSelector)}"` : '') +
-        `. Search the project for the JSX that renders it, apply the edit with your ` +
-        `Edit tool, then discard this intent. If several candidates match and you ` +
-        `cannot tell them apart, ask the user rather than guessing.`
+        `. Search the project for the JSX that renders it, then apply the edit with ` +
+        `your Edit tool. Close the loop with cortex_acknowledge_source_edit on ` +
+        `success, or cortex_report_source_edit_failed if the write did not land — ` +
+        `NOT cortex_discard_edits, which means the user changed their mind. The wire ` +
+        `effect is the same but the recorded outcome is not. If several candidates ` +
+        `match and you cannot tell them apart, ask the user rather than guessing.`
       : 'No resolution hint was recorded, which should not happen on this path — ' +
         'report this rather than guessing at a source location.',
   }
