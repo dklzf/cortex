@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server as HttpServer } from 'http'
 import fs from 'fs'
 import os from 'os'
@@ -115,6 +115,10 @@ function initPlugin(overrides?: { command?: 'serve' | 'build'; root?: string }) 
 // a position it cannot prove was measured against the file on disk, so a synthetic
 // '/project/src/App.tsx' would take the refusal branch and assert nothing.
 const TRANSFORM_ROOT = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'cortex-vite-tx-'))
+
+afterAll(() => {
+  fs.rmSync(TRANSFORM_ROOT, { recursive: true, force: true })
+})
 
 /** Init the plugin rooted at a real temp dir, write `code` there, and return both
  *  the plugin and the real id to hand its transform. */

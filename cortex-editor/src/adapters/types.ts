@@ -48,6 +48,11 @@ export interface SourceTransformOptions {
    *  `fs.readFileSync`. For adapters whose modules do not live on the native
    *  filesystem — an in-memory fs, a virtual route generator, a custom bundler.
    *
+   *  `id` is the QUERY-STRIPPED module id (`rawId.split('?')[0]`), not the raw
+   *  bundler id. Vite and Rollup routinely append `?v=<hash>`, `?raw`, `?worker`
+   *  and friends; cortex strips them before every filesystem read, so an adapter
+   *  keying an in-memory map by raw id would miss. Key by the bare path.
+   *
    *  This is a provenance SEAM, not a bypass. The returned string is compared to
    *  the incoming code exactly as a disk read would be, and returning `null` (or
    *  throwing) still fails closed with no anchor emitted. It exists so a custom
