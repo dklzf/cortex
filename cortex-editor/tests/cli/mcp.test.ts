@@ -1751,12 +1751,18 @@ describe('cortex mcp', () => {
     /** Answer EVERY rpc method with a payload carrying page-derived hint text,
      *  so the question becomes "does this tool fence what the server hands it",
      *  independent of which methods happen to return hints today. */
+    /** Every rpc method observed, so a tool that DID reach the RPC layer but did
+     *  not echo the stub can be told apart from one that never called out at all.
+     *  Without that distinction a transforming handler is silently skipped. */
+    const rpcCalls: string[] = []
+
     function stubHintBearingRpc() {
       mockVite.wss.on('connection', (ws) => {
         ws.on('message', (raw) => {
           let msg: Record<string, unknown>
           try { msg = JSON.parse(raw.toString()) } catch { return }
           if (msg.type !== 'cortex-rpc') return
+          rpcCalls.push(String(msg.method))
           ws.send(JSON.stringify({
             type: 'cortex-rpc-result',
             requestId: msg.requestId,
@@ -1782,19 +1788,31 @@ describe('cortex mcp', () => {
       })
     }
 
-    /** True when SENTINEL appears anywhere OUTSIDE the fenced region. Asserting
-     *  only that the text STARTS with the opening tag is weaker than the stated
-     *  invariant: a tool could prepend a fence and still trail page-derived text
-     *  after the close, or never emit a close at all. */
+    /** True when SENTINEL appears anywhere OUTSIDE a fenced region.
+     *
+     *  Walks EVERY fence interval rather than the outer bounds. `indexOf(open)`
+     *  paired with `lastIndexOf(close)` treats the whole outer span as protected,
+     *  so two independently fenced fragments with the sentinel BETWEEN them —
+     *  `<f>a</f> SENTINEL <f>b</f>` — read as contained despite a real leak. An
+     *  open tag that is never closed is a leak too: everything after it is
+     *  unbounded. */
     function leaksOutsideFence(text: string): boolean {
       const open = `<${FENCE_TAG}`
       const close = `</${FENCE_TAG}>`
-      const openIdx = text.indexOf(open)
-      const closeIdx = text.lastIndexOf(close)
-      if (openIdx === -1 || closeIdx === -1) return true
-      if (text.slice(0, openIdx).includes(SENTINEL)) return true
-      if (text.slice(closeIdx + close.length).includes(SENTINEL)) return true
-      return false
+      let cursor = 0
+      let outside = ''
+      for (;;) {
+        const o = text.indexOf(open, cursor)
+        if (o === -1) {
+          outside += text.slice(cursor)
+          break
+        }
+        outside += text.slice(cursor, o)
+        const c = text.indexOf(close, o)
+        if (c === -1) return true // opened and never closed
+        cursor = c + close.length
+      }
+      return outside.includes(SENTINEL)
     }
 
     it('no registered tool emits page-derived hint text outside the fence', async () => {
@@ -1812,6 +1830,7 @@ describe('cortex mcp', () => {
 
       for (const tool of tools) {
         let text = ''
+        const rpcBefore = rpcCalls.length
         try {
           const res = await client.callTool({
             name: tool.name,
@@ -1826,7 +1845,17 @@ describe('cortex mcp', () => {
           notExercised.push(`${tool.name} (${(e as Error).message.slice(0, 60)})`)
           continue
         }
-        if (!text.includes(SENTINEL)) continue
+        const issuedRpc = rpcCalls.length > rpcBefore
+        if (!text.includes(SENTINEL)) {
+          // A tool that reached the RPC layer and still did not echo the stub is
+          // NOT a tool without a boundary — it transformed or selected part of the
+          // response, and a production-shaped result could carry a hint through it
+          // unfenced. Skipping it silently is the same hole as skipping an
+          // uninvokable one. A tool that issued no RPC at all has no boundary here
+          // and is legitimately out of scope.
+          if (issuedRpc) notExercised.push(`${tool.name} (rpc issued, stub not echoed)`)
+          continue
+        }
         echoed.push(tool.name)
         if (leaksOutsideFence(text)) unfenced.push(tool.name)
       }
