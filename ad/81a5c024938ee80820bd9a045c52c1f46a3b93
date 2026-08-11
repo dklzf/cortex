@@ -1,0 +1,25 @@
+cortex-editor/tests/shared/untrusted-fence.test.ts
+  s_515b894c608172::t_734ee82d240397 65-91
+cortex-editor/tests/core/staged-edits.test.ts
+  s_515b894c608172::t_099427aa40483e 565-578
+cortex-editor/src/shared/untrusted-fence.ts
+  s_515b894c608172::t_aa4eb968afbdee 46-57,60-66
+cortex-editor/src/core/staged-edits.ts
+  s_515b894c608172::t_93d3582413f97c 497-502,506-508
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ad81a5c024938ee80820bd9a045c52c1f46a3b93",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
