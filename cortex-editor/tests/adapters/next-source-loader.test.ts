@@ -1,18 +1,40 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import cortexSourceLoader, { _resetForTesting } from '../../src/adapters/next-source-loader.js'
 
 afterEach(() => {
   _resetForTesting()
 })
 
+// Tests materialize real files; remove the tree so runs do not accumulate temps.
+afterAll(() => {
+  fs.rmSync(PROJECT_ROOT, { recursive: true, force: true })
+})
+
+// Real files on disk (COR-28) — see the equivalent note in source-loader.test.ts.
+// The transform refuses to stamp a position it cannot prove was measured against
+// the file on disk, so synthetic paths would take the refusal branch and assert
+// nothing about what this loader produces.
+const PROJECT_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-nsl-'))
+
+/** Map a virtual '/project/...' path onto the real temp root. */
+function realPath(virtualPath: string): string {
+  const rel = virtualPath.startsWith('/project/')
+    ? virtualPath.slice('/project/'.length)
+    : virtualPath.replace(/^\/+/, '')
+  return path.join(PROJECT_ROOT, rel)
+}
+
 // Create a fake webpack LoaderContext
 function fakeContext(
   overrides: { resourcePath?: string; projectRoot?: string; includeNodeModules?: string[] } = {}
 ) {
   const ctx = {
-    resourcePath: overrides.resourcePath ?? '/project/src/App.tsx',
+    resourcePath: realPath(overrides.resourcePath ?? '/project/src/App.tsx'),
     getOptions: () => ({
-      projectRoot: overrides.projectRoot ?? '/project',
+      projectRoot: overrides.projectRoot ? realPath(overrides.projectRoot) : PROJECT_ROOT,
       ...(overrides.includeNodeModules ? { includeNodeModules: overrides.includeNodeModules } : {}),
     }),
     callback: vi.fn(),
@@ -21,11 +43,18 @@ function fakeContext(
   return ctx
 }
 
+/** Write `source` to the context's real resourcePath, then run the loader. */
+function runLoader(ctx: ReturnType<typeof fakeContext>, source: string): void {
+  fs.mkdirSync(path.dirname(ctx.resourcePath), { recursive: true })
+  fs.writeFileSync(ctx.resourcePath, source, 'utf8')
+  cortexSourceLoader.call(ctx, source)
+}
+
 describe('cortexSourceLoader', () => {
   it('transforms JSX and calls callback with code + map', () => {
     const ctx = fakeContext()
     const source = 'export default function App() { return <div>hello</div> }'
-    cortexSourceLoader.call(ctx, source)
+    runLoader(ctx, source)
 
     expect(ctx.cacheable).toHaveBeenCalled()
     expect(ctx.callback).toHaveBeenCalledOnce()
@@ -38,7 +67,7 @@ describe('cortexSourceLoader', () => {
   it('returns original source unchanged for non-JSX files', () => {
     const ctx = fakeContext({ resourcePath: '/project/src/utils.ts' })
     const source = 'const x = 1'
-    cortexSourceLoader.call(ctx, source)
+    runLoader(ctx, source)
 
     expect(ctx.callback).toHaveBeenCalledOnce()
     const [err, code, map] = ctx.callback.mock.calls[0]!
@@ -52,8 +81,8 @@ describe('cortexSourceLoader', () => {
     const ctx2 = fakeContext()
     const source = 'export default function A() { return <div /> }'
 
-    cortexSourceLoader.call(ctx1, source)
-    cortexSourceLoader.call(ctx2, source)
+    runLoader(ctx1, source)
+    runLoader(ctx2, source)
 
     // Both should produce identical output (same cached transform)
     const code1 = ctx1.callback.mock.calls[0]![1]
@@ -66,7 +95,7 @@ describe('cortexSourceLoader', () => {
     // in-loader check is the only node_modules gate on that path.
     const ctx = fakeContext({ resourcePath: '/project/node_modules/some-lib/Button.tsx' })
     const source = 'export default function B() { return <button /> }'
-    cortexSourceLoader.call(ctx, source)
+    runLoader(ctx, source)
 
     expect(ctx.callback).toHaveBeenCalledOnce()
     const [err, code, map] = ctx.callback.mock.calls[0]!
@@ -81,7 +110,7 @@ describe('cortexSourceLoader', () => {
       includeNodeModules: ['@acme/ui'],
     })
     const source = 'export default function B() { return <button /> }'
-    cortexSourceLoader.call(ctx, source)
+    runLoader(ctx, source)
 
     const [err, code] = ctx.callback.mock.calls[0]!
     expect(err).toBeNull()
@@ -89,17 +118,23 @@ describe('cortexSourceLoader', () => {
   })
 
   it('re-creates transform when projectRoot changes', () => {
-    const ctx1 = fakeContext({ projectRoot: '/project-a' })
-    const ctx2 = fakeContext({ projectRoot: '/project-b', resourcePath: '/project-b/src/App.tsx' })
+    // Both resources must sit UNDER their own root. ctx1 previously defaulted to
+    // '/project/src/App.tsx' while its root was '/project-a', so it fell to the
+    // outside-root basename branch — a different path, but for a reason that has
+    // nothing to do with re-creating the transform.
+    const ctx1 = fakeContext({ projectRoot: '/project-a', resourcePath: '/project-a/src/One.tsx' })
+    const ctx2 = fakeContext({ projectRoot: '/project-b', resourcePath: '/project-b/src/Two.tsx' })
     const source = 'export default function A() { return <div /> }'
 
-    cortexSourceLoader.call(ctx1, source)
-    cortexSourceLoader.call(ctx2, source)
+    runLoader(ctx1, source)
+    runLoader(ctx2, source)
 
-    // Different roots → different relative paths in the output
+    // Assert the DISTINCT relative paths the comment always claimed. Checking only
+    // that an attribute exists passes even when the transform is never re-created,
+    // which is the one thing this test is named for.
     const code1 = ctx1.callback.mock.calls[0]![1] as string
     const code2 = ctx2.callback.mock.calls[0]![1] as string
-    expect(code1).toContain('data-cortex-source="')
-    expect(code2).toContain('data-cortex-source="')
+    expect(code1).toContain('data-cortex-source="src/One.tsx:')
+    expect(code2).toContain('data-cortex-source="src/Two.tsx:')
   })
 })
