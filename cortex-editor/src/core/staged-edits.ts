@@ -494,11 +494,18 @@ export function parseIntentSource(source: string): ParseIntentSourceResult {
   // majority of the surface. The parser was correct for what it was written for;
   // it broke when a second format was introduced without auditing consumers.
   if (isPreviewSource(source)) {
+    // Deliberately does NOT echo `source`. The preview id is page-controllable
+    // (`ensurePreviewId` preserves an existing `data-cortex-preview-id`), and a
+    // result with no `sourceResolutionHint` is not fenced by `serializeForAgent`
+    // — so interpolating it here would put attacker-authored prose in front of
+    // the agent with no wrapper and no warning. The caller already has the value
+    // it passed in; nothing is lost by naming the SHAPE instead.
     return {
       ok: false,
       error:
-        `Not a file position: ${source} is an agent-resolve intent. It carries a ` +
-        `sourceResolutionHint instead of a file:line:col — use that to locate the source.`,
+        'Not a file position: this is an agent-resolve intent (source begins ' +
+        '"cortex-preview:"). It carries a sourceResolutionHint instead of a ' +
+        'file:line:col — use that to locate the source.',
     }
   }
   const lastColon = source.lastIndexOf(':')
