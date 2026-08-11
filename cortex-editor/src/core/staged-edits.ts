@@ -546,21 +546,30 @@ export interface AgentResolveIntentContext {
  */
 export function agentResolveIntentContext(intent: PendingEdit): AgentResolveIntentContext {
   const hint = intent.sourceResolutionHint ?? null
-  // `guidance` quotes page-derived hint text, and `sanitizeHintsForAgent` only
-  // descends into `sourceResolutionHint` objects — it never sees a top-level
-  // string. So an unstripped className containing `</untrusted-page-content>`
-  // would close the fence early and everything after it would read to the agent
-  // as trusted content. Strip here, where the text is interpolated. (The hint
-  // object itself is stripped again downstream; stripping is idempotent.)
+  // EVERY top-level string here is page-derived, and `sanitizeHintsForAgent`
+  // only descends into `sourceResolutionHint` objects — it never sees one. Left
+  // raw, a value carrying `</untrusted-page-content>` closes the fence early and
+  // everything after it reads to the agent as trusted content.
+  //
+  // Three fields are exposed, not one:
+  //   - `guidance` quotes the hint text inline
+  //   - `source` is `cortex-preview:<id>`, and `ensurePreviewId` PRESERVES an
+  //     existing `data-cortex-preview-id`, so the id is page-controllable
+  //   - `instanceSources` is a list of the same
+  // Cortex-generated ids are `p<base36>-<base36>` and can never contain a marker,
+  // so stripping is identity for every legitimate value and only alters injected
+  // ones. (The hint object is stripped again downstream; stripping is idempotent.)
   const fenceSafe = (v: string | undefined): string => (v ? stripFenceMarkers(v) : '')
   return {
     resolution: 'agent-resolve',
-    source: intent.source,
+    source: fenceSafe(intent.source),
     reason:
       'This intent has no build-time source anchor, so there is no file:line to read. ' +
       'The element was identified at runtime instead.',
     sourceResolutionHint: hint,
-    ...(intent.instanceSources?.length ? { instanceSources: intent.instanceSources } : {}),
+    ...(intent.instanceSources?.length
+      ? { instanceSources: intent.instanceSources.map(fenceSafe) }
+      : {}),
     guidance: hint
       ? `Locate the source yourself using the hint: a <${fenceSafe(hint.tagName)}> element` +
         (hint.className ? ` with class "${fenceSafe(hint.className)}"` : '') +
@@ -568,6 +577,7 @@ export function agentResolveIntentContext(intent: PendingEdit): AgentResolveInte
         (hint.textPreview
           ? ` whose text begins "${fenceSafe(hint.textPreview).slice(0, 60)}"`
           : '') +
+        (hint.domSelector ? ` matching the selector "${fenceSafe(hint.domSelector)}"` : '') +
         `. Search the project for the JSX that renders it, apply the edit with your ` +
         `Edit tool, then discard this intent. If several candidates match and you ` +
         `cannot tell them apart, ask the user rather than guessing.`
