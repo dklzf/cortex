@@ -64,24 +64,36 @@ export interface SourceTransformOptions {
    *  prevents. */
   readSource?: (id: string) => string | null
 
-  /** Called when cortex refuses to annotate a file because it cannot prove the
-   *  text it was handed is the file on disk. Babel's line/column numbers are
-   *  coordinates in the string given to the parser, while the apply side resolves
-   *  them against disk — so an unproven match means any anchor could point at the
-   *  wrong element. When set, replaces the default console warning.
+  /** Called when cortex refuses to annotate a file, because an anchor it cannot
+   *  fully account for is a WRITE TARGET: the attribute's presence alone forces
+   *  `applyMode: 'direct'`, and apply resolves the recorded path and position
+   *  against disk. When set, replaces the default console warning.
    *
-   *  `reason` distinguishes the three refusal causes:
+   *  `reason` distinguishes the four refusal causes. The first three are about
+   *  the TEXT — Babel's line/column are coordinates in the string handed to the
+   *  parser, so an unproven match means the position could name the wrong
+   *  element. The fourth is about the PATH, and is a different failure: the
+   *  position is fine, the file it would be applied to is not.
    *   - `'virtual'`    — the module id contains `\0` (Rollup/Vite virtual module);
    *                      there is no file to compare against
    *   - `'unreadable'` — the file could not be read (missing, EACCES, memory-fs)
    *   - `'mismatch'`   — the file was read and differs after position-preserving
    *                      normalization; an upstream transform rewrote it
+   *   - `'unmappable'` — the file has no canonical, reversible path relative to
+   *                      `projectRoot` (outside it, or symlink-escaped). Apply
+   *                      resolves stamped paths UNDER `projectRoot`, so a stamp
+   *                      would name a DIFFERENT file — a silent wrong-FILE write
    *
-   *  `diskLines` is `-1` when nothing was read (virtual/unreadable).
+   *  `diskLines` is `-1` whenever no line-count divergence is involved
+   *  (virtual, unreadable, unmappable).
    *  See the provenance guard in source-transform.ts. */
   onProvenanceMismatch?: (
     id: string,
-    detail: { reason: 'virtual' | 'unreadable' | 'mismatch'; inputLines: number; diskLines: number },
+    detail: {
+      reason: 'virtual' | 'unreadable' | 'mismatch' | 'unmappable'
+      inputLines: number
+      diskLines: number
+    },
   ) => void
 }
 

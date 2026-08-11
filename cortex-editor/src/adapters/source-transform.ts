@@ -37,6 +37,17 @@ function hasBom(s: string): boolean {
   return s.charCodeAt(0) === 0xfeff
 }
 
+/** `fs.realpathSync` with a lexical fallback. Used to make containment agree with
+ *  the apply side, which realpaths its own root — a purely lexical check accepts
+ *  an in-root symlink whose target is outside, and apply then refuses the write. */
+function realpathOr(p: string): string {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return path.resolve(p)
+  }
+}
+
 /** Model Vite's own pre-plugin preprocessing, ONE WAY: disk text -> the text Vite
  *  would hand a plugin.
  *
@@ -342,6 +353,7 @@ export function createSourceTransform(
 
   // One unreadable-source warning per transform instance — see the guard below.
   let warnedUnreadable = false
+  let warnedUnmappable = false
 
   return function transformSource(code: string, id: string): TransformResult | null {
     if (isProd) return null
@@ -468,10 +480,91 @@ export function createSourceTransform(
       }
     }
 
-    const relativePath = path.relative(projectRoot, cleanId).replace(/\\/g, '/')
-    const safePath = relativePath.startsWith('..')
-      ? path.basename(cleanId).replace(/\\/g, '/')
-      : relativePath
+    // The stamped path is not decoration: the apply side resolves it UNDER
+    // projectRoot (`resolve(this.projectRoot, filePath)` in edit-pipeline.ts), so
+    // it is a write target. Collapsing an outside-root file to its basename made
+    // `/workspace/pkg/Button.tsx` stamp `Button.tsx`, which apply then resolved to
+    // `<projectRoot>/Button.tsx` — an unrelated file that cortex would happily
+    // rewrite if it held JSX at that line:col. A silent wrong-FILE write, strictly
+    // worse than the wrong-ELEMENT write COR-28 fixed, and the provenance guard
+    // above cannot see it: that guard verifies `cleanId`, the correct path, and
+    // the basename reduction happened afterward — so it made an unmappable stamp
+    // look verified.
+    // Canonical means REALPATH, not just `resolve`. `path.resolve` is purely
+    // lexical, so an in-root symlink pointing outside (`node_modules/@acme/ui ->
+    // ../../packages/ui` with includeNodeModules) reads as contained and gets an
+    // anchor — and then apply's `isWriteTargetInsideRoot`, which DOES realpath,
+    // refuses the write. The element fails to edit instead of degrading to
+    // agent-resolve, which is the opposite of the intent here. Match what apply
+    // computes. Best-effort: fall back to `resolve` if realpath throws (the file
+    // was read successfully just above, but projectRoot may not exist).
+    const canonicalRoot = realpathOr(projectRoot)
+    const canonicalId = realpathOr(cleanId)
+    const relNative = path.relative(canonicalRoot, canonicalId)
+    const relativePath = relNative.replace(/\\/g, '/')
+
+    // Segment-aware containment, per this repo's path-matching rule. A bare
+    // `startsWith('..')` is wrong in BOTH directions: it misses nothing here, but
+    // it also fires on a legitimate in-root directory literally named `..hidden`,
+    // which was then silently collapsed to a basename too.
+    const escapesRoot =
+      relativePath === '..' || relativePath.startsWith('../') || path.isAbsolute(relNative)
+
+    // Validate the SERIALIZED path — the one actually stamped — not the native
+    // one it was derived from. Round-tripping `relNative` is a tautology: it came
+    // from `path.relative` of these same two values. The forward-slash rewrite is
+    // where meaning can change, and on POSIX `\` is a legal FILENAME character:
+    // `/repo/src/foo\bar.tsx` serializes to `src/foo/bar.tsx`, a different file
+    // that apply would resolve and rewrite. That is COR-30 again, one layer down.
+    //
+    // Equality via `path.relative(a, b) === ''` rather than `===` so the compare
+    // matches the platform's own rules — Windows treats drive letters and
+    // components case-insensitively, so a root of `C:\Repo` reached as `C:\repo`
+    // would otherwise be a false refusal that silently disables all annotations.
+    const stampResolvesBack =
+      path.relative(path.resolve(canonicalRoot, relativePath), canonicalId) === ''
+
+    if (escapesRoot || !stampResolvesBack) {
+      const detail = {
+        reason: 'unmappable' as const,
+        inputLines: countLines(code),
+        diskLines: -1,
+      }
+      if (options?.onProvenanceMismatch) {
+        options.onProvenanceMismatch(id, detail)
+      } else if (!warnedUnmappable) {
+        // Deduplicated like the unreadable warning: a monorepo can hit this for
+        // every file in a linked package, and per-file output would be spam. But
+        // silence would make a whole package quietly lose deterministic edits.
+        warnedUnmappable = true
+        // The two causes need DIFFERENT advice. Widening projectRoot fixes
+        // containment and does nothing for a filename whose forward-slash
+        // serialization names another path — sending someone to edit their config
+        // for that is worse than saying nothing, because they will change it, see
+        // no improvement, and conclude cortex is broken.
+        console.warn(
+          escapesRoot
+            ? `[cortex] Refusing to annotate ${cleanId}: it resolves outside projectRoot ` +
+              `(${canonicalRoot}), so the position cortex records could not be mapped back ` +
+              `to this file. Apply resolves stamped paths under projectRoot, so a stamp ` +
+              `here would name a DIFFERENT file.\n` +
+              `[cortex] Elements there fall back to agent resolution. If these files should ` +
+              `be editable, point projectRoot at a directory that contains them (following ` +
+              `symlinks — containment is checked against real paths). Further occurrences ` +
+              `are not logged.`
+            : `[cortex] Refusing to annotate ${cleanId}: its path cannot be written as a ` +
+              `forward-slash path that resolves back to it. A literal backslash in a POSIX ` +
+              `filename is the usual cause — cortex would stamp a path naming a DIFFERENT ` +
+              `file, which apply would then resolve and edit.\n` +
+              `[cortex] Elements there fall back to agent resolution. Widening projectRoot ` +
+              `will NOT help; rename the file if you need deterministic edits on it. ` +
+              `Further occurrences are not logged.`,
+        )
+      }
+      return null
+    }
+
+    const safePath = relativePath
     const escapedPath = escapeAttr(safePath)
 
     let ast: Record<string, unknown>

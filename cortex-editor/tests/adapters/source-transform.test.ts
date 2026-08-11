@@ -655,14 +655,12 @@ describe('source map generation', () => {
     expect(map.mappings).toBeTruthy()
   })
 
-  it('source map uses basename for outside-root files (safePath)', () => {
+  it('emits NO map for an outside-root file, because it emits no anchor (COR-30)', () => {
+    // Previously this asserted `sources[0] === 'App.tsx'` — the basename. That was
+    // a test OF the bug: apply resolves stamped paths under projectRoot, so the
+    // basename named a different file.
     const t = mk()
-    const result = t('<div />', '/etc/secrets/App.tsx')
-    expect(result).not.toBeNull()
-    const map = result!.map!
-    expect(map.sources![0]).toBe('App.tsx')
-    expect(map.file).toBe('App.tsx')
-    expect(map.sources![0]).not.toContain('..')
+    expect(t('<div />', '/etc/secrets/App.tsx')).toBeNull()
   })
 })
 
@@ -750,15 +748,116 @@ describe('sequential call regression', () => {
 })
 
 describe('path traversal safety', () => {
-  it('uses basename for files outside project root', () => {
+  it('REFUSES a file outside project root instead of stamping its basename (COR-30)', () => {
+    // The old contract was `data-cortex-source="App.tsx:"`. Apply resolves stamped
+    // paths under projectRoot, so that named `<projectRoot>/App.tsx` — a different
+    // file, which cortex would rewrite if it held JSX at that line:col. A silent
+    // wrong-FILE write. The COR-28 provenance guard cannot catch it: that guard
+    // verifies `cleanId`, the CORRECT path, and the basename reduction happened
+    // afterward — so it made the unmappable stamp look verified.
+    // mk() materializes the file, so it EXISTS and reads cleanly — the provenance
+    // guard passes and this exercises the path check rather than an earlier
+    // refusal. A synthetic '/etc/secrets/App.tsx' takes the 'unreadable' branch
+    // and would assert nothing about COR-30, which is the same trap COR-28 found
+    // in all 108 of these tests.
+    const reasons: string[] = []
+    const t = mk({ onProvenanceMismatch: (_id, d) => reasons.push(d.reason) })
+    expect(t('<div />', '/etc/secrets/App.tsx')).toBeNull()
+    expect(reasons).toEqual(['unmappable'])
+  })
+
+  it('names the wrong-file collision concretely: two roots, same basename', () => {
+    // The failure the refusal prevents, spelled out. Both files are Button.tsx;
+    // only one is inside the root. Stamping the basename for the outside one made
+    // it indistinguishable from the inside one, and apply resolves under root.
     const t = mk()
-    const result = t('<div />', '/etc/secrets/App.tsx')
+
+    const insideResult = t('<div />', '/project/Button.tsx')
+    expect(insideResult).not.toBeNull()
+    expect(insideResult!.code).toContain('data-cortex-source="Button.tsx:')
+
+    // Same basename, different file, outside the root. It must NOT stamp — that
+    // stamp would resolve to the inside file above and write there.
+    expect(t('<span />', '/pkg/Button.tsx')).toBeNull()
+  })
+
+  it('REFUSES an in-root symlink whose target is outside the root', () => {
+    // `path.resolve` is lexical, so this reads as contained. Apply's
+    // `isWriteTargetInsideRoot` DOES realpath and would refuse the write — so
+    // without realpath here the element fails to edit instead of degrading to
+    // agent-resolve, which is the opposite of what this refusal is for.
+    const target = path.join(OUTSIDE_ROOT, 'linked-pkg')
+    fs.mkdirSync(target, { recursive: true })
+    fs.writeFileSync(path.join(target, 'Card.tsx'), '<div />', 'utf8')
+
+    const linkDir = path.join(PROJECT_ROOT, 'node_modules/@acme/ui')
+    fs.mkdirSync(path.dirname(linkDir), { recursive: true })
+    try {
+      fs.symlinkSync(target, linkDir, 'dir')
+    } catch {
+      return // no symlink permission (Windows without dev mode) — nothing to assert
+    }
+
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      includeNodeModules: ['@acme/ui'],
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    expect(t('<div />', path.join(linkDir, 'Card.tsx'))).toBeNull()
+    expect(reasons).toEqual(['unmappable'])
+  })
+
+  it('REFUSES a POSIX filename containing a backslash, which serializes to a different path', () => {
+    // On POSIX `\` is a legal FILENAME character. `src/foo\bar.tsx` is ONE file,
+    // but the forward-slash rewrite emits `src/foo/bar.tsx` — a different path
+    // that apply would resolve and rewrite. Validating the native relative path
+    // misses this entirely: it round-trips by construction. The SERIALIZED value
+    // is what must be checked.
+    if (process.platform === 'win32') return // `\` is a separator there, not a name
+
+    const dir = path.join(PROJECT_ROOT, 'src')
+    fs.mkdirSync(dir, { recursive: true })
+    const weird = path.join(dir, 'foo\\bar.tsx')
+    fs.writeFileSync(weird, '<div />', 'utf8')
+
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    expect(t('<div />', weird)).toBeNull()
+    expect(reasons).toEqual(['unmappable'])
+  })
+
+  it('gives serialization-specific advice, not "widen projectRoot"', () => {
+    // Both causes report `unmappable`, but the remedies differ and only one of
+    // them is actionable per case. Telling someone to widen projectRoot for a
+    // backslash filename sends them to change config, see no improvement, and
+    // conclude cortex is broken.
+    if (process.platform === 'win32') return
+
+    const dir = path.join(PROJECT_ROOT, 'src')
+    fs.mkdirSync(dir, { recursive: true })
+    const weird = path.join(dir, 'baz\\qux.tsx')
+    fs.writeFileSync(weird, '<div />', 'utf8')
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // No onProvenanceMismatch, so the default console path is what runs.
+    expect(createSourceTransform(PROJECT_ROOT)('<div />', weird)).toBeNull()
+    const msg = warn.mock.calls.map(c => String(c[0])).join('\n')
+    warn.mockRestore()
+
+    expect(msg).toContain('forward-slash path')
+    expect(msg).toContain('will NOT help')
+    expect(msg).not.toContain('point projectRoot at a directory')
+  })
+
+  it('does not mistake an in-root directory named "..hidden" for an escape', () => {
+    // Segment-aware containment, per this repo's path-matching rule. A bare
+    // `startsWith('..')` fires on this legitimate in-root path, which under the
+    // old code silently collapsed it to a basename too.
+    const result = mk()('<div />', '/project/..hidden/App.tsx')
     expect(result).not.toBeNull()
-    // The transform emits forward slashes on every platform, so assert the
-    // basename form rather than building an expectation with path.sep.
-    expect(result!.code).toContain('data-cortex-source="App.tsx:')
-    expect(result!.code).not.toContain('..')
-    expect(result!.code).not.toContain('\\')
+    expect(result!.code).toContain('data-cortex-source="..hidden/App.tsx:')
   })
 
   it('uses relative path for files inside project root', () => {
