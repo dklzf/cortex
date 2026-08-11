@@ -81,7 +81,7 @@ export default defineConfig({
       },
     },
     projects: [
-      { test: { name: 'server', environment: 'node', include: ['tests/adapters/**/*.test.ts', 'tests/core/**/*.test.ts', 'tests/cli/**/*.test.ts', 'tests/schemas/**/*.test.ts'], testTimeout: TEST_TIMEOUT, hookTimeout: HOOK_TIMEOUT } },
+      { test: { name: 'server', environment: 'node', include: ['tests/adapters/**/*.test.ts', 'tests/core/**/*.test.ts', 'tests/cli/**/*.test.ts', 'tests/schemas/**/*.test.ts', 'tests/shared/**/*.test.ts'], testTimeout: TEST_TIMEOUT, hookTimeout: HOOK_TIMEOUT } },
       { test: { name: 'styles', environment: 'node', include: ['tests/styles/**/*.test.ts'], testTimeout: TEST_TIMEOUT, hookTimeout: HOOK_TIMEOUT } },
       {
         // Mirror the tsup browser bundle's __CORTEX_TEST_BUILD__ define so
