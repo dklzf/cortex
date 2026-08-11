@@ -781,6 +781,53 @@ describe('path traversal safety', () => {
     expect(t('<span />', '/pkg/Button.tsx')).toBeNull()
   })
 
+  it('REFUSES an in-root symlink whose target is outside the root', () => {
+    // `path.resolve` is lexical, so this reads as contained. Apply's
+    // `isWriteTargetInsideRoot` DOES realpath and would refuse the write — so
+    // without realpath here the element fails to edit instead of degrading to
+    // agent-resolve, which is the opposite of what this refusal is for.
+    const target = path.join(OUTSIDE_ROOT, 'linked-pkg')
+    fs.mkdirSync(target, { recursive: true })
+    fs.writeFileSync(path.join(target, 'Card.tsx'), '<div />', 'utf8')
+
+    const linkDir = path.join(PROJECT_ROOT, 'node_modules/@acme/ui')
+    fs.mkdirSync(path.dirname(linkDir), { recursive: true })
+    try {
+      fs.symlinkSync(target, linkDir, 'dir')
+    } catch {
+      return // no symlink permission (Windows without dev mode) — nothing to assert
+    }
+
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      includeNodeModules: ['@acme/ui'],
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    expect(t('<div />', path.join(linkDir, 'Card.tsx'))).toBeNull()
+    expect(reasons).toEqual(['unmappable'])
+  })
+
+  it('REFUSES a POSIX filename containing a backslash, which serializes to a different path', () => {
+    // On POSIX `\` is a legal FILENAME character. `src/foo\bar.tsx` is ONE file,
+    // but the forward-slash rewrite emits `src/foo/bar.tsx` — a different path
+    // that apply would resolve and rewrite. Validating the native relative path
+    // misses this entirely: it round-trips by construction. The SERIALIZED value
+    // is what must be checked.
+    if (process.platform === 'win32') return // `\` is a separator there, not a name
+
+    const dir = path.join(PROJECT_ROOT, 'src')
+    fs.mkdirSync(dir, { recursive: true })
+    const weird = path.join(dir, 'foo\\bar.tsx')
+    fs.writeFileSync(weird, '<div />', 'utf8')
+
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    expect(t('<div />', weird)).toBeNull()
+    expect(reasons).toEqual(['unmappable'])
+  })
+
   it('does not mistake an in-root directory named "..hidden" for an escape', () => {
     // Segment-aware containment, per this repo's path-matching rule. A bare
     // `startsWith('..')` fires on this legitimate in-root path, which under the

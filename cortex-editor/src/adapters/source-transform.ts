@@ -37,6 +37,17 @@ function hasBom(s: string): boolean {
   return s.charCodeAt(0) === 0xfeff
 }
 
+/** `fs.realpathSync` with a lexical fallback. Used to make containment agree with
+ *  the apply side, which realpaths its own root — a purely lexical check accepts
+ *  an in-root symlink whose target is outside, and apply then refuses the write. */
+function realpathOr(p: string): string {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return path.resolve(p)
+  }
+}
+
 /** Model Vite's own pre-plugin preprocessing, ONE WAY: disk text -> the text Vite
  *  would hand a plugin.
  *
@@ -479,8 +490,16 @@ export function createSourceTransform(
     // above cannot see it: that guard verifies `cleanId`, the correct path, and
     // the basename reduction happened afterward — so it made an unmappable stamp
     // look verified.
-    const canonicalRoot = path.resolve(projectRoot)
-    const canonicalId = path.resolve(cleanId)
+    // Canonical means REALPATH, not just `resolve`. `path.resolve` is purely
+    // lexical, so an in-root symlink pointing outside (`node_modules/@acme/ui ->
+    // ../../packages/ui` with includeNodeModules) reads as contained and gets an
+    // anchor — and then apply's `isWriteTargetInsideRoot`, which DOES realpath,
+    // refuses the write. The element fails to edit instead of degrading to
+    // agent-resolve, which is the opposite of the intent here. Match what apply
+    // computes. Best-effort: fall back to `resolve` if realpath throws (the file
+    // was read successfully just above, but projectRoot may not exist).
+    const canonicalRoot = realpathOr(projectRoot)
+    const canonicalId = realpathOr(cleanId)
     const relNative = path.relative(canonicalRoot, canonicalId)
     const relativePath = relNative.replace(/\\/g, '/')
 
@@ -491,9 +510,21 @@ export function createSourceTransform(
     const escapesRoot =
       relativePath === '..' || relativePath.startsWith('../') || path.isAbsolute(relNative)
 
-    // Canonical, reversible mapping or no anchor at all. Re-derive exactly what
-    // apply will compute and require it to land back on the file we parsed.
-    if (escapesRoot || path.resolve(canonicalRoot, relNative) !== canonicalId) {
+    // Validate the SERIALIZED path — the one actually stamped — not the native
+    // one it was derived from. Round-tripping `relNative` is a tautology: it came
+    // from `path.relative` of these same two values. The forward-slash rewrite is
+    // where meaning can change, and on POSIX `\` is a legal FILENAME character:
+    // `/repo/src/foo\bar.tsx` serializes to `src/foo/bar.tsx`, a different file
+    // that apply would resolve and rewrite. That is COR-30 again, one layer down.
+    //
+    // Equality via `path.relative(a, b) === ''` rather than `===` so the compare
+    // matches the platform's own rules — Windows treats drive letters and
+    // components case-insensitively, so a root of `C:\Repo` reached as `C:\repo`
+    // would otherwise be a false refusal that silently disables all annotations.
+    const stampResolvesBack =
+      path.relative(path.resolve(canonicalRoot, relativePath), canonicalId) === ''
+
+    if (escapesRoot || !stampResolvesBack) {
       const detail = {
         reason: 'unmappable' as const,
         inputLines: countLines(code),
