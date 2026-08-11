@@ -1,0 +1,21 @@
+cortex-editor/tests/core/staged-edits.test.ts
+  s_515b894c608172::t_b0266b24309abe 682-695
+cortex-editor/src/core/staged-edits.ts
+  s_515b894c608172::t_311752bdf4b41c 581-586
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d4d65a8b33d4ea8b4fe80b33b970f7bea059a14a",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
