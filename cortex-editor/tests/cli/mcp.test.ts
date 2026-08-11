@@ -1782,6 +1782,21 @@ describe('cortex mcp', () => {
       })
     }
 
+    /** True when SENTINEL appears anywhere OUTSIDE the fenced region. Asserting
+     *  only that the text STARTS with the opening tag is weaker than the stated
+     *  invariant: a tool could prepend a fence and still trail page-derived text
+     *  after the close, or never emit a close at all. */
+    function leaksOutsideFence(text: string): boolean {
+      const open = `<${FENCE_TAG}`
+      const close = `</${FENCE_TAG}>`
+      const openIdx = text.indexOf(open)
+      const closeIdx = text.lastIndexOf(close)
+      if (openIdx === -1 || closeIdx === -1) return true
+      if (text.slice(0, openIdx).includes(SENTINEL)) return true
+      if (text.slice(closeIdx + close.length).includes(SENTINEL)) return true
+      return false
+    }
+
     it('no registered tool emits page-derived hint text outside the fence', async () => {
       stubHintBearingRpc()
       const client = await startTestServer(mockVite.port)
@@ -1793,6 +1808,7 @@ describe('cortex mcp', () => {
 
       const echoed: string[] = []
       const unfenced: string[] = []
+      const notExercised: string[] = []
 
       for (const tool of tools) {
         let text = ''
@@ -1801,18 +1817,32 @@ describe('cortex mcp', () => {
             name: tool.name,
             arguments: synthesizeArgs(tool.inputSchema),
           })
+          if (res.isError) {
+            notExercised.push(`${tool.name} (isError)`)
+            continue
+          }
           text = (res.content as Array<{ text?: string }> | undefined)?.[0]?.text ?? ''
-        } catch {
-          continue // a tool that rejects synthetic args cannot leak the stub
+        } catch (e) {
+          notExercised.push(`${tool.name} (${(e as Error).message.slice(0, 60)})`)
+          continue
         }
         if (!text.includes(SENTINEL)) continue
         echoed.push(tool.name)
-        if (!text.trimStart().startsWith(`<${FENCE_TAG}`)) unfenced.push(tool.name)
+        if (leaksOutsideFence(text)) unfenced.push(tool.name)
       }
 
-      // Guard against a vacuous pass. If argument synthesis broke and nothing
-      // echoed the stub, `unfenced` would be empty for entirely the wrong reason
-      // — the same "structurally cannot fail" shape this suite keeps finding.
+      // A tool this harness cannot DRIVE is a tool this harness does not PROTECT.
+      // Silently skipping it would rebuild the exact hole this test exists to
+      // close: a new tool lands with a schema `synthesizeValue` cannot satisfy,
+      // gets skipped, ships on JSON.stringify, and the suite stays green. So an
+      // un-exercised tool fails here — extend synthesizeValue rather than the
+      // skip list, because there is no skip list.
+      expect(notExercised).toEqual([])
+      // Vacuity guard: if synthesis silently produced no usable calls, `unfenced`
+      // would be empty for entirely the wrong reason. An exact count is
+      // deliberately NOT asserted — that number goes stale the moment a tool is
+      // added, which is the failure mode being fixed. `notExercised` is what
+      // makes coverage complete; this is only a floor.
       expect(echoed.length).toBeGreaterThanOrEqual(5)
       // Regression pin: the tool that nearly shipped unfenced (COR-24).
       expect(echoed).toContain('cortex_get_intent_context')
