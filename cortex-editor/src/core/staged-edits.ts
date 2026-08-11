@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PendingEdit } from '../adapters/types.js'
 import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
 import { compositeKey } from '../shared/composite-key.js'
-import { isPreviewSource } from '../shared/preview-source.js'
+import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../shared/preview-source.js'
 import { stripFenceMarkers } from '../shared/untrusted-fence.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
@@ -566,7 +566,37 @@ export function agentResolveIntentContext(intent: PendingEdit): AgentResolveInte
   // Cortex-generated ids are `p<base36>-<base36>` and can never contain a marker,
   // so stripping is identity for every legitimate value and only alters injected
   // ones. (The hint object is stripped again downstream; stripping is idempotent.)
+  //
+  // Sanitizing INPUTS is not sufficient on its own. A `tagName` of
+  // `/untrusted-page-content` passes `fenceSafe` untouched — it holds no `<` for
+  // either pattern to match — and then the template below supplies the missing
+  // `<` and `>`, manufacturing `</untrusted-page-content>` after sanitization.
+  // The attacker never has to smuggle a delimiter past the filter; the string
+  // literal donates it. So the ASSEMBLED guidance is stripped as well: sanitize
+  // what you emit, not only what you receive.
   const fenceSafe = (v: string | undefined): string => (v ? stripFenceMarkers(v) : '')
+
+  // With no hint the response contains no `sourceResolutionHint` OBJECT, so
+  // `containsPageDerivedHint` is false, `serializeForAgent` emits plain JSON, and
+  // nothing is fenced at all. Marker-stripping would still stop the wrapper being
+  // terminated, but there is no wrapper — arbitrary attacker prose inside the
+  // preview id would reach the agent unlabelled. Redact to the shape instead,
+  // exactly as `parseIntentSource` does above. This branch means a producer
+  // violated the schema; the id has no diagnostic value the intentId lacks.
+  if (!hint) {
+    return {
+      resolution: 'agent-resolve',
+      source: `${PREVIEW_SOURCE_PREFIX}<redacted — no resolution hint recorded>`,
+      reason:
+        'This intent has no build-time source anchor, so there is no file:line to read. ' +
+        'The element was identified at runtime instead.',
+      sourceResolutionHint: null,
+      guidance:
+        'No resolution hint was recorded, which should not happen on this path — ' +
+        'report this rather than guessing at a source location.',
+    }
+  }
+
   return {
     resolution: 'agent-resolve',
     source: fenceSafe(intent.source),
@@ -577,8 +607,8 @@ export function agentResolveIntentContext(intent: PendingEdit): AgentResolveInte
     ...(intent.instanceSources?.length
       ? { instanceSources: intent.instanceSources.map(fenceSafe) }
       : {}),
-    guidance: hint
-      ? `Locate the source yourself using the hint: a <${fenceSafe(hint.tagName)}> element` +
+    guidance: stripFenceMarkers(
+      `Locate the source yourself using the hint: a <${fenceSafe(hint.tagName)}> element` +
         (hint.className ? ` with class "${fenceSafe(hint.className)}"` : '') +
         (hint.id ? ` with id "${fenceSafe(hint.id)}"` : '') +
         (hint.textPreview
@@ -590,8 +620,7 @@ export function agentResolveIntentContext(intent: PendingEdit): AgentResolveInte
         `success, or cortex_report_source_edit_failed if the write did not land — ` +
         `NOT cortex_discard_edits, which means the user changed their mind. The wire ` +
         `effect is the same but the recorded outcome is not. If several candidates ` +
-        `match and you cannot tell them apart, ask the user rather than guessing.`
-      : 'No resolution hint was recorded, which should not happen on this path — ' +
-        'report this rather than guessing at a source location.',
+        `match and you cannot tell them apart, ask the user rather than guessing.`,
+    ),
   }
 }
