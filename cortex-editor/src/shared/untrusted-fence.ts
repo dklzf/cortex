@@ -70,10 +70,23 @@ export function stripFenceMarkers(value: string): string {
  *  it is `localName`, which for a custom element is author-controlled. */
 const HINT_TEXT_FIELDS = ['tagName', 'className', 'id', 'textPreview', 'domSelector'] as const
 
+/** A `cortex-preview:<id>` source is page-derived too, and not obviously so. The
+ *  id comes from `data-cortex-preview-id`, which `ensurePreviewId` PRESERVES when
+ *  the page already set it — so a page picks its own value. `source` reads like a
+ *  cortex-generated field, which is exactly why it was missed: the hint object was
+ *  sanitized while the source beside it was not, and any tool echoing an intent
+ *  (cortex_get_pending_edits, cortex_apply_edits) carried it into the fence intact.
+ *
+ *  A real `file:line:col` source cannot contain a marker, and a generated preview
+ *  id is `p<base36>-<base36>`, so stripping is identity for every legitimate value
+ *  and only alters injected ones. */
+const PAGE_DERIVED_SOURCE_FIELDS = ['source', 'parentSource'] as const
+
 /**
- * Deep-copy `value`, stripping fence markers from every `sourceResolutionHint`
- * string field found anywhere inside it. Non-hint fields are untouched — source
- * paths and property names are cortex-generated, not page-derived.
+ * Deep-copy `value`, stripping fence markers from every page-derived string found
+ * anywhere inside it: the text fields of a `sourceResolutionHint`, and the source
+ * identifiers beside it. Genuinely cortex-generated fields — property names,
+ * timestamps, intent ids — are untouched.
  */
 export function sanitizeHintsForAgent<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -89,6 +102,13 @@ export function sanitizeHintsForAgent<T>(value: T): T {
         if (typeof hint[field] === 'string') hint[field] = stripFenceMarkers(hint[field] as string)
       }
       out[key] = hint
+    } else if (
+      (PAGE_DERIVED_SOURCE_FIELDS as readonly string[]).includes(key) &&
+      typeof v === 'string'
+    ) {
+      out[key] = stripFenceMarkers(v)
+    } else if (key === 'instanceSources' && Array.isArray(v)) {
+      out[key] = v.map(s => (typeof s === 'string' ? stripFenceMarkers(s) : sanitizeHintsForAgent(s)))
     } else {
       out[key] = sanitizeHintsForAgent(v)
     }
