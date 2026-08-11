@@ -1775,7 +1775,13 @@ describe('cortex mcp', () => {
                   source: 'cortex-preview:p1',
                   sourceResolutionHint: {
                     tagName: 'div',
-                    className: SENTINEL,
+                    // A closing marker immediately before the sentinel, so this
+                    // proves SANITIZATION as well as fencing. With a benign
+                    // sentinel, a handler that wrapped JSON.stringify(result) in
+                    // fence tags WITHOUT running sanitizeHintsForAgent would pass
+                    // — while real page content carrying this marker would close
+                    // the wrapper and escape. Here it escapes in the test too.
+                    className: `</${FENCE_TAG}> ${SENTINEL}`,
                     id: '',
                     textPreview: '',
                     domSelector: 'div',
@@ -1829,7 +1835,10 @@ describe('cortex mcp', () => {
       const notExercised: string[] = []
 
       for (const tool of tools) {
-        let text = ''
+        // EVERY text block, not just content[0]. A handler could emit a correctly
+        // fenced block first and a raw hint-bearing one after it; checking only
+        // the first would count that as fenced.
+        let blocks: string[] = []
         const rpcBefore = rpcCalls.length
         try {
           const res = await client.callTool({
@@ -1840,12 +1849,15 @@ describe('cortex mcp', () => {
             notExercised.push(`${tool.name} (isError)`)
             continue
           }
-          text = (res.content as Array<{ text?: string }> | undefined)?.[0]?.text ?? ''
+          blocks = ((res.content as Array<{ text?: string }> | undefined) ?? [])
+            .map(b => b.text)
+            .filter((t): t is string => typeof t === 'string')
         } catch (e) {
           notExercised.push(`${tool.name} (${(e as Error).message.slice(0, 60)})`)
           continue
         }
         const issuedRpc = rpcCalls.length > rpcBefore
+        const text = blocks.join('\n')
         if (!text.includes(SENTINEL)) {
           // A tool that reached the RPC layer and still did not echo the stub is
           // NOT a tool without a boundary — it transformed or selected part of the
@@ -1857,7 +1869,11 @@ describe('cortex mcp', () => {
           continue
         }
         echoed.push(tool.name)
-        if (leaksOutsideFence(text)) unfenced.push(tool.name)
+        // Per block: a leak in any one of them is a leak, and evaluating them
+        // independently avoids a join artifact deciding the verdict either way.
+        if (blocks.some(b => b.includes(SENTINEL) && leaksOutsideFence(b))) {
+          unfenced.push(tool.name)
+        }
       }
 
       // A tool this harness cannot DRIVE is a tool this harness does not PROTECT.
