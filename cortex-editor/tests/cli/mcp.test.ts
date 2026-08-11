@@ -1737,12 +1737,20 @@ describe('cortex mcp', () => {
       }
     }
 
-    /** Minimal arguments satisfying a tool's declared required fields, derived
-     *  from the schema rather than hard-coded — a new tool needs no edit here. */
-    function synthesizeArgs(schema: unknown): Record<string, unknown> {
+    /** Arguments derived from the schema rather than hard-coded, so a new tool
+     *  needs no edit here.
+     *
+     *  Two shapes, because REQUIRED-only is not enough: a tool whose RPC branch is
+     *  gated behind an OPTIONAL field returns locally when that field is omitted,
+     *  `issuedRpc` reads false, and the loop would file it as legitimately having
+     *  no boundary — while its RPC branch could still emit a raw hint. */
+    function synthesizeArgs(schema: unknown, mode: 'required' | 'all'): Record<string, unknown> {
       const s = schema as { properties?: Record<string, Record<string, unknown>>; required?: string[] }
+      const keys = mode === 'all'
+        ? Object.keys(s?.properties ?? {})
+        : (s?.required ?? [])
       const args: Record<string, unknown> = {}
-      for (const key of s?.required ?? []) {
+      for (const key of keys) {
         args[key] = synthesizeValue(s.properties?.[key] ?? {})
       }
       return args
@@ -1833,47 +1841,70 @@ describe('cortex mcp', () => {
       const echoed: string[] = []
       const unfenced: string[] = []
       const notExercised: string[] = []
+      let toolsWithOptionalArgs = 0
 
       for (const tool of tools) {
-        // EVERY text block, not just content[0]. A handler could emit a correctly
-        // fenced block first and a raw hint-bearing one after it; checking only
-        // the first would count that as fenced.
-        let blocks: string[] = []
-        const rpcBefore = rpcCalls.length
-        try {
-          const res = await client.callTool({
-            name: tool.name,
-            arguments: synthesizeArgs(tool.inputSchema),
-          })
-          if (res.isError) {
-            notExercised.push(`${tool.name} (isError)`)
+        const variants = [
+          synthesizeArgs(tool.inputSchema, 'required'),
+          synthesizeArgs(tool.inputSchema, 'all'),
+        ]
+        // Skip the second call when the schema has no optional fields.
+        const hasOptional = JSON.stringify(variants[0]) !== JSON.stringify(variants[1])
+        if (hasOptional) toolsWithOptionalArgs += 1
+        const uniqueVariants = hasOptional ? variants : [variants[0]!]
+
+        let anyInvoked = false
+        let anyRpc = false
+        let anyEcho = false
+        let leaked = false
+        let firstFailure = ''
+
+        for (const args of uniqueVariants) {
+          const rpcBefore = rpcCalls.length
+          // EVERY text block, not just content[0]. A handler could emit a
+          // correctly fenced block first and a raw hint-bearing one after it;
+          // checking only the first would count that as fenced.
+          let blocks: string[] = []
+          try {
+            const res = await client.callTool({ name: tool.name, arguments: args })
+            if (res.isError) {
+              firstFailure ||= 'isError'
+              continue
+            }
+            blocks = ((res.content as Array<{ text?: string }> | undefined) ?? [])
+              .map(b => b.text)
+              .filter((t): t is string => typeof t === 'string')
+          } catch (e) {
+            firstFailure ||= (e as Error).message.slice(0, 60)
             continue
           }
-          blocks = ((res.content as Array<{ text?: string }> | undefined) ?? [])
-            .map(b => b.text)
-            .filter((t): t is string => typeof t === 'string')
-        } catch (e) {
-          notExercised.push(`${tool.name} (${(e as Error).message.slice(0, 60)})`)
+          anyInvoked = true
+          if (rpcCalls.length > rpcBefore) anyRpc = true
+          // Per block: a leak in any one of them is a leak, and evaluating them
+          // independently keeps a join artifact from deciding the verdict.
+          const hits = blocks.filter(b => b.includes(SENTINEL))
+          if (hits.length) {
+            anyEcho = true
+            if (hits.some(leaksOutsideFence)) leaked = true
+          }
+        }
+
+        if (!anyInvoked) {
+          notExercised.push(`${tool.name} (${firstFailure})`)
           continue
         }
-        const issuedRpc = rpcCalls.length > rpcBefore
-        const text = blocks.join('\n')
-        if (!text.includes(SENTINEL)) {
+        if (!anyEcho) {
           // A tool that reached the RPC layer and still did not echo the stub is
           // NOT a tool without a boundary — it transformed or selected part of the
           // response, and a production-shaped result could carry a hint through it
           // unfenced. Skipping it silently is the same hole as skipping an
-          // uninvokable one. A tool that issued no RPC at all has no boundary here
-          // and is legitimately out of scope.
-          if (issuedRpc) notExercised.push(`${tool.name} (rpc issued, stub not echoed)`)
+          // uninvokable one. A tool that issued no RPC under EITHER argument shape
+          // has no boundary here and is legitimately out of scope.
+          if (anyRpc) notExercised.push(`${tool.name} (rpc issued, stub not echoed)`)
           continue
         }
         echoed.push(tool.name)
-        // Per block: a leak in any one of them is a leak, and evaluating them
-        // independently avoids a join artifact deciding the verdict either way.
-        if (blocks.some(b => b.includes(SENTINEL) && leaksOutsideFence(b))) {
-          unfenced.push(tool.name)
-        }
+        if (leaked) unfenced.push(tool.name)
       }
 
       // A tool this harness cannot DRIVE is a tool this harness does not PROTECT.
@@ -1883,6 +1914,10 @@ describe('cortex mcp', () => {
       // un-exercised tool fails here — extend synthesizeValue rather than the
       // skip list, because there is no skip list.
       expect(notExercised).toEqual([])
+      // The optional-argument shape must actually differ for SOME tool, or the
+      // second invocation is dead code and optional-gated RPC branches quietly
+      // stop being covered. `cortex_dismiss` has an optional `reason` today.
+      expect(toolsWithOptionalArgs).toBeGreaterThan(0)
       // Vacuity guard: if synthesis silently produced no usable calls, `unfenced`
       // would be empty for entirely the wrong reason. An exact count is
       // deliberately NOT asserted — that number goes stale the moment a tool is
