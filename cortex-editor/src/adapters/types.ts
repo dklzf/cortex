@@ -44,6 +44,45 @@ export interface SourceTransformOptions {
   resolveAlias?: (specifier: string) => string | null
   /** Package names in node_modules to instrument (for library component detection). */
   includeNodeModules?: string[]
+  /** Supply the authoritative source text for a module id, replacing the default
+   *  `fs.readFileSync`. For adapters whose modules do not live on the native
+   *  filesystem — an in-memory fs, a virtual route generator, a custom bundler.
+   *
+   *  `id` is the QUERY-STRIPPED module id (`rawId.split('?')[0]`), not the raw
+   *  bundler id. Vite and Rollup routinely append `?v=<hash>`, `?raw`, `?worker`
+   *  and friends; cortex strips them before every filesystem read, so an adapter
+   *  keying an in-memory map by raw id would miss. Key by the bare path.
+   *
+   *  This is a provenance SEAM, not a bypass. The returned string is compared to
+   *  the incoming code exactly as a disk read would be, and returning `null` (or
+   *  throwing) still fails closed with no anchor emitted. It exists so a custom
+   *  adapter can PROVE provenance by another route, not skip proving it.
+   *
+   *  Must return the text in the same coordinate space the apply side will later
+   *  resolve against. An adapter that returns text differing from what its own
+   *  writer will reopen reintroduces exactly the wrong-element write this guard
+   *  prevents. */
+  readSource?: (id: string) => string | null
+
+  /** Called when cortex refuses to annotate a file because it cannot prove the
+   *  text it was handed is the file on disk. Babel's line/column numbers are
+   *  coordinates in the string given to the parser, while the apply side resolves
+   *  them against disk — so an unproven match means any anchor could point at the
+   *  wrong element. When set, replaces the default console warning.
+   *
+   *  `reason` distinguishes the three refusal causes:
+   *   - `'virtual'`    — the module id contains `\0` (Rollup/Vite virtual module);
+   *                      there is no file to compare against
+   *   - `'unreadable'` — the file could not be read (missing, EACCES, memory-fs)
+   *   - `'mismatch'`   — the file was read and differs after position-preserving
+   *                      normalization; an upstream transform rewrote it
+   *
+   *  `diskLines` is `-1` when nothing was read (virtual/unreadable).
+   *  See the provenance guard in source-transform.ts. */
+  onProvenanceMismatch?: (
+    id: string,
+    detail: { reason: 'virtual' | 'unreadable' | 'mismatch'; inputLines: number; diskLines: number },
+  ) => void
 }
 
 export interface TransformResult {

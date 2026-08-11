@@ -1,3 +1,4 @@
+import fs from 'fs'
 import path from 'path'
 import { parse } from '@babel/parser'
 import MagicString from 'magic-string'
@@ -12,6 +13,78 @@ import { shouldExcludeCortexSource } from './source-loader-utils.js'
 const ESCAPE_MAP: Record<string, string> = { '&': '&amp;', '"': '&quot;', "'": '&#39;', '<': '&lt;', '>': '&gt;' }
 function escapeAttr(s: string): string {
   return s.replace(/[&"'<>]/g, c => ESCAPE_MAP[c]!)
+}
+
+/** `convert-source-map`'s `mapFileCommentRegex`, exactly as Vite vendors it
+ *  (vite/dist/node/chunks/dep-*.js). Copied rather than approximated, because an
+ *  approximation is what broke the first attempt at this.
+ *
+ *  The load-bearing properties, each of which a looser pattern gets wrong:
+ *   - `$` with the `m` flag — the comment must END A LINE. An unanchored pattern
+ *     matches `sourceMappingURL=` inside a string literal or JSX text, mid-line.
+ *   - `[ \t]` rather than `\s` — cannot swallow newlines and merge two lines.
+ *   - `[^\s'"\`]+?` on the `//` form — stops at a quote, so a quoted URL in
+ *     source code is not treated as an annotation.
+ *   - the block form REQUIRES a closing `*​/` — an unterminated `/*#` is not a
+ *     comment and must not be blanked.
+ *
+ *  Only ever used with `String.replace`, which resets `lastIndex`; never `.test()`
+ *  on this shared `/g` object. */
+const VITE_MAP_FILE_COMMENT_RE =
+  /(?:\/\/[@#][ \t]+?sourceMappingURL=([^\s'"`]+?)[ \t]*?$)|(?:\/\*[@#][ \t]+sourceMappingURL=([^*]+?)[ \t]*?(?:\*\/){1}[ \t]*?$)/gm
+
+function hasBom(s: string): boolean {
+  return s.charCodeAt(0) === 0xfeff
+}
+
+/** Model Vite's own pre-plugin preprocessing, ONE WAY: disk text -> the text Vite
+ *  would hand a plugin.
+ *
+ *  Vite extracts a valid `sourceMappingURL` comment and blanks it to spaces of the
+ *  same length before any plugin transform runs. That is coordinate-safe, but a
+ *  plain equality test still sees a difference and refuses a file cortex could have
+ *  annotated correctly — and reordering plugins cannot help, because Vite does this
+ *  before plugins are consulted at all.
+ *
+ *  DIRECTION IS THE WHOLE POINT. An earlier revision blanked matches on BOTH
+ *  strings, which let a genuine rewrite be erased symmetrically: given
+ *  `const s="//# sourceMappingURL=a"` on disk and `...=abcdef` incoming, both
+ *  collapsed to equal text while the real JSX after them sat at different columns.
+ *  Cortex accepted and stamped a position that resolved to a DIFFERENT element on
+ *  disk — recreating exactly the wrong-element write this guard exists to stop.
+ *
+ *  Transforming only the disk side cannot erase anything present in the incoming
+ *  text, so a real upstream rewrite still shows up as a difference.
+ *
+ *  NEWLINES SURVIVE THE BLANKING. The block form's URL capture is `[^*]+?`, and a
+ *  negated class matches `\n` — so `/*# sourceMappingURL=foo.map\n*​/` is one match
+ *  spanning two lines. A flat `' '.repeat(m.length)` is the same LENGTH but not the
+ *  same SHAPE: it turns that newline into a space and every following line moves up
+ *  one. Vite's own blank replacer does exactly that, so the two sides would agree,
+ *  the guard would accept, and cortex would stamp JSX a line high — the wrong-element
+ *  write, one more time. Preserving `\n` keeps this position-preserving BY
+ *  CONSTRUCTION: single-line comments (the real-world case) blank identically to
+ *  before, and a multiline one no longer matches Vite's collapsed text, so the guard
+ *  refuses. Fail closed beats a clever match. */
+function asViteInput(diskText: string): string {
+  return diskText.replace(VITE_MAP_FILE_COMMENT_RE, m => m.replace(/[^\n]/g, ' '))
+}
+
+/** Collapse CRLF to LF. Symmetric and position-preserving: line and column
+ *  numbering is identical either way. Deliberately NOT trimmed — trailing
+ *  whitespace is a real rewrite signal and leading whitespace shifts every
+ *  position in the file. */
+function normalizeEol(s: string): string {
+  return s.replace(/\r\n/g, '\n')
+}
+
+/** Line count, for the provenance-mismatch diagnostic. Reports the shape of the
+ *  divergence (e.g. "109 lines in, 90 on disk" identifies a 19-line preamble)
+ *  without logging file contents, which may be proprietary. */
+function countLines(s: string): number {
+  let n = 1
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++
+  return n
 }
 
 /**
@@ -267,12 +340,133 @@ export function createSourceTransform(
   const isProd = options?.mode === 'production' ||
     (options?.mode == null && process.env.NODE_ENV === 'production')
 
+  // One unreadable-source warning per transform instance — see the guard below.
+  let warnedUnreadable = false
+
   return function transformSource(code: string, id: string): TransformResult | null {
     if (isProd) return null
     // Strip Vite HMR query params (e.g. ?v=abc123) before extension check
     const cleanId = id.split('?')[0]!
     if (!/\.[jt]sx$/.test(cleanId)) return null
     if (shouldExcludeCortexSource(cleanId, options?.includeNodeModules)) return null
+
+    // ── Provenance guard ────────────────────────────────────────────────
+    // Babel's `node.loc` is a coordinate in THE STRING WE HAND THE PARSER.
+    // We write that coordinate into `data-cortex-source`, and the apply side
+    // later resolves it against THE FILE ON DISK (edit-pipeline parseSource →
+    // findJsxElementAt). Those are the same coordinate space only if nothing
+    // upstream rewrote the text.
+    //
+    // When they diverge, every stamp is silently wrong and nothing downstream
+    // can tell: findJsxElementAt does a zero-tolerance position lookup and
+    // returns whatever JSX node occupies that offset. COR-28 shipped exactly
+    // this — @vitejs/plugin-react prepends a 16-line refresh head plus a 3-line
+    // shared head, so every anchor was +19 lines and pointed at an unrelated
+    // element.
+    //
+    // A confirmed mismatch means we cannot produce a trustworthy anchor, so we
+    // produce none. Loudly absent beats silently wrong: a missing anchor routes
+    // the element to `agent-resolve`, while a wrong one rewrites the user's
+    // source at a position they never selected.
+    //
+    // FAIL CLOSED. An earlier revision proceeded when the file could not be read
+    // ("unknown is not violated"). That was wrong, and it is the exact hole this
+    // guard exists to close: the attribute we emit is not advisory. Its presence
+    // alone forces `applyMode: 'direct'` in getElementEditTarget, which makes the
+    // recorded line:col a deterministic WRITE TARGET. An anchor we cannot verify
+    // is therefore indistinguishable downstream from one we can, and unverifiable
+    // provenance is not a weaker version of correct provenance — it is the
+    // absence of the precondition the whole mechanism rests on.
+    //
+    // So: virtual ids and unreadable files get NO anchor. The element degrades to
+    // `agent-resolve` with a DOM hint, which is a designed, safe path — Claude
+    // resolves the source instead of cortex asserting it.
+    {
+      let onDisk: string | null = null
+      let reason: 'virtual' | 'unreadable' | 'mismatch' | null = null
+
+      if (id.includes('\0')) {
+        // Rollup/Vite virtual module convention. There is no file to compare to.
+        reason = 'virtual'
+      } else {
+        try {
+          // `readSource` lets an adapter whose modules are not on the native
+          // filesystem supply the authoritative text instead. It is compared
+          // identically — a seam for proving provenance, never for skipping it.
+          const read = options?.readSource
+            ? options.readSource(cleanId)
+            : fs.readFileSync(cleanId, 'utf8')
+          // `readSource` is user-supplied and only type-checked for TS consumers.
+          // A JS adapter returning `undefined` would slip past the `=== null` test
+          // below and reach `hasBom`, throwing OUTSIDE this try — killing the
+          // transform hook instead of failing closed. Anything that is not text is
+          // not provenance.
+          onDisk = typeof read === 'string' ? read : null
+        } catch {
+          onDisk = null
+        }
+        if (onDisk === null) {
+          // Missing, EACCES, memory-fs with no reader, generated route — all the
+          // same to us: the precondition cannot be established, so no anchor.
+          reason = 'unreadable'
+        }
+        if (onDisk !== null) {
+          // A BOM is a real character at offset 0, so a ONE-SIDED BOM shifts every
+          // column on line 1 by one. Stripping it asymmetrically would silently
+          // accept a file whose line-1 coordinates do not line up. Treat the
+          // asymmetry as what it is — a coordinate difference.
+          if (hasBom(onDisk) !== hasBom(code)) {
+            reason = 'mismatch'
+          } else {
+            const disk = normalizeEol(onDisk)
+            const input = normalizeEol(code)
+            // Exact first. Only if that fails do we allow the ONE narrow, known
+            // upstream rewrite: Vite blanking its own source-map comment before
+            // plugins run. Modelled one-way (disk -> input) so nothing present in
+            // the incoming text can be erased to force a match.
+            if (disk !== input && asViteInput(disk) !== input) {
+              reason = 'mismatch'
+            }
+          }
+        }
+      }
+
+      if (reason !== null) {
+        const detail = {
+          reason,
+          inputLines: countLines(code),
+          diskLines: onDisk === null ? -1 : countLines(onDisk),
+        }
+        if (options?.onProvenanceMismatch) {
+          options.onProvenanceMismatch(id, detail)
+        } else if (reason === 'unreadable' && !warnedUnreadable) {
+          // Deduplicated to ONCE per transform instance. Unreadable ids are
+          // routine in some setups, so warning per file would be log spam — but
+          // warning never at all makes "annotation silently stopped working"
+          // undiagnosable, which is how a whole adapter can go dark unnoticed.
+          // One line naming the first case, and how to fix it, is the balance.
+          warnedUnreadable = true
+          console.warn(
+            `[cortex] Could not read ${cleanId} to verify it matches what cortex was handed, ` +
+            `so it was left unannotated (elements there fall back to agent resolution).\n` +
+            `[cortex] If this project's modules are not on the native filesystem, supply ` +
+            `\`readSource\` so cortex can verify them. Further occurrences are not logged.`,
+          )
+        } else if (reason === 'mismatch') {
+          // Only the mismatch case is worth a loud warning: it means a real,
+          // fixable misconfiguration. Virtual and unreadable ids are routine in
+          // many setups and would make this a log-spam machine.
+          console.warn(
+            `[cortex] Refusing to annotate ${cleanId}: the code handed to cortex is not the file on disk ` +
+            `(${detail.inputLines} lines in, ${detail.diskLines} on disk). Another plugin transformed it ` +
+            `first, so any line:col cortex records would point at the wrong element.\n` +
+            `[cortex] Fix: move cortexEditor() earlier in your plugins array than the plugin that ` +
+            `transformed this file.`,
+          )
+        }
+        return null
+      }
+    }
 
     const relativePath = path.relative(projectRoot, cleanId).replace(/\\/g, '/')
     const safePath = relativePath.startsWith('..')

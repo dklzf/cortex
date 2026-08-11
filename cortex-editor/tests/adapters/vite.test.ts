@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server as HttpServer } from 'http'
 import fs from 'fs'
 import os from 'os'
@@ -111,6 +111,25 @@ function initPlugin(overrides?: { command?: 'serve' | 'build'; root?: string }) 
   return plugin
 }
 
+// Real files on disk for transform tests (COR-28). The transform refuses to stamp
+// a position it cannot prove was measured against the file on disk, so a synthetic
+// '/project/src/App.tsx' would take the refusal branch and assert nothing.
+const TRANSFORM_ROOT = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'cortex-vite-tx-'))
+
+afterAll(() => {
+  fs.rmSync(TRANSFORM_ROOT, { recursive: true, force: true })
+})
+
+/** Init the plugin rooted at a real temp dir, write `code` there, and return both
+ *  the plugin and the real id to hand its transform. */
+function initPluginWithFile(code: string, relPath = 'src/App.tsx') {
+  const plugin = initPlugin({ root: TRANSFORM_ROOT })
+  const id = pathMod.join(TRANSFORM_ROOT, relPath)
+  fs.mkdirSync(pathMod.dirname(id), { recursive: true })
+  fs.writeFileSync(id, code, 'utf8')
+  return { plugin, id }
+}
+
 // Mock Vite server with server.hot API
 function mockServer() {
   const handlers = new Map<string, Function>()
@@ -151,9 +170,9 @@ function mockServerWithHttp(http: HttpServer) {
 describe('cortexEditor Vite plugin', () => {
   describe('transform', () => {
     it('instruments JSX files with data-cortex-source', () => {
-      const plugin = initPlugin({ root: '/project' })
       const code = 'export default function App() { return <div>hello</div> }'
-      const result = (plugin.transform as Function)(code, '/project/src/App.tsx')
+      const { plugin, id } = initPluginWithFile(code)
+      const result = ((plugin.transform as { handler: Function }).handler)(code, id)
       expect(result).not.toBeNull()
       expect(result.code).toContain('data-cortex-source="src/App.tsx:')
       expect(result.map).toBeDefined()
@@ -161,21 +180,21 @@ describe('cortexEditor Vite plugin', () => {
 
     it('returns null for non-JSX files', () => {
       const plugin = initPlugin()
-      const result = (plugin.transform as Function)('const x = 1', '/project/src/utils.ts')
+      const result = ((plugin.transform as { handler: Function }).handler)('const x = 1', '/project/src/utils.ts')
       expect(result).toBeNull()
     })
 
     it('returns null for node_modules', () => {
       const plugin = initPlugin()
       const code = 'export default function C() { return <div /> }'
-      const result = (plugin.transform as Function)(code, '/project/node_modules/pkg/index.tsx')
+      const result = ((plugin.transform as { handler: Function }).handler)(code, '/project/node_modules/pkg/index.tsx')
       expect(result).toBeNull()
     })
 
     it('returns null in production build', () => {
       const plugin = initPlugin({ command: 'build' })
       const code = 'export default function App() { return <div>hello</div> }'
-      const result = (plugin.transform as Function)(code, '/project/src/App.tsx')
+      const result = ((plugin.transform as { handler: Function }).handler)(code, '/project/src/App.tsx')
       expect(result).toBeNull()
     })
   })
@@ -285,9 +304,9 @@ describe('cortexEditor Vite plugin', () => {
 
   describe('source maps', () => {
     it('returns valid source map from transform', () => {
-      const plugin = initPlugin({ root: '/project' })
       const code = 'export default function App() { return <div>hello</div> }'
-      const result = (plugin.transform as Function)(code, '/project/src/App.tsx')
+      const { plugin, id } = initPluginWithFile(code, 'src/AppMap.tsx')
+      const result = ((plugin.transform as { handler: Function }).handler)(code, id)
       expect(result).not.toBeNull()
       expect(result.map).not.toBeNull()
       expect(result.map.version).toBe(3)
@@ -3185,3 +3204,107 @@ describe('vite — active-tab takeover after fresh init (Pillar 1 Task 7)', () =
   })
 })
 
+
+// ── Hook ordering + plugin-order audit (COR-28) ─────────────────────────────
+//
+// Plugin-level `enforce: 'pre'` is only a BUCKET. Within a bucket Vite preserves
+// plain array order, so `plugins: [react(), cortexEditor()]` ran plugin-react
+// first and handed cortex its already-rewritten output — every recorded line:col
+// was then 19 lines off (COR-28). Hook-level `transform.order = 'pre'` is the
+// stronger mechanism: Vite's getSortedPluginsByHook splices object-form hooks
+// declaring 'pre' ahead of every function-form hook, whatever the array order.
+describe('transform hook ordering (COR-28)', () => {
+  it('declares transform as an OBJECT hook with order pre', () => {
+    const plugin = cortexEditor()
+    // Not a style preference. A function-form hook lands in Vite's `normal`
+    // group and loses to array order; only the object form with an explicit
+    // order can win regardless of where the user lists us.
+    expect(typeof plugin.transform).toBe('object')
+    expect((plugin.transform as { order?: string }).order).toBe('pre')
+    expect(typeof (plugin.transform as { handler?: unknown }).handler).toBe('function')
+  })
+
+  it('still declares plugin-level enforce pre', () => {
+    // Belt and braces: enforce puts us in the pre bucket, hook order sorts
+    // within it. Losing either one reopens a different half of the bug.
+    expect(cortexEditor().enforce).toBe('pre')
+  })
+})
+
+describe('plugin-order audit (COR-28)', () => {
+  function configWithPlugins(names: string[], command: 'serve' | 'build' = 'serve') {
+    const plugins = names.map(name => ({ name, transform: () => null }))
+    return {
+      command,
+      root: '/project',
+      plugins,
+      getSortedPlugins: () => plugins,
+    } as unknown as Parameters<NonNullable<Plugin['configResolved']>>[0]
+  }
+
+  it('warns, naming the plugins that transform before cortex', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const plugin = cortexEditor()
+    ;(plugin.configResolved as Function)(configWithPlugins(['vite:react-babel', 'cortex-editor']))
+    expect(warn).toHaveBeenCalled()
+    const msg = warn.mock.calls.map(c => String(c[0])).join('\n')
+    expect(msg).toContain('vite:react-babel')
+    // Remediation must be followable. An earlier revision synthesised a call
+    // expression from the plugin NAME and emitted `react-babel()` — a function
+    // that does not exist. Plugin names are not factory names.
+    expect(msg).not.toContain('react-babel()')
+    expect(msg).toContain('move cortexEditor() earlier')
+    warn.mockRestore()
+  })
+
+  it('stays silent when cortex already runs first', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const plugin = cortexEditor()
+    ;(plugin.configResolved as Function)(configWithPlugins(['cortex-editor', 'vite:react-babel']))
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('stays silent during build (the transform is a no-op there)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const plugin = cortexEditor()
+    ;(plugin.configResolved as Function)(
+      configWithPlugins(['vite:react-babel', 'cortex-editor'], 'build'),
+    )
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('reads the EFFECTIVE hook order, not the raw plugins array', () => {
+    // Vite re-sorts per hook by transform.order, so the raw array is a different
+    // order from what actually executes. Scanning the raw array both misses a
+    // later-listed 'pre' plugin and falsely accuses an earlier-listed 'post' one.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const raw = [
+      { name: 'cortex-editor', transform: () => null },
+      { name: 'late-but-pre', transform: { order: 'pre', handler: () => null } },
+    ]
+    const sorted = [raw[1]!, raw[0]!] // what Vite actually runs
+    const plugin = cortexEditor()
+    ;(plugin.configResolved as Function)({
+      command: 'serve',
+      root: '/project',
+      plugins: raw,
+      getSortedPlugins: () => sorted,
+    } as unknown as Parameters<NonNullable<Plugin['configResolved']>>[0])
+    // Raw order says cortex is first and would stay silent; effective order says
+    // otherwise. Reading the effective order is the whole point.
+    expect(warn).toHaveBeenCalled()
+    expect(warn.mock.calls.map(c => String(c[0])).join('\n')).toContain('late-but-pre')
+    warn.mockRestore()
+  })
+
+  it('never throws when getSortedPlugins is absent', () => {
+    // An audit must not break a build on an older/newer Vite that lacks the API.
+    const plugin = cortexEditor()
+    expect(() => (plugin.configResolved as Function)({
+      command: 'serve',
+      root: '/project',
+    } as unknown as Parameters<NonNullable<Plugin['configResolved']>>[0])).not.toThrow()
+  })
+})
