@@ -480,6 +480,26 @@ export type ParseIntentSourceResult =
  *  not parsed because no current consumer reads it — adding it would be
  *  speculative scope. */
 export function parseIntentSource(source: string): ParseIntentSourceResult {
+  // A preview source (`cortex-preview:<id>`) is a SECOND, deliberate source
+  // format with no file position — it names a DOM node cortex stamped at click
+  // time because the element carried no build-time anchor. It has one colon, so
+  // the `file:line:col` split below rejects it as "Malformed", which is both
+  // wrong and unactionable: nothing is malformed, this format simply has no file
+  // to parse. Callers must branch on isPreviewSource BEFORE reaching here.
+  //
+  // This produced COR-24: `cortex_get_intent_context` returned an error for
+  // 100% of agent-resolve intents, and since the schema forces every structural
+  // intent onto that path, Claude's only source-inspection tool was dead on the
+  // majority of the surface. The parser was correct for what it was written for;
+  // it broke when a second format was introduced without auditing consumers.
+  if (isPreviewSource(source)) {
+    return {
+      ok: false,
+      error:
+        `Not a file position: ${source} is an agent-resolve intent. It carries a ` +
+        `sourceResolutionHint instead of a file:line:col — use that to locate the source.`,
+    }
+  }
   const lastColon = source.lastIndexOf(':')
   const secondLastColon = source.lastIndexOf(':', lastColon - 1)
   if (lastColon < 0 || secondLastColon < 0) {
@@ -491,4 +511,57 @@ export function parseIntentSource(source: string): ParseIntentSourceResult {
     return { ok: false, error: `Invalid line in source: ${source}` }
   }
   return { ok: true, filePath, line }
+}
+
+/** What `cortex_get_intent_context` returns for an intent that has no file
+ *  position. Deliberately NOT shaped like the file-slice response — the two are
+ *  different answers, and blurring them is how a caller ends up treating a DOM
+ *  hint as a source location. */
+export interface AgentResolveIntentContext {
+  resolution: 'agent-resolve'
+  source: string
+  /** Why there is no file slice, in terms the agent can act on. */
+  reason: string
+  /** The DOM evidence captured at click time. Null only if a producer violated
+   *  the schema, which requires the hint on this path. */
+  sourceResolutionHint: PendingEdit['sourceResolutionHint'] | null
+  /** Present for multi-select; each entry is another element in the same intent. */
+  instanceSources?: string[]
+  guidance: string
+}
+
+/**
+ * Build the context payload for an agent-resolve intent.
+ *
+ * Agent-resolve intents carry `cortex-preview:<id>` — a runtime-stamped DOM
+ * handle, not a file position — so there is nothing to slice out of a file. The
+ * useful answer is the evidence cortex captured at click time plus a statement
+ * of what the agent should do with it.
+ *
+ * Lives in core, and both the Vite and webpack adapters call it, because this
+ * repo has a documented history of the two adapters drifting apart (an existing
+ * P2 covers webpack never sending annotation-updated/activity-entry). A shared
+ * builder makes divergence impossible rather than merely unlikely.
+ */
+export function agentResolveIntentContext(intent: PendingEdit): AgentResolveIntentContext {
+  const hint = intent.sourceResolutionHint ?? null
+  return {
+    resolution: 'agent-resolve',
+    source: intent.source,
+    reason:
+      'This intent has no build-time source anchor, so there is no file:line to read. ' +
+      'The element was identified at runtime instead.',
+    sourceResolutionHint: hint,
+    ...(intent.instanceSources?.length ? { instanceSources: intent.instanceSources } : {}),
+    guidance: hint
+      ? `Locate the source yourself using the hint: a <${hint.tagName}> element` +
+        (hint.className ? ` with class "${hint.className}"` : '') +
+        (hint.id ? ` with id "${hint.id}"` : '') +
+        (hint.textPreview ? ` whose text begins "${hint.textPreview.slice(0, 60)}"` : '') +
+        `. Search the project for the JSX that renders it, apply the edit with your ` +
+        `Edit tool, then discard this intent. If several candidates match and you ` +
+        `cannot tell them apart, ask the user rather than guessing.`
+      : 'No resolution hint was recorded, which should not happen on this path — ' +
+        'report this rather than guessing at a source location.',
+  }
 }

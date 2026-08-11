@@ -832,7 +832,12 @@ etc.) — anything that means the source change did NOT land.`,
   server.registerTool(
     'cortex_get_intent_context',
     {
-      description: 'Returns ~20 lines of source context around the intent location, plus the current value at that line for divergence detection.',
+      description:
+        'Context for a staged intent. For an intent with a build-time source anchor, returns ~20 lines ' +
+        'around the location plus the current value at that line for divergence detection. For an ' +
+        'agent-resolve intent (source begins "cortex-preview:") there is no file position, so it returns ' +
+        '{resolution:"agent-resolve"} with the DOM evidence captured at click time — locate the source ' +
+        'from that hint, apply the edit with your Edit tool, and ask the user if candidates are ambiguous.',
       inputSchema: cortexGetIntentContextInputSchema.shape,
     },
     async ({ intentId }) => {

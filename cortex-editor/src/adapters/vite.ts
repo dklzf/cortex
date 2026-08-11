@@ -41,7 +41,8 @@ import {
   clearActiveBrowser,
   type SetActiveResult,
 } from './cortex-active-state.js'
-import { applyEditsCore, sliceIntentContext, checkIntentFileSize, parseIntentSource } from '../core/staged-edits.js'
+import { applyEditsCore, sliceIntentContext, checkIntentFileSize, parseIntentSource, agentResolveIntentContext } from '../core/staged-edits.js'
+import { isPreviewSource } from '../shared/preview-source.js'
 import type { StagedEditsCache } from '../core/staged-edits.js'
 import { atomicWrite } from './atomic-write.js'
 import {
@@ -606,6 +607,17 @@ function handleRPC(method: string, params: Record<string, unknown>): unknown {
       const intent = currentSession!.stagedEdits.getById(intentId)
       if (!intent) {
         return { error: 'intent not found' }
+      }
+
+      // Agent-resolve intents carry `cortex-preview:<id>`, a runtime DOM handle
+      // with no file position, so there is nothing to slice. Answer with the
+      // evidence instead of an error — COR-24: this branch was missing, so the
+      // tool failed for 100% of agent-resolve intents, and since the schema
+      // forces every structural intent onto that path, Claude's only
+      // source-inspection tool was dead across the majority of the surface.
+      // Shared with the webpack adapter so the two cannot drift.
+      if (isPreviewSource(intent.source)) {
+        return agentResolveIntentContext(intent)
       }
 
       // Parse + validate source format. parseIntentSource handles the colon-

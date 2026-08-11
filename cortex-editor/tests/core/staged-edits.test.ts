@@ -6,6 +6,7 @@ import {
   checkIntentFileSize,
   MAX_INTENT_FILE_BYTES,
   parseIntentSource,
+  agentResolveIntentContext,
 } from '../../src/core/staged-edits.js'
 import type { PendingEdit } from '../../src/adapters/types.js'
 import { makeEdit } from './helpers.js'
@@ -527,5 +528,103 @@ describe('parseIntentSource — `file:line:col` validator', () => {
     const result = parseIntentSource('src/big.ts:999999:1')
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.line).toBe(999999)
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// COR-24 — agent-resolve intents have no file position
+// ---------------------------------------------------------------------------
+//
+// `cortex-preview:<id>` is a SECOND source format, introduced for elements with
+// no build-time anchor. It has one colon, so the `file:line:col` parser rejected
+// it as "Malformed" — and because the schema forces every structural intent onto
+// the agent-resolve path, `cortex_get_intent_context` failed for 100% of them.
+// Claude's only source-inspection tool was dead across the majority of the
+// surface, and every failure looked like a resolution failure rather than a
+// missing tool.
+
+describe('parseIntentSource — preview sources', () => {
+  it('rejects a preview source with an ACTIONABLE error, not "Malformed"', () => {
+    const result = parseIntentSource('cortex-preview:p1k2j-3')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      // The old message was `Malformed source: ...`, which is both wrong (nothing
+      // is malformed) and unactionable. It must name the real situation.
+      expect(result.error).not.toContain('Malformed')
+      expect(result.error).toContain('agent-resolve')
+      expect(result.error).toContain('sourceResolutionHint')
+    }
+  })
+
+  it('still parses a normal file:line:col source', () => {
+    const result = parseIntentSource('src/Hero.tsx:14:5')
+    expect(result.ok).toBe(true)
+  })
+})
+
+describe('agentResolveIntentContext', () => {
+  const hint = {
+    tagName: 'li',
+    className: 'fruit-item',
+    id: 'mango',
+    textPreview: 'Mango',
+    domSelector: 'li#mango',
+  }
+
+  it('returns the DOM evidence instead of an error', () => {
+    const ctx = agentResolveIntentContext(
+      makeEdit({ source: 'cortex-preview:p1k2j-3', sourceResolutionHint: hint }),
+    )
+    expect(ctx.resolution).toBe('agent-resolve')
+    expect(ctx.source).toBe('cortex-preview:p1k2j-3')
+    expect(ctx.sourceResolutionHint).toEqual(hint)
+  })
+
+  it('renders every hint field into guidance the agent can act on', () => {
+    const ctx = agentResolveIntentContext(
+      makeEdit({ source: 'cortex-preview:p1', sourceResolutionHint: hint }),
+    )
+    // Assert the CONTENT, not merely that a string exists — a guidance field
+    // that omits the discriminators is worthless to the agent.
+    expect(ctx.guidance).toContain('<li>')
+    expect(ctx.guidance).toContain('fruit-item')
+    expect(ctx.guidance).toContain('mango')
+    expect(ctx.guidance).toContain('Mango')
+  })
+
+  it('tells the agent to ask rather than guess when candidates are ambiguous', () => {
+    const ctx = agentResolveIntentContext(
+      makeEdit({ source: 'cortex-preview:p1', sourceResolutionHint: hint }),
+    )
+    expect(ctx.guidance).toContain('ask the user')
+  })
+
+  it('reports a missing hint instead of inventing a location', () => {
+    // The schema requires the hint on this path, so a missing one means a
+    // producer violated it. Guessing at a source location is the one thing that
+    // must not happen.
+    const ctx = agentResolveIntentContext(makeEdit({ source: 'cortex-preview:p1' }))
+    expect(ctx.sourceResolutionHint).toBeNull()
+    expect(ctx.guidance).toContain('report this')
+    expect(ctx.guidance).not.toContain('<undefined>')
+  })
+
+  it('carries instanceSources through for multi-select intents', () => {
+    const ctx = agentResolveIntentContext(
+      makeEdit({
+        source: 'cortex-preview:p1',
+        sourceResolutionHint: hint,
+        instanceSources: ['cortex-preview:p1', 'cortex-preview:p2'],
+      }),
+    )
+    expect(ctx.instanceSources).toEqual(['cortex-preview:p1', 'cortex-preview:p2'])
+  })
+
+  it('omits instanceSources when there are none', () => {
+    const ctx = agentResolveIntentContext(
+      makeEdit({ source: 'cortex-preview:p1', sourceResolutionHint: hint }),
+    )
+    expect(ctx.instanceSources).toBeUndefined()
   })
 })
