@@ -342,6 +342,7 @@ export function createSourceTransform(
 
   // One unreadable-source warning per transform instance — see the guard below.
   let warnedUnreadable = false
+  let warnedUnmappable = false
 
   return function transformSource(code: string, id: string): TransformResult | null {
     if (isProd) return null
@@ -468,10 +469,57 @@ export function createSourceTransform(
       }
     }
 
-    const relativePath = path.relative(projectRoot, cleanId).replace(/\\/g, '/')
-    const safePath = relativePath.startsWith('..')
-      ? path.basename(cleanId).replace(/\\/g, '/')
-      : relativePath
+    // The stamped path is not decoration: the apply side resolves it UNDER
+    // projectRoot (`resolve(this.projectRoot, filePath)` in edit-pipeline.ts), so
+    // it is a write target. Collapsing an outside-root file to its basename made
+    // `/workspace/pkg/Button.tsx` stamp `Button.tsx`, which apply then resolved to
+    // `<projectRoot>/Button.tsx` — an unrelated file that cortex would happily
+    // rewrite if it held JSX at that line:col. A silent wrong-FILE write, strictly
+    // worse than the wrong-ELEMENT write COR-28 fixed, and the provenance guard
+    // above cannot see it: that guard verifies `cleanId`, the correct path, and
+    // the basename reduction happened afterward — so it made an unmappable stamp
+    // look verified.
+    const canonicalRoot = path.resolve(projectRoot)
+    const canonicalId = path.resolve(cleanId)
+    const relNative = path.relative(canonicalRoot, canonicalId)
+    const relativePath = relNative.replace(/\\/g, '/')
+
+    // Segment-aware containment, per this repo's path-matching rule. A bare
+    // `startsWith('..')` is wrong in BOTH directions: it misses nothing here, but
+    // it also fires on a legitimate in-root directory literally named `..hidden`,
+    // which was then silently collapsed to a basename too.
+    const escapesRoot =
+      relativePath === '..' || relativePath.startsWith('../') || path.isAbsolute(relNative)
+
+    // Canonical, reversible mapping or no anchor at all. Re-derive exactly what
+    // apply will compute and require it to land back on the file we parsed.
+    if (escapesRoot || path.resolve(canonicalRoot, relNative) !== canonicalId) {
+      const detail = {
+        reason: 'unmappable' as const,
+        inputLines: countLines(code),
+        diskLines: -1,
+      }
+      if (options?.onProvenanceMismatch) {
+        options.onProvenanceMismatch(id, detail)
+      } else if (!warnedUnmappable) {
+        // Deduplicated like the unreadable warning: a monorepo can hit this for
+        // every file in a linked package, and per-file output would be spam. But
+        // silence would make a whole package quietly lose deterministic edits.
+        warnedUnmappable = true
+        console.warn(
+          `[cortex] Refusing to annotate ${cleanId}: it resolves outside projectRoot ` +
+          `(${canonicalRoot}), so the position cortex records could not be mapped back to ` +
+          `this file. Apply resolves stamped paths under projectRoot, so a stamp here ` +
+          `would name a DIFFERENT file.\n` +
+          `[cortex] Elements there fall back to agent resolution. If these files should be ` +
+          `editable, point projectRoot at a directory that contains them. Further ` +
+          `occurrences are not logged.`,
+        )
+      }
+      return null
+    }
+
+    const safePath = relativePath
     const escapedPath = escapeAttr(safePath)
 
     let ast: Record<string, unknown>
