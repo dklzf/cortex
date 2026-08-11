@@ -846,7 +846,15 @@ etc.) — anything that means the source change did NOT land.`,
     async ({ intentId }) => {
       try {
         const result = await rpc('getIntentContext', { intentId })
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+        // serializeForAgent, not JSON.stringify: as of COR-24 this tool returns
+        // the click-time DOM evidence for agent-resolve intents, so it is now a
+        // third path carrying page-derived text to the agent. The C3 fence was
+        // wired to the two tools that returned hints when it was written; a
+        // control enumerated by call site loses coverage the moment a new caller
+        // appears. serializeForAgent decides by CONTENT, so a result with no
+        // hint still serializes as plain JSON and the file-slice case is
+        // unchanged.
+        return { content: [{ type: 'text' as const, text: serializeForAgent(result) }] }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
       }

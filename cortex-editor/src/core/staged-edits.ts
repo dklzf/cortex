@@ -3,6 +3,7 @@ import type { PendingEdit } from '../adapters/types.js'
 import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
 import { compositeKey } from '../shared/composite-key.js'
 import { isPreviewSource } from '../shared/preview-source.js'
+import { stripFenceMarkers } from '../shared/untrusted-fence.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
 // MAX_FULL_SYNC_SIZE — single source of truth lives in schemas/pending-edit.ts
@@ -545,6 +546,13 @@ export interface AgentResolveIntentContext {
  */
 export function agentResolveIntentContext(intent: PendingEdit): AgentResolveIntentContext {
   const hint = intent.sourceResolutionHint ?? null
+  // `guidance` quotes page-derived hint text, and `sanitizeHintsForAgent` only
+  // descends into `sourceResolutionHint` objects — it never sees a top-level
+  // string. So an unstripped className containing `</untrusted-page-content>`
+  // would close the fence early and everything after it would read to the agent
+  // as trusted content. Strip here, where the text is interpolated. (The hint
+  // object itself is stripped again downstream; stripping is idempotent.)
+  const fenceSafe = (v: string | undefined): string => (v ? stripFenceMarkers(v) : '')
   return {
     resolution: 'agent-resolve',
     source: intent.source,
@@ -554,10 +562,12 @@ export function agentResolveIntentContext(intent: PendingEdit): AgentResolveInte
     sourceResolutionHint: hint,
     ...(intent.instanceSources?.length ? { instanceSources: intent.instanceSources } : {}),
     guidance: hint
-      ? `Locate the source yourself using the hint: a <${hint.tagName}> element` +
-        (hint.className ? ` with class "${hint.className}"` : '') +
-        (hint.id ? ` with id "${hint.id}"` : '') +
-        (hint.textPreview ? ` whose text begins "${hint.textPreview.slice(0, 60)}"` : '') +
+      ? `Locate the source yourself using the hint: a <${fenceSafe(hint.tagName)}> element` +
+        (hint.className ? ` with class "${fenceSafe(hint.className)}"` : '') +
+        (hint.id ? ` with id "${fenceSafe(hint.id)}"` : '') +
+        (hint.textPreview
+          ? ` whose text begins "${fenceSafe(hint.textPreview).slice(0, 60)}"`
+          : '') +
         `. Search the project for the JSX that renders it, apply the edit with your ` +
         `Edit tool, then discard this intent. If several candidates match and you ` +
         `cannot tell them apart, ask the user rather than guessing.`
