@@ -118,17 +118,23 @@ describe('cortexSourceLoader', () => {
   })
 
   it('re-creates transform when projectRoot changes', () => {
-    const ctx1 = fakeContext({ projectRoot: '/project-a' })
-    const ctx2 = fakeContext({ projectRoot: '/project-b', resourcePath: '/project-b/src/App.tsx' })
+    // Both resources must sit UNDER their own root. ctx1 previously defaulted to
+    // '/project/src/App.tsx' while its root was '/project-a', so it fell to the
+    // outside-root basename branch — a different path, but for a reason that has
+    // nothing to do with re-creating the transform.
+    const ctx1 = fakeContext({ projectRoot: '/project-a', resourcePath: '/project-a/src/One.tsx' })
+    const ctx2 = fakeContext({ projectRoot: '/project-b', resourcePath: '/project-b/src/Two.tsx' })
     const source = 'export default function A() { return <div /> }'
 
     runLoader(ctx1, source)
     runLoader(ctx2, source)
 
-    // Different roots → different relative paths in the output
+    // Assert the DISTINCT relative paths the comment always claimed. Checking only
+    // that an attribute exists passes even when the transform is never re-created,
+    // which is the one thing this test is named for.
     const code1 = ctx1.callback.mock.calls[0]![1] as string
     const code2 = ctx2.callback.mock.calls[0]![1] as string
-    expect(code1).toContain('data-cortex-source="')
-    expect(code2).toContain('data-cortex-source="')
+    expect(code1).toContain('data-cortex-source="src/One.tsx:')
+    expect(code2).toContain('data-cortex-source="src/Two.tsx:')
   })
 })

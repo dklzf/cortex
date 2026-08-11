@@ -721,7 +721,11 @@ describe('parse error handling', () => {
     // materialized path under the temp root rather than the virtual one. Assert
     // the suffix so the contract (callback gets the id verbatim) is still proved
     // without pinning a per-run temp directory.
-    expect(errors[0].id.endsWith('/project/src/App.tsx')).toBe(true)
+    // Normalize separators first: path.join emits backslashes on Windows, so the
+    // raw suffix check would fail there. Same treatment as the traversal test
+    // below. toMatch rather than endsWith(...).toBe(true) so a failure reports the
+    // actual id instead of `false`.
+    expect(errors[0].id.replace(/\\/g, '/')).toMatch(/\/project\/src\/App\.tsx$/)
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
@@ -1061,10 +1065,28 @@ describe('provenance guard', () => {
   })
 
   it('REFUSES when sourceMappingURL-like text differs inside JSX text', () => {
-    const onDisk = '<div>//# sourceMappingURL=a</div>\n<span />'
+    // Two problems with the earlier fixture: `<div/>` followed by `<span/>` at
+    // statement position does not parse (so null came from the PARSER, not the
+    // guard), and handing in a differently-worded comment differs under a loose
+    // regex and a strict one alike. Over-matching only ever causes a FALSE ACCEPT,
+    // and only when the incoming text equals the blanked disk text — so hand in
+    // exactly that, and assert the refusal REASON.
+    const marker = '//# sourceMappingURL=a'
+    const onDisk = `<div>${marker}</div>`
+    const asIfBlanked = onDisk.replace(marker, ' '.repeat(marker.length))
+    expect(asIfBlanked.length).toBe(onDisk.length)
+
     const realId = materialize(onDisk, '/project/src/JsxText.tsx')
-    const incoming = '<div>//# sourceMappingURL=bb</div>\n<span />'
-    expect(transformSource_raw(incoming, realId)).toBeNull()
+    expect(transformSource_raw(onDisk, realId)).not.toBeNull() // control: it parses
+
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    // `$` with /m is what saves this: the comment does not END the line — `</div>`
+    // follows — so it is JSX text, not an annotation, and must not be blanked.
+    expect(t(asIfBlanked, realId)).toBeNull()
+    expect(reasons).toEqual(['mismatch'])
   })
 
   it('does not let the pattern swallow a newline and merge two lines', () => {
@@ -1077,12 +1099,82 @@ describe('provenance guard', () => {
     expect(result!.code).toContain('data-cortex-source="src/Newline.tsx:2:')
   })
 
+  it('REFUSES a BLOCK comment that spans two lines, which blanking would collapse', () => {
+    // Sibling of the test above, for the OTHER half of the alternation. The `//`
+    // form is bounded by `[ \t]`, but the block form's URL capture is `[^*]+?` and
+    // a negated class matches `\n` — so this comment is ONE match spanning two
+    // lines. Vite blanks a match to spaces of equal LENGTH, which turns that
+    // newline into a space and moves every later line up one. Equal length is not
+    // equal shape.
+    const comment = '/*# sourceMappingURL=foo.map\n*/'
+    const onDisk = `${comment}\nexport default function A() {\n  return <div />\n}`
+    const viteStyle = onDisk.replace(comment, ' '.repeat(comment.length))
+
+    // The hazard, stated as an assertion rather than a comment: same bytes, one
+    // fewer line. <div /> is on line 4 on disk and line 3 in what Vite hands us.
+    expect(viteStyle.length).toBe(onDisk.length)
+    expect(viteStyle.split('\n')).toHaveLength(onDisk.split('\n').length - 1)
+
+    const realId = materialize(onDisk, '/project/src/BlockMultiline.tsx')
+
+    // POSITIVE CONTROL FIRST. Without it a parse failure would return null and this
+    // test would "pass" while asserting nothing — the exact defect this whole diff
+    // exists to fix. Prove the shape annotates when provenance holds.
+    const control = transformSource_raw(onDisk, realId)
+    expect(control).not.toBeNull()
+    expect(control!.code).toContain('data-cortex-source="src/BlockMultiline.tsx:4:')
+
+    // Assert the GUARD refused, not merely that something returned null. The guard
+    // runs before the parser, so only a real refusal fires this callback.
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    expect(t(viteStyle, realId)).toBeNull()
+    expect(reasons).toEqual(['mismatch'])
+  })
+
+  it('FAILS CLOSED when readSource returns a non-string instead of throwing', () => {
+    // `readSource` is user-supplied and only type-checked for TS consumers. A JS
+    // adapter returning `undefined` used to slip past the `=== null` test and reach
+    // hasBom(), throwing OUTSIDE the try — killing the transform hook rather than
+    // failing closed, which contradicts the documented contract.
+    const onDisk = '<div />'
+    const realId = materialize(onDisk, '/project/src/BadReader.tsx')
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      readSource: () => undefined as unknown as string,
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    expect(() => t(onDisk, realId)).not.toThrow()
+    expect(t(onDisk, realId)).toBeNull()
+    expect(reasons).toContain('unreadable')
+  })
+
   it('REFUSES an unterminated block comment difference', () => {
-    // The old pattern made `*/` optional, so an unterminated `/*#` was treated
-    // as a comment and blanked. Vite's requires the terminator.
-    const onDisk = '/*# sourceMappingURL=a\n<div />'
+    // The old pattern made `*/` optional, so an unterminated `/*#` was treated as a
+    // comment and blanked. Vite's requires the terminator.
+    //
+    // The earlier fixture handed in a DIFFERENT unterminated comment, which differs
+    // from disk under a loose regex and a strict one alike — so it returned null
+    // either way and could not fail. Over-matching only ever causes a FALSE ACCEPT,
+    // and only when the incoming text equals the blanked disk text. So that is what
+    // we hand in. Note the incoming variant parses cleanly (it is spaces + a
+    // function), so a null here is the guard's doing, not the parser's.
+    const marker = '/*# sourceMappingURL=a'
+    const onDisk = `${marker}\nexport default function A() { return <div /> }`
+    const asIfBlanked = onDisk.replace(marker, ' '.repeat(marker.length))
+    expect(asIfBlanked.length).toBe(onDisk.length)
+
     const realId = materialize(onDisk, '/project/src/Unterminated.tsx')
-    expect(transformSource_raw('/*# sourceMappingURL=bbbb\n<div />', realId)).toBeNull()
+    const reasons: string[] = []
+    const t = createSourceTransform(PROJECT_ROOT, {
+      onProvenanceMismatch: (_id, d) => reasons.push(d.reason),
+    })
+    // A regex that blanked the unterminated `/*#` would make these two equal and
+    // annotate. Requiring `*/` keeps them different, so the guard refuses.
+    expect(t(asIfBlanked, realId)).toBeNull()
+    expect(reasons).toEqual(['mismatch'])
   })
 
   it('accepts Vite blanking only in the disk -> input direction', () => {

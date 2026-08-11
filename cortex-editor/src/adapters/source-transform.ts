@@ -54,9 +54,20 @@ function hasBom(s: string): boolean {
  *  disk — recreating exactly the wrong-element write this guard exists to stop.
  *
  *  Transforming only the disk side cannot erase anything present in the incoming
- *  text, so a real upstream rewrite still shows up as a difference. */
+ *  text, so a real upstream rewrite still shows up as a difference.
+ *
+ *  NEWLINES SURVIVE THE BLANKING. The block form's URL capture is `[^*]+?`, and a
+ *  negated class matches `\n` — so `/*# sourceMappingURL=foo.map\n*​/` is one match
+ *  spanning two lines. A flat `' '.repeat(m.length)` is the same LENGTH but not the
+ *  same SHAPE: it turns that newline into a space and every following line moves up
+ *  one. Vite's own blank replacer does exactly that, so the two sides would agree,
+ *  the guard would accept, and cortex would stamp JSX a line high — the wrong-element
+ *  write, one more time. Preserving `\n` keeps this position-preserving BY
+ *  CONSTRUCTION: single-line comments (the real-world case) blank identically to
+ *  before, and a multiline one no longer matches Vite's collapsed text, so the guard
+ *  refuses. Fail closed beats a clever match. */
 function asViteInput(diskText: string): string {
-  return diskText.replace(VITE_MAP_FILE_COMMENT_RE, m => ' '.repeat(m.length))
+  return diskText.replace(VITE_MAP_FILE_COMMENT_RE, m => m.replace(/[^\n]/g, ' '))
 }
 
 /** Collapse CRLF to LF. Symmetric and position-preserving: line and column
@@ -382,9 +393,15 @@ export function createSourceTransform(
           // `readSource` lets an adapter whose modules are not on the native
           // filesystem supply the authoritative text instead. It is compared
           // identically — a seam for proving provenance, never for skipping it.
-          onDisk = options?.readSource
+          const read = options?.readSource
             ? options.readSource(cleanId)
             : fs.readFileSync(cleanId, 'utf8')
+          // `readSource` is user-supplied and only type-checked for TS consumers.
+          // A JS adapter returning `undefined` would slip past the `=== null` test
+          // below and reach `hasBom`, throwing OUTSIDE this try — killing the
+          // transform hook instead of failing closed. Anything that is not text is
+          // not provenance.
+          onDisk = typeof read === 'string' ? read : null
         } catch {
           onDisk = null
         }
