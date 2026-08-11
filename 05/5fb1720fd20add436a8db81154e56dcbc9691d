@@ -1,0 +1,26 @@
+cortex-editor/tests/core/staged-edits.test.ts
+  s_515b894c608172::t_9da9a3d3bf9115 745-778
+  s_515b894c608172::t_14528926c5be36 610-614,617
+cortex-editor/src/core/staged-edits.ts
+  s_515b894c608172::t_b9647e83cf9cbc 623-624
+  s_515b894c608172::t_70097f001a9f22 5
+  s_515b894c608172::t_469b7357923e72 569-576,578-599,610-611
+cortex-editor/src/cli/mcp.ts
+  s_515b894c608172::t_ed1271d5166304 843-847
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "055fb1720fd20add436a8db81154e56dcbc9691d",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
