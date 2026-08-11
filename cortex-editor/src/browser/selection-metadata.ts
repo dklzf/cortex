@@ -30,6 +30,17 @@ export interface SelectionMetadata {
   /** True if the selected element's root is a ShadowRoot (vs Document).
    *  Used to gate the deep-query fallback in re-resolution. */
   inShadowRoot: boolean
+  /** How many elements shared this `source` at capture time.
+   *
+   *  Load-bearing for re-resolution, not diagnostics. `index` is only meaningful
+   *  while the population is unchanged: if a sibling is REMOVED, every later
+   *  index slides down one, and the element now sitting at the saved index is a
+   *  different element that we would otherwise return labelled as a confident
+   *  match. Comparing the population size is what separates "a sibling was
+   *  deleted" from "the selected element's own text was edited" — those two
+   *  reach the identical branch in `reResolveSelection` and demand opposite
+   *  answers. `-1` when source is null. */
+  groupSize: number
 }
 
 /**
@@ -42,12 +53,12 @@ export function captureSelectionMetadata(el: Element): SelectionMetadata {
   const inShadowRoot = el.getRootNode() instanceof ShadowRoot
 
   if (!source) {
-    return { source: null, index: -1, contentHash, inShadowRoot }
+    return { source: null, index: -1, contentHash, inShadowRoot, groupSize: -1 }
   }
 
   const siblings = findSourceMatches(source, inShadowRoot)
   const index = siblings.indexOf(el)
-  return { source, index, contentHash, inShadowRoot }
+  return { source, index, contentHash, inShadowRoot, groupSize: siblings.length }
 }
 
 /**
@@ -170,7 +181,25 @@ export function reResolveSelection(meta: SelectionMetadata): Element | null {
     }
   }
 
-  // Content edited in place: preserve at saved index.
+  // Two very different situations reach this point, and they demand opposite
+  // answers:
+  //
+  //   (a) The selected element is still here and its own text was edited.
+  //       `index` is still valid → returning `atIndex` is correct.
+  //   (b) A SIBLING was deleted, so every later index slid down by one.
+  //       `atIndex` is now a DIFFERENT element, and returning it hands the
+  //       caller a confident wrong answer — the `[A,B,C]` / select B /
+  //       delete B case silently re-anchors the selection onto C.
+  //
+  // Content alone cannot separate them (in both cases the saved hash is
+  // nowhere to be found). Population size can: a deletion changes it, an
+  // in-place text edit does not.
+  //
+  // NOTE: the review's stated fix — "return null when the content search comes
+  // back empty" — would have covered (b) by breaking (a), which is the common
+  // case (editing the text of the thing you have selected). Hence the extra
+  // signal rather than an unconditional null.
+  if (matches.length !== meta.groupSize) return null
   return atIndex
 }
 
