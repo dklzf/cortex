@@ -43,9 +43,27 @@ const FENCE_CLOSE_RE = /<\/untrusted-page-content\s*>/gi
 /**
  * Remove anything that could read as a fence boundary from harvested text.
  * Applied to every page-derived string before it is placed inside the fence.
+ *
+ * ITERATES TO A FIXED POINT, because one removal can MANUFACTURE a marker the
+ * pass before it just looked for and did not find:
+ *
+ *   in:   `</untrusted-page-content<untrusted-page-content>`
+ *   pass: no closing tag matches (`<` follows the name, not `>`), so only the
+ *         embedded opening prefix is removed — splicing the neighbours into
+ *   out:  `</untrusted-page-content>`   <- a valid closing tag, newly created
+ *
+ * A single pass therefore returns text that can terminate the wrapper and
+ * present everything after it as trusted instructions. Each pass strictly
+ * shortens the string or leaves it unchanged, so the loop always terminates.
  */
 export function stripFenceMarkers(value: string): string {
-  return value.replace(FENCE_CLOSE_RE, '').replace(FENCE_OPEN_RE, '')
+  let out = value
+  let prev: string
+  do {
+    prev = out
+    out = out.replace(FENCE_CLOSE_RE, '').replace(FENCE_OPEN_RE, '')
+  } while (out !== prev)
+  return out
 }
 
 /** The page-derived fields of a SourceResolutionHint. `tagName` is included:

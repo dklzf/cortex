@@ -18,7 +18,8 @@ import { computeCapabilities, type ResolverState } from '../core/capabilities.js
 import { CSSModulesRewriter } from '../core/rewriter/css-modules.js'
 import { RuntimeCSSResolver } from '../core/rewriter/runtime-resolver.js'
 import { UndoStack } from '../core/session/undo-stack.js'
-import { applyEditsCore, checkIntentFileSize, parseIntentSource, sliceIntentContext } from '../core/staged-edits.js'
+import { applyEditsCore, checkIntentFileSize, parseIntentSource, sliceIntentContext, agentResolveIntentContext } from '../core/staged-edits.js'
+import { isPreviewSource } from '../shared/preview-source.js'
 import { atomicWrite } from './atomic-write.js'
 import {
   evaluateSetActive,
@@ -1335,6 +1336,12 @@ export class CortexWebpackRuntime {
         const intentId = params.intentId as string
         const intent = session.stagedEdits.getById(intentId)
         if (!intent) return { error: 'intent not found' }
+        // See the equivalent branch in vite.ts (COR-24). Agent-resolve intents
+        // have no file position; both adapters call the SAME core builder so
+        // this answer cannot drift between them.
+        if (isPreviewSource(intent.source)) {
+          return agentResolveIntentContext(intent)
+        }
         const parsed = parseIntentSource(intent.source)
         if (!parsed.ok) return { error: parsed.error }
         const resolvedPath = path.resolve(this.root, parsed.filePath)

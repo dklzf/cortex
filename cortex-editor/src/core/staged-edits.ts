@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import type { PendingEdit } from '../adapters/types.js'
 import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
 import { compositeKey } from '../shared/composite-key.js'
-import { isPreviewSource } from '../shared/preview-source.js'
+import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../shared/preview-source.js'
+import { stripFenceMarkers } from '../shared/untrusted-fence.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
 // MAX_FULL_SYNC_SIZE — single source of truth lives in schemas/pending-edit.ts
@@ -480,6 +481,33 @@ export type ParseIntentSourceResult =
  *  not parsed because no current consumer reads it — adding it would be
  *  speculative scope. */
 export function parseIntentSource(source: string): ParseIntentSourceResult {
+  // A preview source (`cortex-preview:<id>`) is a SECOND, deliberate source
+  // format with no file position — it names a DOM node cortex stamped at click
+  // time because the element carried no build-time anchor. It has one colon, so
+  // the `file:line:col` split below rejects it as "Malformed", which is both
+  // wrong and unactionable: nothing is malformed, this format simply has no file
+  // to parse. Callers must branch on isPreviewSource BEFORE reaching here.
+  //
+  // This produced COR-24: `cortex_get_intent_context` returned an error for
+  // 100% of agent-resolve intents, and since the schema forces every structural
+  // intent onto that path, Claude's only source-inspection tool was dead on the
+  // majority of the surface. The parser was correct for what it was written for;
+  // it broke when a second format was introduced without auditing consumers.
+  if (isPreviewSource(source)) {
+    // Deliberately does NOT echo `source`. The preview id is page-controllable
+    // (`ensurePreviewId` preserves an existing `data-cortex-preview-id`), and a
+    // result with no `sourceResolutionHint` is not fenced by `serializeForAgent`
+    // — so interpolating it here would put attacker-authored prose in front of
+    // the agent with no wrapper and no warning. The caller already has the value
+    // it passed in; nothing is lost by naming the SHAPE instead.
+    return {
+      ok: false,
+      error:
+        'Not a file position: this is an agent-resolve intent (source begins ' +
+        '"cortex-preview:"). It carries a sourceResolutionHint instead of a ' +
+        'file:line:col — use that to locate the source.',
+    }
+  }
   const lastColon = source.lastIndexOf(':')
   const secondLastColon = source.lastIndexOf(':', lastColon - 1)
   if (lastColon < 0 || secondLastColon < 0) {
@@ -491,4 +519,108 @@ export function parseIntentSource(source: string): ParseIntentSourceResult {
     return { ok: false, error: `Invalid line in source: ${source}` }
   }
   return { ok: true, filePath, line }
+}
+
+/** What `cortex_get_intent_context` returns for an intent that has no file
+ *  position. Deliberately NOT shaped like the file-slice response — the two are
+ *  different answers, and blurring them is how a caller ends up treating a DOM
+ *  hint as a source location. */
+export interface AgentResolveIntentContext {
+  resolution: 'agent-resolve'
+  source: string
+  /** Why there is no file slice, in terms the agent can act on. */
+  reason: string
+  /** The DOM evidence captured at click time. Null only if a producer violated
+   *  the schema, which requires the hint on this path. */
+  sourceResolutionHint: PendingEdit['sourceResolutionHint'] | null
+  /** Present for multi-select; each entry is another element in the same intent. */
+  instanceSources?: string[]
+  guidance: string
+}
+
+/**
+ * Build the context payload for an agent-resolve intent.
+ *
+ * Agent-resolve intents carry `cortex-preview:<id>` — a runtime-stamped DOM
+ * handle, not a file position — so there is nothing to slice out of a file. The
+ * useful answer is the evidence cortex captured at click time plus a statement
+ * of what the agent should do with it.
+ *
+ * Lives in core, and both the Vite and webpack adapters call it, because this
+ * repo has a documented history of the two adapters drifting apart (an existing
+ * P2 covers webpack never sending annotation-updated/activity-entry). A shared
+ * builder makes divergence impossible rather than merely unlikely.
+ */
+export function agentResolveIntentContext(intent: PendingEdit): AgentResolveIntentContext {
+  const hint = intent.sourceResolutionHint ?? null
+  // EVERY top-level string here is page-derived, and `sanitizeHintsForAgent`
+  // only descends into `sourceResolutionHint` objects — it never sees one. Left
+  // raw, a value carrying `</untrusted-page-content>` closes the fence early and
+  // everything after it reads to the agent as trusted content.
+  //
+  // Three fields are exposed, not one:
+  //   - `guidance` quotes the hint text inline
+  //   - `source` is `cortex-preview:<id>`, and `ensurePreviewId` PRESERVES an
+  //     existing `data-cortex-preview-id`, so the id is page-controllable
+  //   - `instanceSources` is a list of the same
+  // Cortex-generated ids are `p<base36>-<base36>` and can never contain a marker,
+  // so stripping is identity for every legitimate value and only alters injected
+  // ones. (The hint object is stripped again downstream; stripping is idempotent.)
+  //
+  // Sanitizing INPUTS is not sufficient on its own. A `tagName` of
+  // `/untrusted-page-content` passes `fenceSafe` untouched — it holds no `<` for
+  // either pattern to match — and then the template below supplies the missing
+  // `<` and `>`, manufacturing `</untrusted-page-content>` after sanitization.
+  // The attacker never has to smuggle a delimiter past the filter; the string
+  // literal donates it. So the ASSEMBLED guidance is stripped as well: sanitize
+  // what you emit, not only what you receive.
+  const fenceSafe = (v: string | undefined): string => (v ? stripFenceMarkers(v) : '')
+
+  // With no hint the response contains no `sourceResolutionHint` OBJECT, so
+  // `containsPageDerivedHint` is false, `serializeForAgent` emits plain JSON, and
+  // nothing is fenced at all. Marker-stripping would still stop the wrapper being
+  // terminated, but there is no wrapper — arbitrary attacker prose inside the
+  // preview id would reach the agent unlabelled. Redact to the shape instead,
+  // exactly as `parseIntentSource` does above. This branch means a producer
+  // violated the schema; the id has no diagnostic value the intentId lacks.
+  if (!hint) {
+    return {
+      resolution: 'agent-resolve',
+      source: `${PREVIEW_SOURCE_PREFIX}<redacted — no resolution hint recorded>`,
+      reason:
+        'This intent has no build-time source anchor, so there is no file:line to read. ' +
+        'The element was identified at runtime instead.',
+      sourceResolutionHint: null,
+      guidance:
+        'No resolution hint was recorded, which should not happen on this path — ' +
+        'report this rather than guessing at a source location.',
+    }
+  }
+
+  return {
+    resolution: 'agent-resolve',
+    source: fenceSafe(intent.source),
+    reason:
+      'This intent has no build-time source anchor, so there is no file:line to read. ' +
+      'The element was identified at runtime instead.',
+    sourceResolutionHint: hint,
+    ...(intent.instanceSources?.length
+      ? { instanceSources: intent.instanceSources.map(fenceSafe) }
+      : {}),
+    guidance: stripFenceMarkers(
+      `Locate the source yourself using the hint: a <${fenceSafe(hint.tagName)}> element` +
+        (hint.className ? ` with class "${fenceSafe(hint.className)}"` : '') +
+        (hint.id ? ` with id "${fenceSafe(hint.id)}"` : '') +
+        (hint.textPreview
+          ? ` whose text begins "${fenceSafe(hint.textPreview).slice(0, 60)}"`
+          : '') +
+        (hint.domSelector ? ` matching the selector "${fenceSafe(hint.domSelector)}"` : '') +
+        `. Search the project for the JSX that renders it, then apply the edit with ` +
+        `your Edit tool. Close the loop with cortex_acknowledge_source_edit on ` +
+        `success, or cortex_report_source_edit_failed if the write did not land — ` +
+        `NOT cortex_discard_edits, which means the user changed their mind. The wire ` +
+        `effect is the same but the recorded outcome is not. If several candidates ` +
+        `match and you cannot tell them apart, ask the user rather than guessing.`,
+    ),
+  }
 }
