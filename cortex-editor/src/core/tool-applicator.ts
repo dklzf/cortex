@@ -21,9 +21,23 @@ export type ApplyResult =
   | { success: true; content: string }
   | { success: false; reason: string }
 
-// Maximum distance from target element for replace_line_content (defense-in-depth).
-// Matches the context window half-width — the AI can only see ±25 lines around the target.
-const MAX_PROXIMITY = 25
+// Maximum distance from target element for replace_line_content.
+//
+// This was 25, described as "defense-in-depth" and derived from the context
+// window half-width — i.e. from what the AI can SEE, not from what a real
+// anchor error looks like. COR-28's actual offset was 19: the one
+// distance-based guard in the codebase passed the real bug with six lines to
+// spare, because the number came from intuition about a different quantity.
+//
+// A guard whose threshold is set above the observed error distribution is not
+// defense-in-depth, it is decoration. 8 is below every offset measured so far
+// (19 under Vite's plugin-react head; 0 under Turbopack) while staying wide
+// enough for the ordinary case this exists to permit — an edit landing a few
+// lines off after an unrelated in-file change.
+//
+// If a legitimate case beyond 8 shows up, raise it from a MEASUREMENT and say
+// which one. Do not raise it to make a failing case pass.
+const MAX_PROXIMITY = 8
 
 // Allowlist for replace_attribute: styling-related + semantic attributes only.
 // Blocks event handlers (on*), ref, and other behavioral attributes.

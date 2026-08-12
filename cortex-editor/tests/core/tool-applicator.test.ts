@@ -276,6 +276,43 @@ describe('replace_line_content', () => {
     }
   })
 
+  it('REJECTS an edit 19 lines from the target — COR-28\'s real offset (COR-29)', async () => {
+    // MAX_PROXIMITY was 25, derived from the AI's context-window half-width —
+    // from what the model can SEE, not from what a real anchor error looks
+    // like. COR-28's actual offset was 19, so the one distance-based guard in
+    // the codebase passed the real bug with six lines to spare. A threshold set
+    // above the observed error distribution is decoration, not defense.
+    const source = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n')
+    const ta = fresh()
+    const action: ToolAction = {
+      tool: 'replace_line_content',
+      lineNumber: 21,
+      oldContent: 'line 21',
+      newContent: 'pwned',
+    }
+    // Target line 2, edit at 21 — a 19-line reach, exactly COR-28's shape.
+    const result = await ta.apply(source, 'test.tsx', 2, 0, action)
+
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.reason).toContain('too far from target line')
+  })
+
+  it('still allows an ordinary few-line reach', async () => {
+    // The guard must not become so tight it blocks the legitimate case it
+    // exists to permit: an edit landing a little off after an unrelated
+    // in-file change.
+    const source = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n')
+    const ta = fresh()
+    const action: ToolAction = {
+      tool: 'replace_line_content',
+      lineNumber: 7,
+      oldContent: 'line 7',
+      newContent: 'line seven',
+    }
+    const result = await ta.apply(source, 'test.tsx', 2, 0, action)
+    expect(result.success).toBe(true)
+  })
+
   it('matches with trimmed comparison (preserving indentation)', async () => {
     const source = `function App() {\n  return <div>Hello</div>\n}`
     const ta = fresh()
