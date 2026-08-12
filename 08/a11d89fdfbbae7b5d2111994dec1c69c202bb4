@@ -1,0 +1,22 @@
+cortex-editor/src/browser/components/panel-style-snapshot.ts
+  s_515b894c608172::t_aaf7f026775084 20,155-156
+cortex-editor/src/browser/sizing-value.ts
+  s_515b894c608172::t_aaf7f026775084 253-268
+  s_515b894c608172::t_3d54d00d49a16a 252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "08a11d89fdfbbae7b5d2111994dec1c69c202bb4",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
