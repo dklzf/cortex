@@ -1,0 +1,25 @@
+cortex-editor/tests/shared/untrusted-fence.test.ts
+  s_515b894c608172::t_fea11f459d6fdc 210-240
+cortex-editor/tests/integration/adapter-annotation-parity.test.ts
+  s_515b894c608172::t_4c1099450f4a57 1-58
+cortex-editor/src/shared/untrusted-fence.ts
+  s_515b894c608172::t_a78d49ad18aab1 83-92
+cortex-editor/src/adapters/webpack.ts
+  s_515b894c608172::t_91ca2ca0142766 1038-1044
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8c07cb7671d07377f74cbd79a6535294d1c9b59b",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
