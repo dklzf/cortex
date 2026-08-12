@@ -484,7 +484,23 @@ export function Panel({
 
   // Shared class detection + scope toggle for instance-level editing (ZF0-1018)
   const [sharedInfo, setSharedInfo] = useState<SharedClassInfo | null>(null)
-  const [editScope, setEditScope] = useState<'instance' | 'all'>('instance')
+  // Edit-all is the DEFAULT (product decision 2026-08-05). Clicking one of three
+  // .map() siblings and changing a style changes all three — that is what the
+  // user is actually editing, because they share one source location. Defaulting
+  // to 'instance' promised a scope the source cannot deliver, and the promise
+  // was silent: nothing told the user the other two changed too.
+  //
+  // The toggle narrows to one element only where that can be honestly delivered
+  // — shared CLASS, where each element has its own source position. For shared
+  // SOURCE the control is not rendered at all and the reason is stated instead;
+  // see the sharedSourceInfo branch below.
+  //
+  // NOTE: this initializer is nearly dead. The `[element]` effect below fires on
+  // mount and sets the scope, so THAT is what actually establishes the default —
+  // mutating this line alone changes no observable behaviour, which is how the
+  // original inversion had two independent sources. Both say 'all'; keep them
+  // in agreement or the effect silently wins.
+  const [editScope, setEditScope] = useState<'instance' | 'all'>('all')
   // Shared source detection for warning-only banner (ZF0-1583)
   const [sharedSourceInfo, setSharedSourceInfo] = useState<SharedSourceInfo | null>(null)
 
@@ -569,7 +585,11 @@ export function Panel({
   // "instance" mid-edit (cubic + Copilot flagged in ZF0-1292 review).
   useEffect(() => {
     clearHighlights()
-    setEditScope('instance')
+    // Reset to the DEFAULT, which is 'all'. Resetting to 'instance' here was the
+    // second half of the same inversion: even after a user chose 'All', the next
+    // selection silently put them back on a narrower scope than the source
+    // supports.
+    setEditScope('all')
   }, [element])
 
   // Detect shared CSS classes when a new element is selected (ZF0-1018), and
@@ -1742,7 +1762,7 @@ export function Panel({
           onMouseLeave={() => clearHighlights()}
         >
           <span class="cortex-panel__scope-label">
-            Used by {sharedSourceInfo.count} elements
+            Editing all {sharedSourceInfo.count} — they share one source location
           </span>
         </div>
       )}

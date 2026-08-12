@@ -161,3 +161,34 @@ describe('resolveSelectionTargets — per-instance selection for moves (B4)', ()
     expect(resolveSelectionTargets([], { expandShared: false })).toEqual([])
   })
 })
+
+// ── COR-12 P2: the empty path returned the CALLER's array ──────────────────
+describe('COR-12: no aliasing of the caller array', () => {
+  it('expandSharedSource returns a NEW array for empty input', () => {
+    // It returned `elements` itself, so clearing a selection stored a reference
+    // the caller still held — a later push on that array would rewrite live
+    // selection state with no metadata capture and no re-render.
+    const input: Element[] = []
+    const out = expandSharedSource(input)
+    expect(out).not.toBe(input)
+    expect(out).toEqual([])
+  })
+
+  it('a later push on the caller array cannot reach the returned one', () => {
+    // The failure mode stated as behaviour rather than identity: this is what
+    // "aliasing" actually costs.
+    const input: Element[] = []
+    const out = expandSharedSource(input)
+    input.push(document.createElement('div'))
+    expect(out).toHaveLength(0)
+  })
+
+  it('resolveSelectionTargets also copies on the opt-out path', () => {
+    // The comment there claimed "expandSharedSource already allocates", which
+    // was false for exactly the empty case above — so the hole stayed open on
+    // the path the comment asserted was safe.
+    const input: Element[] = []
+    const out = resolveSelectionTargets(input, { expandShared: false })
+    expect(out).not.toBe(input)
+  })
+})

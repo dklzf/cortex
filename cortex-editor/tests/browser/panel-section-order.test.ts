@@ -190,10 +190,32 @@ describe('Panel — canonical section ordering', () => {
     // appears after Preact flushes effects. Both position group and the
     // scope button must be present before proceeding.
     await vi.waitFor(() => {
-      // Scope defaults to 'instance', so Position should be visible initially.
-      expect(root.querySelector('[data-group="position"]')).not.toBeNull()
-      // Scope button must also be present (requires second effect flush after setSharedInfo).
+      // Scope button must be present (requires a second effect flush after
+      // setSharedInfo).
       expect(root.querySelector('.cortex-panel__scope-btn:last-child')).not.toBeNull()
+    }, { timeout: 500 })
+
+    // COR-12: pin the DEFAULT itself. Without this the flip has no falsifiable
+    // test — every other scope assertion clicks a button first, so they pass
+    // whichever way the default points.
+    const scopeBtns = Array.from(root.querySelectorAll<HTMLButtonElement>('.cortex-panel__scope-btn'))
+    const allBtnInitial = scopeBtns[scopeBtns.length - 1]
+    expect(
+      allBtnInitial!.getAttribute('aria-checked'),
+      'edit-all is the default (product decision 2026-08-05)',
+    ).toBe('true')
+    expect(root.querySelector('[data-group="position"]')).toBeNull()
+
+    // Scope now defaults to 'all' (COR-12), which already hides Position. Narrow
+    // to 'This element' first so the transition under test — all => Position
+    // hidden — is actually exercised rather than asserted about the mount state.
+    const instanceButton = root.querySelector<HTMLButtonElement>(
+      '.cortex-panel__scope-btn:first-child',
+    )
+    expect(instanceButton).not.toBeNull()
+    instanceButton!.click()
+    await vi.waitFor(() => {
+      expect(root.querySelector('[data-group="position"]')).not.toBeNull()
     }, { timeout: 500 })
 
     // Click the "All" scope button (scope toggle is rendered when sharedInfo detected).

@@ -993,8 +993,9 @@ describe('Panel — hmrAppliedVersion (ZF0-1292)', () => {
     // Locks in the commit f9b0e13 architectural fix: scope reset +
     // highlight clear fire ONLY on `[element]` changes, NOT on
     // `hmrAppliedVersion`. Without this split, an HMR cycle after the user
-    // toggled to "All" scope would silently flip them back to "instance"
-    // mid-edit. Flagged as HIGH by three independent reviewers in the
+    // narrowed to "This element" would silently flip them back to the default
+    // mid-edit. (Direction inverted with COR-12: the default is now "All", so
+    // the deviation worth protecting is the narrowing.) Flagged as HIGH by three independent reviewers in the
     // ZF0-1292 architecture review. If someone merges the two useEffects
     // back into one, this test fails.
 
@@ -1074,16 +1075,19 @@ describe('Panel — hmrAppliedVersion (ZF0-1292)', () => {
       expect(allBtn).not.toBeNull()
       expect(allBtn!.textContent).toContain('All')
       instanceBtn = shadowRoot.querySelector('.cortex-panel__scope-btn:first-child') as HTMLButtonElement
-      // Initial state: "This element" is active (default from setEditScope('instance')).
-      expect(instanceBtn.classList.contains('cortex-panel__scope-btn--active')).toBe(true)
-      expect(allBtn!.classList.contains('cortex-panel__scope-btn--active')).toBe(false)
-    }, { timeout: 500 })
-
-    // User clicks "All" to switch scope.
-    allBtn!.click()
-    await vi.waitFor(() => {
+      // Initial state: "All" is active — edit-all is the default (COR-12).
       expect(allBtn!.classList.contains('cortex-panel__scope-btn--active')).toBe(true)
       expect(instanceBtn.classList.contains('cortex-panel__scope-btn--active')).toBe(false)
+    }, { timeout: 500 })
+
+    // User clicks "This element" to narrow scope. Testing the DEVIATION from the
+    // default is the stronger direction: an HMR bump silently restoring the
+    // default is exactly the regression this guards, and it is only observable
+    // when the user has moved away from it.
+    instanceBtn.click()
+    await vi.waitFor(() => {
+      expect(instanceBtn.classList.contains('cortex-panel__scope-btn--active')).toBe(true)
+      expect(allBtn!.classList.contains('cortex-panel__scope-btn--active')).toBe(false)
     }, { timeout: 500 })
 
     // Now bump hmrAppliedVersion — simulates an HMR cycle (stylesheet edit,
@@ -1093,8 +1097,8 @@ describe('Panel — hmrAppliedVersion (ZF0-1292)', () => {
     await vi.waitFor(() => {
       const allBtnAfter = shadowRoot.querySelector('.cortex-panel__scope-btn:last-child') as HTMLButtonElement
       const instanceBtnAfter = shadowRoot.querySelector('.cortex-panel__scope-btn:first-child') as HTMLButtonElement
-      expect(allBtnAfter.classList.contains('cortex-panel__scope-btn--active')).toBe(true)
-      expect(instanceBtnAfter.classList.contains('cortex-panel__scope-btn--active')).toBe(false)
+      expect(instanceBtnAfter.classList.contains('cortex-panel__scope-btn--active')).toBe(true)
+      expect(allBtnAfter.classList.contains('cortex-panel__scope-btn--active')).toBe(false)
     }, { timeout: 500 })
   })
 })
@@ -2044,6 +2048,9 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
 
     for (const e of stored) {
       expect(e.instanceSources).toBeUndefined()
+      // 'instance', NOT the editScope default: the MULTI-select branch computes
+      // scope from `isShared`, not from the toggle. COR-12's default flip does
+      // not reach here, and changing this to 'all' was wrong — the suite caught it.
       expect(e.scope).toBe('instance')
       expect(e.property).toBe('display')
       expect(e.intentId).toMatch(/^[0-9a-f-]{36}$|^cortex-[0-9a-z]+-[0-9a-z]+$/)
@@ -2531,7 +2538,9 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
     expect(stored).toHaveLength(1)
     expect(stored[0].source).toBe('src/Hero.tsx:14:5')
     expect(stored[0].instanceSources).toBeUndefined()
-    expect(stored[0].scope).toBe('instance')
+    // Default scope ('all' since COR-12). What this test guards is the ABSENCE
+    // of fan-out for a single-select, not the scope label.
+    expect(stored[0].scope).toBe('all')
 
     render(null, container)
     container.remove()
@@ -2592,7 +2601,11 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
 
     const sourceBanner = shadowRoot.querySelector('.cortex-panel__scope--source-only')!
     // Banner copy: "Used by N elements"
-    expect(sourceBanner.textContent).toContain('Used by 2 elements')
+    // COR-12: the label now STATES why there is no per-instance option, rather
+    // than only reporting a count. A control that cannot be honoured is not
+    // rendered here; saying nothing about why left the user to infer it.
+    expect(sourceBanner.textContent).toContain('Editing all 2')
+    expect(sourceBanner.textContent).toContain('share one source location')
     // No scope-toggle buttons inside the source banner
     expect(sourceBanner.querySelector('.cortex-panel__scope-toggle')).toBeNull()
     expect(sourceBanner.querySelector('.cortex-panel__scope-btn')).toBeNull()
