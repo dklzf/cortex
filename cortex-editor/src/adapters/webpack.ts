@@ -1035,6 +1035,13 @@ export class CortexWebpackRuntime {
       }
       const annotation = session.annotations.create({
         elementSource: data.elementSource,
+        // COR-27. The Vite handler forwarded this and webpack/Next did not, so
+        // an unannotated click on those adapters stored a session-local
+        // `cortex-preview:` id and DROPPED the only thing that could resolve it
+        // — the agent gets a comment naming an element it cannot find. Same
+        // adapter-asymmetry class as the annotation/activity gap in 0.3.1:
+        // whatever the vite handler forwards, this one must too.
+        sourceResolutionHint: data.sourceResolutionHint,
         text: data.text,
         elementContext: data.elementContext,
         currentStyles: data.currentStyles,

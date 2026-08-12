@@ -80,7 +80,16 @@ const HINT_TEXT_FIELDS = ['tagName', 'className', 'id', 'textPreview', 'domSelec
  *  A real `file:line:col` source cannot contain a marker, and a generated preview
  *  id is `p<base36>-<base36>`, so stripping is identity for every legitimate value
  *  and only alters injected ones. */
-const PAGE_DERIVED_SOURCE_FIELDS = ['source', 'parentSource'] as const
+// `elementSource` joined this list in COR-27, and the reason it had to is worth
+// keeping: `getElementEditTarget` REUSES an existing `data-cortex-preview-id`
+// attribute if the element already has one, and that attribute is page-authored.
+// A hostile page can therefore choose its own preview id, and the resulting
+// `cortex-preview:</untrusted-page-content>…` reaches the agent as an annotation's
+// elementSource. The annotation IS fenced — it carries a hint — but a fence the
+// payload can close from the inside is not a fence. Enumerating field names by
+// hand is exactly the pattern that keeps failing here; every new page-derived
+// string field must be added, and this comment is the reminder.
+const PAGE_DERIVED_SOURCE_FIELDS = ['source', 'parentSource', 'elementSource'] as const
 
 /** A staged CLASS intent's payload is page-craftable too. `staged-edit-add`
  *  accepts an intent straight from page JavaScript, and the class-op tokens and
