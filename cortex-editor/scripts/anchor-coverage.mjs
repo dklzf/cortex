@@ -364,6 +364,7 @@ async function main() {
   // Runs against the SAME pointable population the coverage table reports, so
   // the two numbers describe one set of anchors rather than two.
   let verify = null
+  let verifyFailed = false
   if (verifyRoot) {
     const samples = rows.filter(r => !r.error).flatMap(r => r.anchorSamples ?? [])
     const dropped = rows.filter(r => !r.error).reduce((n, r) => n + (r.anchorSamplesDropped ?? 0), 0)
@@ -458,7 +459,16 @@ async function main() {
       console.log('  adding a constant to every line number is one-to-one, so a uniform offset leaves')
       console.log('  every uniqueness figure untouched while every anchor points elsewhere (COR-28).')
     } else if (verify.error) {
-      console.log(`  verification failed: ${verify.error}`)
+      console.log(`  verification FAILED: ${verify.error}`)
+      console.log('  (exiting non-zero — a measurement you asked for and did not get is a harness')
+      console.log('   failure, unlike a bad score, which this tool reports without gating.)')
+      verifyFailed = true
+    } else if (verify.total === 0) {
+      // Not the same as "nothing wrong". Zero samples means no visible element
+      // on any route carried an anchor at all — a louder result than any
+      // percentage, and one that silently omitting the section would hide.
+      console.log('  0 anchors sampled. Nothing on these routes carries a data-cortex-source,')
+      console.log('  so correctness is undefined here — this is a coverage failure, not a clean bill.')
     } else {
       const t = verify.total
       console.log('  VERIFIED      ' + String(verify.verified).padStart(6) + pct(verify.verified, t).padStart(9) +
@@ -487,6 +497,7 @@ async function main() {
     console.log('\nNo pages measured. Every route errored — see above.')
   }
   console.log('')
+  if (verifyFailed) process.exitCode = 1
 }
 
 main().catch(err => { console.error('harness failure:', err); process.exit(1) })

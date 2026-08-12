@@ -52,6 +52,16 @@ describe('parseAnchorSource', () => {
     expect(parseAnchorSource('a.tsx:0:1')).toBeNull()
     expect(parseAnchorSource('a.tsx:1:0')).toBeNull()
   })
+
+  it.each(['a.tsx:6junk:11', 'a.tsx:6:11junk', 'a.tsx: 6:11', 'a.tsx:+6:11', 'a.tsx:6.0:11', 'a.tsx:0x6:11'])(
+    'rejects the malformed coordinate %s instead of silently truncating it',
+    (source) => {
+      // parseInt stops at the first non-digit, so `6junk` would read as 6 and a
+      // malformed anchor could be reported VERIFIED. A metric about truthfulness
+      // must not launder its own input.
+      expect(parseAnchorSource(source)).toBeNull()
+    },
+  )
 })
 
 describe('jsxFactsAt', () => {
@@ -124,6 +134,18 @@ describe('verifyAnchor — the metric must be able to FAIL on a wrong label', ()
     expect(r.reason).toContain('component')
   })
 
+  it('compares SVG tags with EXACT casing', async () => {
+    // The probe records localName, which lower-cases HTML but preserves SVG
+    // casing. JSX must spell host elements identically or they parse as
+    // components — so a casing difference is a real mismatch, and lower-casing
+    // both sides would throw away the only signal that catches it.
+    const svg = `export const S = () => (\n  <svg><linearGradient id="g" /></svg>\n)\n`
+    const ok = await verifyAnchor({ source: 's.tsx:2:8', domTag: 'linearGradient' }, () => svg)
+    expect(ok.verdict).toBe('tag-only')          // matches; no discriminator
+    const bad = await verifyAnchor({ source: 's.tsx:2:8', domTag: 'lineargradient' }, () => svg)
+    expect(bad.verdict).toBe('silently-wrong')
+  })
+
   it('tolerates EXTRA runtime classes on the DOM side', async () => {
     // Frameworks, CSS modules and runtime toggles add tokens the source never
     // names. Requiring equality would report false mismatches on ordinary apps
@@ -158,6 +180,40 @@ describe('summarizeAnchors', () => {
       sourceTag: 'li',
       why: 'class mismatch',
     })
+  })
+
+  it('the file-grouping optimisation never leaks one file\'s parse into another', async () => {
+    // summarizeAnchors reorders work by file so the one-entry parse cache hits.
+    // Interleaving two files with the SAME position but DIFFERENT elements is
+    // the case a stale cache would get wrong: B's anchor would be answered with
+    // A's parse and report verified.
+    const A = `export const A = () => <div className="a" />\n`
+    const B = `export const B = () => <span className="b" />\n`
+    const s = await summarizeAnchors(
+      [
+        { source: 'A.tsx:1:24', domTag: 'div', domClass: 'a' },
+        { source: 'B.tsx:1:24', domTag: 'span', domClass: 'b' },
+        { source: 'A.tsx:1:24', domTag: 'div', domClass: 'a' },
+        { source: 'B.tsx:1:24', domTag: 'span', domClass: 'b' },
+      ],
+      (p) => (p === 'A.tsx' ? A : B),
+    )
+    expect(s.verified).toBe(4)
+    expect(s.silentlyWrong).toBe(0)
+  })
+
+  it('reports mismatches in INPUT order, not the file-grouped work order', async () => {
+    // Grouping is a performance detail. If it leaked into the output, the first
+    // reported mismatch would depend on filename sort order rather than on what
+    // the operator actually saw first.
+    const s = await summarizeAnchors(
+      [
+        { source: 'zz/App.tsx:9:7', domTag: 'li', domClass: 'row' },   // wrong; sorts LAST by file
+        { source: 'aa/App.tsx:9:7', domTag: 'li', domClass: 'row' },   // wrong; sorts FIRST by file
+      ],
+      () => FILE,
+    )
+    expect(s.mismatches.map(m => m.source)).toEqual(['zz/App.tsx:9:7', 'aa/App.tsx:9:7'])
   })
 
   it('a uniform +19 offset drives silently-wrong to 100% — the case uniqueness cannot see', async () => {

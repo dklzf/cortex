@@ -41,6 +41,14 @@
     "browser/controls/sizing-dropdown.test.tsx",
     "browser/sections/SizingControls.test.tsx",
     "browser/sections/layout-section.test.tsx",
+    // COMPILE-TIME CONTRACT — added in COR-29. Every export it exercises is
+    // async, and `await` on a non-Promise is legal JS, so dropping an `await`
+    // makes `verdict` read `undefined` and every assertion fail for a reason
+    // that has nothing to do with the verifier. vitest is transpile-only and
+    // would not have caught it; CodeRabbit found this file sitting outside
+    // EVERY tsc program, the same gap that let the withCortex type bug ship
+    // twice (see the next-type-contract note above).
+    "core/anchor-verify.test.ts",
     "../src/**/*.ts",
     "../src/**/*.tsx"
   ],

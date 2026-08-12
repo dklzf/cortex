@@ -77,10 +77,18 @@ export function parseAnchorSource(
   if (secondLastColon < 0) return null
 
   const filePath = source.slice(0, secondLastColon)
-  const line = Number.parseInt(source.slice(secondLastColon + 1, lastColon), 10)
-  const col = Number.parseInt(source.slice(lastColon + 1), 10)
-  if (!filePath || !Number.isFinite(line) || !Number.isFinite(col)) return null
-  if (line < 1 || col < 1) return null
+  // Whole-field match, NOT parseInt. parseInt stops at the first non-digit, so
+  // `App.tsx:6junk:11` would parse as line 6 and a malformed anchor could be
+  // reported VERIFIED — a metric about truthfulness must not launder its own
+  // input. `[1-9]\d*` also subsumes the `< 1` check and rejects `+6`, ` 6`,
+  // `6.0`, `0x6`, and `Infinity`, all of which parseInt or Number would accept
+  // in some form.
+  const lineText = source.slice(secondLastColon + 1, lastColon)
+  const colText = source.slice(lastColon + 1)
+  if (!filePath || !/^[1-9]\d*$/.test(lineText) || !/^[1-9]\d*$/.test(colText)) return null
+  const line = Number(lineText)
+  const col = Number(colText)
+  if (!Number.isSafeInteger(line) || !Number.isSafeInteger(col)) return null
   return { filePath, line, col }
 }
 
@@ -99,6 +107,20 @@ interface JsxFacts {
   className?: string
 }
 
+/**
+ * One-entry parse cache. `summarizeAnchors` groups its samples by file before
+ * calling in, so consecutive calls almost always carry the same text and this
+ * hits every time — turning O(anchors) parses into O(files). A route with a
+ * `.map()` over 200 rows names one source file 200 times; without this it would
+ * reparse that file 200 times.
+ *
+ * Deliberately one entry, not a Map: an unbounded cache keyed by file TEXT
+ * would retain every version of every file for the process lifetime, and the
+ * grouping makes the extra entries worthless anyway.
+ */
+let cachedText: string | null = null
+let cachedFile: import('ts-morph').SourceFile | null = null
+
 /** The JSX facts at a position, or null when the position resolves to no JSX. */
 export async function jsxFactsAt(
   fileText: string,
@@ -106,15 +128,21 @@ export async function jsxFactsAt(
   col: number,
 ): Promise<JsxFacts | null> {
   const { project, SK } = await morph.ensureReady()
-  // Overwrite one probe file rather than accumulating source files; ts-morph
-  // keeps every added file alive on the Project otherwise.
-  const existing = project.getSourceFile(PROBE_PATH)
-  if (existing) project.removeSourceFile(existing)
-  let sourceFile
-  try {
-    sourceFile = project.createSourceFile(PROBE_PATH, fileText, { overwrite: true })
-  } catch {
-    return null
+  let sourceFile = cachedText === fileText ? cachedFile : null
+  if (!sourceFile) {
+    // Overwrite one probe file rather than accumulating source files; ts-morph
+    // keeps every added file alive on the Project otherwise.
+    const existing = project.getSourceFile(PROBE_PATH)
+    if (existing) project.removeSourceFile(existing)
+    try {
+      sourceFile = project.createSourceFile(PROBE_PATH, fileText, { overwrite: true })
+    } catch {
+      cachedText = null
+      cachedFile = null
+      return null
+    }
+    cachedText = fileText
+    cachedFile = sourceFile
   }
   const el = findJsxElementAt(sourceFile, line, col, SK)
   if (!el) return null
@@ -164,7 +192,13 @@ export async function verifyAnchor(
     return { verdict: 'unresolvable', sourceTag: facts.tag, reason: 'anchor names a component, not a host element' }
   }
 
-  if (facts.tag.toLowerCase() !== sample.domTag.toLowerCase()) {
+  // EXACT comparison, not case-insensitive. The probe records `localName`
+  // precisely because it preserves SVG casing (`linearGradient`, `clipPath`)
+  // while lower-casing HTML — and JSX must spell host elements the same way, or
+  // they would be parsed as components. Lower-casing both sides throws away the
+  // one signal that distinguishes an SVG host element from a differently-cased
+  // impostor, so a casing-only difference would verify.
+  if (facts.tag !== sample.domTag) {
     return { verdict: 'silently-wrong', sourceTag: facts.tag, reason: 'tag mismatch' }
   }
 
@@ -206,18 +240,31 @@ export async function summarizeAnchors(
     unresolvable: 0,
     mismatches: [],
   }
-  for (const sample of samples) {
-    const r = await verifyAnchor(sample, readFile)
-    if (r.verdict === 'verified') summary.verified++
-    else if (r.verdict === 'tag-only') summary.tagOnly++
-    else if (r.verdict === 'unresolvable') summary.unresolvable++
+  // Verify in file-grouped order so the one-entry parse cache in jsxFactsAt hits
+  // — a page naming one file 200 times becomes ONE parse, not 200. Results are
+  // stored by ORIGINAL index and tallied in input order afterwards, so grouping
+  // is a pure performance detail and never reorders the reported mismatches.
+  const byFile = samples
+    .map((sample, index) => ({ sample, index, filePath: parseAnchorSource(sample.source)?.filePath ?? '' }))
+    .sort((a, b) => (a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : a.index - b.index))
+
+  const verified = []
+  for (const e of byFile) {
+    verified.push({ index: e.index, sample: e.sample, result: await verifyAnchor(e.sample, readFile) })
+  }
+  verified.sort((a, b) => a.index - b.index)
+
+  for (const { sample, result } of verified) {
+    if (result.verdict === 'verified') summary.verified++
+    else if (result.verdict === 'tag-only') summary.tagOnly++
+    else if (result.verdict === 'unresolvable') summary.unresolvable++
     else {
       summary.silentlyWrong++
       summary.mismatches.push({
         source: sample.source,
         domTag: sample.domTag,
-        sourceTag: r.sourceTag ?? '(none)',
-        why: r.reason ?? 'mismatch',
+        sourceTag: result.sourceTag ?? '(none)',
+        why: result.reason ?? 'mismatch',
       })
     }
   }
