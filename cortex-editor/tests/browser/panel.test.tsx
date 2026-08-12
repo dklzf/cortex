@@ -2627,7 +2627,10 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     expect(sourceBanner.querySelector('.cortex-panel__scope-btn')).toBeNull()
   })
 
-  it('an explicit "This element" survives an HMR re-detection (ZF0-1292 guard)', async () => {
+  it.each([
+    ['mouse', 'click'] as const,
+    ['keyboard', 'arrow'] as const,
+  ])('an explicit "This element" chosen by %s survives an HMR re-detection (ZF0-1292 guard)', async (_label, how) => {
     // The detect-time default that makes All the default where sharing exists
     // fires on [sharedInfo, sharedSourceInfo], and sharedInfo is a FRESH OBJECT
     // on every re-detection — so without the user-choice ref it would run on
@@ -2671,7 +2674,18 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
 
     // ...the user deliberately narrows...
     const instanceBtn = shadowRoot.querySelector<HTMLButtonElement>('.cortex-panel__scope-btn:first-child')!
-    await act(async () => { instanceBtn.click(); await Promise.resolve() })
+    // Both entry points must record the choice. The ref was originally written
+    // inline at the two onClick handlers, so ArrowLeft/Right narrowed the scope
+    // without marking it user-chosen — the KEYBOARD path silently lost the
+    // choice on the next HMR bump while the mouse path kept it. Parameterised so
+    // a future entry point that skips the seam fails here rather than shipping
+    // an a11y-only data-loss bug.
+    await act(async () => {
+      if (how === 'click') instanceBtn.click()
+      else shadowRoot.querySelector('.cortex-panel__scope-toggle')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+      await Promise.resolve()
+    })
     await vi.waitFor(() => {
       expect(shadowRoot.querySelector('[data-group="position"]')).not.toBeNull()
     }, { timeout: 500 })

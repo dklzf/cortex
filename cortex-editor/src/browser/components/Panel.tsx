@@ -101,6 +101,10 @@ export function ConnectionStatusFooter({ status }: { status?: ConnectionDisplay 
 
 const HIGHLIGHT_ATTR = 'data-cortex-blast-radius'
 
+/** Mirrors the server's CortexEdit.scope contract. Named so `chooseScope` and
+ *  the state share one definition rather than repeating the union. */
+type EditScope = 'instance' | 'all'
+
 /** The two fields this helper actually sets.
  *
  *  Deliberately NOT `Partial<PendingEdit>`: PendingEdit is a discriminated
@@ -500,15 +504,40 @@ export function Panel({
   // mutating this line alone changes no observable behaviour, which is how the
   // original inversion had two independent sources. Both say 'all'; keep them
   // in agreement or the effect silently wins.
-  const [editScope, setEditScope] = useState<'instance' | 'all'>('all')
+  // 'instance' is the value for "sharing UNKNOWN", not the product default. The
+  // edit-all default is applied by the detect-time effect below, once sharing is
+  // actually found — see its comment. This initializer is near-dead (the
+  // [element] effect sets the same value on the first commit) but it must agree
+  // with that effect, or the two disagree for one render on mount.
+  const [editScope, setEditScope] = useState<EditScope>('instance')
   // Shared source detection for warning-only banner (ZF0-1583)
   const [sharedSourceInfo, setSharedSourceInfo] = useState<SharedSourceInfo | null>(null)
 
   /** True once the user has picked a scope for THIS element. Gates the
    *  detect-time default so re-detection (every HMR bump produces fresh
    *  sharedInfo objects) cannot overwrite a deliberate choice — the ZF0-1292
-   *  regression. Cleared on element change. */
+   *  regression. Cleared on element change.
+   *
+   *  Only ever written through `chooseScope` below. It was first written inline
+   *  at the two onClick handlers, which left the radiogroup's ArrowLeft/Right
+   *  handler unguarded — a keyboard user's explicit narrowing was silently
+   *  restored to All on the next HMR bump, so the a11y path had a data-loss bug
+   *  the mouse path did not. Same defect as three other findings in this ticket:
+   *  a control enumerated by call site loses coverage silently. */
   const userChoseScopeRef = useRef(false)
+
+  /**
+   * The ONLY way to change scope from user input.
+   *
+   * Recording the choice is not a convention each call site has to remember —
+   * it is inseparable from making the choice, so a new entry point cannot forget
+   * it. `setEditScope` remains for the two EFFECTS that apply defaults, which
+   * deliberately must NOT mark the scope as user-chosen.
+   */
+  const chooseScope = useCallback((next: EditScope) => {
+    userChoseScopeRef.current = true
+    setEditScope(next)
+  }, [])
 
   /**
    * What a scope=all edit ACTUALLY reaches when a repeated call site's class is
@@ -1838,7 +1867,7 @@ export function Panel({
               if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 e.preventDefault()
                 const next = editScope === 'instance' ? 'all' : 'instance'
-                setEditScope(next)
+                chooseScope(next)
                 if (next === 'all') highlightSharedElements(sharedInfo, element)
                 else clearHighlights()
               }
@@ -1850,7 +1879,7 @@ export function Panel({
               role="radio"
               aria-checked={editScope === 'instance'}
               tabIndex={editScope === 'instance' ? 0 : -1}
-              onClick={() => { userChoseScopeRef.current = true; setEditScope('instance'); clearHighlights() }}
+              onClick={() => { chooseScope('instance'); clearHighlights() }}
             >
               This element
             </button>
@@ -1860,7 +1889,7 @@ export function Panel({
               role="radio"
               aria-checked={editScope === 'all'}
               tabIndex={editScope === 'all' ? 0 : -1}
-              onClick={() => { userChoseScopeRef.current = true; setEditScope('all'); highlightSharedElements(sharedInfo, element) }}
+              onClick={() => { chooseScope('all'); highlightSharedElements(sharedInfo, element) }}
               // Hover previews unconditionally. It used to gate on
               // `editScope !== 'all'` on the assumption that scope=all is only
               // ever reached by CLICKING here, which also highlights — so the
