@@ -326,27 +326,100 @@ export function resolveConstraintOwner(element: Element, edge: ResizeEdge): Cons
 // the used size?", and only a write can answer it.
 
 /** How much to perturb by. Large enough that sub-pixel layout rounding cannot
- *  masquerade as a response ratio, small enough not to trigger wrapping or a
- *  scrollbar in a tight container — either would measure a different layout
- *  than the one the user is dragging in. */
+ *  masquerade as a response ratio, small enough not to trigger a scrollbar in a
+ *  tight container. It CAN still cross a flex wrap threshold, which the probe
+ *  detects and refuses rather than reporting a different line arrangement's
+ *  geometry as if it were this one's. */
 const PROBE_PX = 16
 
-/** Below this, a measured delta is layout noise rather than a response. Chromium
- *  reports fractional device-pixel geometry, so exact zero is the wrong test. */
+/** Sub-pixel noise floor for "did this move at all". Chromium reports
+ *  fractional device-pixel geometry, so exact zero is the wrong test for a SIZE
+ *  that was asked to change. */
 const EPSILON = 0.5
 
+/** A genuinely pinned edge moves EXACTLY zero, so the floor for "the edge did
+ *  not move" must be far tighter than the size floor. At 0.5px it erased real
+ *  responses: a `space-between` row with 40 children moves the second-to-last
+ *  child's edge by 16/39 ≈ 0.41px, a true ratio of ~0.026, and rounding that to
+ *  zero disables the edge outright. Raised in review. */
+const EDGE_EPSILON = 0.02
+
 export interface ConstraintProbe {
-  /** Used-size change actually obtained for a `PROBE_PX` request. */
+  /** Used-size change actually obtained, in the same (possibly transformed)
+   *  space as `edgeDelta`, so their ratio is unit-consistent. */
   sizeDelta: number
   /** Signed movement of the grabbed edge. */
   edgeDelta: number
-  /** Whether any sibling's position changed — the signal that the parent
-   *  re-allocated space rather than the element simply growing into it. */
-  siblingMoved: boolean
+  /** What the probe ASKED for, expressed in that same space. Compared against
+   *  `sizeDelta` to detect a partially-honoured write; it is not simply
+   *  PROBE_PX, because a CSS transform scales the two apart. */
+  requested: number
+  /** Whether any sibling's position OR size changed — the signal that the
+   *  parent re-allocated space rather than the element growing into its own.
+   *  Size matters as much as origin: two stretched grid items in different rows
+   *  of one column keep their origins while the column widens. */
+  siblingChanged: boolean
+  /** True when the growth probe was clamped to nothing and a SHRINK probe moved
+   *  the element instead — an element sitting on its `max-width`. Reporting the
+   *  growth result alone would call a resizable element pinned. */
+  shrinkOnly: boolean
 }
 
 const edgeValue = (r: DOMRect, edge: ResizeEdge): number =>
   edge === 'left' ? r.left : edge === 'right' ? r.right : edge === 'top' ? r.top : r.bottom
+
+/** The nearest ancestor that actually generates a layout box.
+ *
+ *  `display: contents` boxes do not, and the child participates directly in the
+ *  formatting context above them. Reading `parentElement` alone therefore missed
+ *  the flex or grid container entirely, and a `flex: 1` child under a
+ *  contents-wrapper was reported as an element-owned pinned width. */
+function layoutParentOf(el: Element): { parent: Element; style: CSSStyleDeclaration } | null {
+  let p = el.parentElement
+  while (p) {
+    const style = readStyle(p)
+    if (!style) return null
+    if (style.display !== 'contents') return { parent: p, style }
+    p = p.parentElement
+  }
+  return null
+}
+
+/** Physical edge → the grid track axis that controls it, honouring writing mode.
+ *
+ *  Under `writing-mode: vertical-rl` the inline axis runs vertically, so physical
+ *  width is the BLOCK axis and columns are laid out top-to-bottom. Naming
+ *  `grid-template-columns` for a left/right drag there sends the user to edit a
+ *  property that does not control the edge they grabbed. */
+function trackPropertyFor(edge: ResizeEdge, containerStyle: CSSStyleDeclaration): string {
+  const verticalWm = (containerStyle.writingMode || '').startsWith('vertical')
+  const physicalInline = INLINE_EDGES.has(edge)
+  const isInlineAxis = verticalWm ? !physicalInline : physicalInline
+  return isInlineAxis ? TRACK_PROPERTY.inline : TRACK_PROPERTY.block
+}
+
+/** True when the flex MAIN axis runs along the dragged physical edge. */
+function draggingFlexMainAxis(edge: ResizeEdge, containerStyle: CSSStyleDeclaration): boolean {
+  const dir = containerStyle.flexDirection || 'row'
+  const verticalWm = (containerStyle.writingMode || '').startsWith('vertical')
+  // `row` follows the INLINE axis, which a vertical writing mode rotates.
+  const mainIsPhysicallyInline = dir.startsWith('row') !== verticalWm
+  return mainIsPhysicallyInline === INLINE_EDGES.has(edge)
+}
+
+interface Snapshot { rect: DOMRect; siblings: DOMRect[] }
+
+function snapshot(el: Element, siblings: Element[]): Snapshot {
+  return { rect: el.getBoundingClientRect(), siblings: siblings.map(s => s.getBoundingClientRect()) }
+}
+
+const siblingsDiffer = (a: DOMRect[], b: DOMRect[]): boolean =>
+  a.some((x, i) => {
+    const y = b[i]
+    if (!y) return false
+    return Math.abs(x.left - y.left) > EPSILON || Math.abs(x.top - y.top) > EPSILON
+      || Math.abs(x.width - y.width) > EPSILON || Math.abs(x.height - y.height) > EPSILON
+  })
 
 /**
  * Write a size, read what happened, put it back.
@@ -356,8 +429,17 @@ const edgeValue = (r: DOMRect, edge: ResizeEdge): number =>
  * forces a synchronous layout without a paint. The restore is in a `finally`, so
  * a throw mid-probe cannot leave the user's DOM permanently modified.
  *
- * Returns null when the element cannot be probed (no layout box, no inline style
- * access), which the caller must treat as "unknown", never as "no response".
+ * KNOWN, UNAVOIDABLE SIDE EFFECT: the write and the restore each enqueue a
+ * style-attribute MutationRecord. An app observing this element sees two
+ * mutations that were never a user edit, and restoring the value cannot retract
+ * the records. There is no CSSOM API for "lay this out as if" — measurement
+ * requires mutation — so this is a cost of the approach rather than a bug to
+ * fix. Callers whose own observers watch inline styles should ignore records
+ * whose before/after values are identical, which is what these are.
+ *
+ * Returns null when the element cannot be probed, or when the probe itself
+ * changed the layout it was trying to measure (a crossed flex-wrap boundary).
+ * Both mean "unknown", never "no response".
  */
 export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintProbe | null {
   const el = element as HTMLElement
@@ -366,38 +448,102 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
   const inline = INLINE_EDGES.has(edge)
   const sizeProperty = inline ? 'width' : 'height'
 
-  const before = el.getBoundingClientRect()
-  const baseSize = inline ? before.width : before.height
-  // A zero-size box gives no ratio to measure and division would produce
-  // Infinity, which reads downstream as a confident answer.
-  if (!(baseSize > 0)) return null
+  const own = readStyle(el)
+  if (!own) return null
 
   const siblings = Array.from(el.parentElement?.children ?? []).filter(s => s !== el)
-  const siblingsBefore = siblings.map(s => s.getBoundingClientRect())
+  const before = snapshot(el, siblings)
+  const baseSize = inline ? before.rect.width : before.rect.height
+  if (!(baseSize > 0)) return null
 
-  // Capture the inline declaration EXACTLY, including "not set at all" — writing
-  // back an empty string is not the same as never having written, if the author
-  // had `width: 200px` inline. Both the value and its priority must survive.
+  // The write must be in CSS pixels; the rect is in TRANSFORMED pixels. A
+  // 100px-wide element scaled by 2 reports a 200px rect, and writing 216px
+  // would ask for +116 CSS px rather than +16. Read the used size from the
+  // computed style — untransformed by definition — and derive the scale so the
+  // requested delta can be compared against a rect-space measurement.
+  const cssBase = Number.parseFloat(own.getPropertyValue(sizeProperty))
+  if (!Number.isFinite(cssBase) || cssBase <= 0) return null
+  const scale = baseSize / cssBase
+
   const priorValue = el.style.getPropertyValue(sizeProperty)
   const priorPriority = el.style.getPropertyPriority(sizeProperty)
+  const priorTransition = el.style.getPropertyValue('transition')
+  const priorTransitionPriority = el.style.getPropertyPriority('transition')
+
+  /** One write/read cycle. `delta` is in CSS pixels. */
+  const perturb = (delta: number): Snapshot => {
+    // `important`, or an author rule like `.item { width: 100px !important }`
+    // wins the cascade and the probe measures nothing — reporting a perfectly
+    // resizable element as pinned, or handing ownership to the container.
+    // Editing that important declaration WOULD resize it, so the probe has to
+    // outrank it to find out.
+    el.style.setProperty(sizeProperty, `${cssBase + delta}px`, 'important')
+    return snapshot(el, siblings)
+  }
 
   try {
-    el.style.setProperty(sizeProperty, `${baseSize + PROBE_PX}px`)
-    const after = el.getBoundingClientRect()
-    const siblingMoved = siblings.some((s, i) => {
-      const b = siblingsBefore[i]
-      if (!b) return false
-      const a = s.getBoundingClientRect()
-      return Math.abs(a.left - b.left) > EPSILON || Math.abs(a.top - b.top) > EPSILON
-    })
+    // A `transition: width` makes the synchronous read observe the transition's
+    // STARTING value, so sizeDelta comes back ~0 and a resizable element looks
+    // pinned or container-owned. Suppressing transitions for the duration is the
+    // only way to read the settled value in one task.
+    el.style.setProperty('transition', 'none', 'important')
+
+    let after = perturb(PROBE_PX)
+    let requested = PROBE_PX * scale
+    let sizeDelta = (inline ? after.rect.width : after.rect.height) - baseSize
+    let shrinkOnly = false
+
+    // Growth clamped to nothing? The element may simply be sitting on its
+    // `max-width`, in which case it shrinks perfectly well and calling the edge
+    // pinned would refuse an inward drag the user is entitled to. Constraint
+    // response is DIRECTIONAL, so ask the other question before concluding.
+    if (Math.abs(sizeDelta) < EPSILON) {
+      const shrunk = perturb(-PROBE_PX)
+      const shrunkDelta = (inline ? shrunk.rect.width : shrunk.rect.height) - baseSize
+      if (Math.abs(shrunkDelta) > EPSILON) {
+        after = shrunk
+        requested = -PROBE_PX * scale
+        sizeDelta = shrunkDelta
+        shrinkOnly = true
+      }
+    }
+
+    // Did the probe re-arrange the flex LINES? +16px can tip a wrapping container
+    // over its threshold, and everything measured after that describes a layout
+    // the user is not dragging in — here the right edge "moved" 80.5px for a 16px
+    // size change, a ratio of 5 that no alignment can produce.
+    //
+    // Checking the probed element alone is not enough, and that was the first
+    // version's mistake: when a line wraps it is frequently a SIBLING that drops
+    // to the next line while the probed element stays exactly where it was. Any
+    // item crossing the axis means the arrangement changed.
+    //
+    // Gated on the container actually being wrappable, so a grid track
+    // reallocation — which legitimately moves siblings — is not mistaken for it.
+    const wrappable = /wrap/.test(readStyle(el.parentElement ?? el)?.flexWrap ?? 'nowrap')
+    if (wrappable) {
+      const crossOf = (r: DOMRect): number => (inline ? r.top : r.left)
+      const lineChanged =
+        Math.abs(crossOf(after.rect) - crossOf(before.rect)) > EPSILON ||
+        after.siblings.some((a, i) => {
+          const b = before.siblings[i]
+          return !!b && Math.abs(crossOf(a) - crossOf(b)) > EPSILON
+        })
+      if (lineChanged) return null
+    }
+
     return {
-      sizeDelta: (inline ? after.width : after.height) - baseSize,
-      edgeDelta: edgeValue(after, edge) - edgeValue(before, edge),
-      siblingMoved,
+      sizeDelta,
+      edgeDelta: edgeValue(after.rect, edge) - edgeValue(before.rect, edge),
+      requested,
+      siblingChanged: siblingsDiffer(before.siblings, after.siblings),
+      shrinkOnly,
     }
   } finally {
     if (priorValue) el.style.setProperty(sizeProperty, priorValue, priorPriority)
     else el.style.removeProperty(sizeProperty)
+    if (priorTransition) el.style.setProperty('transition', priorTransition, priorTransitionPriority)
+    else el.style.removeProperty('transition')
   }
 }
 
@@ -406,9 +552,9 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
  *
  * Falls back to `resolveConstraintOwner` only when the element cannot be probed
  * at all. That fallback is a prediction and is wrong in the five cases above, so
- * it is a last resort rather than a peer — but a detached or zero-size node has
- * no measurement to give, and returning a confident wrong answer would be worse
- * than returning the documented guess.
+ * it is a last resort rather than a peer — but a detached or unmeasurable node
+ * has no measurement to give, and returning a confident wrong answer would be
+ * worse than returning the documented guess.
  */
 export function measureConstraintOwner(element: Element, edge: ResizeEdge): ConstraintOwnership {
   const probe = probeConstraint(element, edge)
@@ -416,29 +562,31 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
 
   const inline = INLINE_EDGES.has(edge)
   const sizeProperty = inline ? 'width' : 'height'
-  const axis = inline ? 'inline' : 'block'
-  const parentStyle = element.parentElement ? readStyle(element.parentElement) : null
-  const display = parentStyle?.display ?? ''
+  // Through `display: contents`, not `parentElement` — see layoutParentOf.
+  const layout = layoutParentOf(element)
+  const display = layout?.style.display ?? ''
   const isGrid = display === 'grid' || display === 'inline-grid'
   const isFlex = display === 'flex' || display === 'inline-flex'
+  const trackProperty = layout ? trackPropertyFor(edge, layout.style) : TRACK_PROPERTY[inline ? 'inline' : 'block']
+  const mainAxis = isFlex && layout ? draggingFlexMainAxis(edge, layout.style) : false
 
-  // ── The size did not move ────────────────────────────────────────────────
-  // The element does not control its own size along this axis, whatever its
-  // declarations say. This is the `flex: 1` case AND the overflowing
-  // `flex-shrink` case that `flex-grow > 0` misses entirely.
+  // ── The size did not move in EITHER direction ────────────────────────────
   if (Math.abs(probe.sizeDelta) < EPSILON) {
     if (isGrid) {
       return {
         target: 'grid-track',
-        property: TRACK_PROPERTY[axis],
+        property: trackProperty,
         appliesTo: 'parent',
         edgeResponse: 1,
         reason:
           `Measured: setting ${sizeProperty} on this element did not change its size — the parent's ` +
-          `${TRACK_PROPERTY[axis]} track controls it. Resize the track instead.`,
+          `${trackProperty} track controls it. Resize the track instead.`,
       }
     }
-    if (isFlex) {
+    // Only the MAIN axis is resolved by the flex algorithm. A cross-axis size
+    // that refuses to move is being clamped by something else (max-height, an
+    // aspect-ratio), and pointing the user at flex-grow would be a dead end.
+    if (isFlex && mainAxis) {
       return {
         target: 'flex-allocation',
         property: 'flex-grow',
@@ -456,50 +604,57 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
       appliesTo: 'self',
       edgeResponse: 0,
       reason:
-        `Measured: setting ${sizeProperty} on this element did not change its size, and its parent ` +
-        `is not a flex or grid container. Something else is constraining it.`,
+        `Measured: ${sizeProperty} on this element did not change in either direction — something ` +
+        `other than its own ${sizeProperty} is fixing it (a min/max constraint, or an ancestor).`,
     }
   }
 
-  // ── Partially honoured ───────────────────────────────────────────────────
-  // Asked for PROBE_PX and got materially less. Measured case: a shrinking flex
-  // child asked 250px and got 100px. Prediction called this `element` ownership
-  // because flex-grow was 0 — the naive edit then writes a width the layout
-  // silently overrules.
-  if (isFlex && probe.sizeDelta < PROBE_PX - EPSILON) {
+  const magnitude = Math.abs(probe.sizeDelta)
+  const edgeResponse = Math.abs(probe.edgeDelta) / magnitude
+
+  // ── Partially honoured, on the MAIN axis ─────────────────────────────────
+  // Measured case: a shrinking flex child asked 250px and got 100px. Restricted
+  // to the main axis because flex-shrink governs nothing else — a row child
+  // whose HEIGHT probe is clamped by max-height is not a flex-shrink problem,
+  // and saying so would send the user to edit a property with no effect.
+  //
+  // SIGNED against what was requested, not a magnitude comparison. Asking an
+  // over-constrained child to GROW makes it SHRINK FURTHER — raising its basis
+  // raises the total overflow that gets redistributed — so the measured delta is
+  // negative for a positive request. Comparing |delta| to |requested| reads that
+  // as "more than asked" and lets it through as element-owned; the sign is the
+  // diagnostic. Caught by the e2e fixture, which is the only place it shows.
+  if (isFlex && mainAxis && Math.abs(probe.sizeDelta - probe.requested) > EPSILON) {
     return {
       target: 'flex-allocation',
       property: 'flex-shrink',
       appliesTo: 'self',
-      edgeResponse: Math.abs(probe.edgeDelta) / probe.sizeDelta,
+      edgeResponse,
       reason:
-        `Measured: this element was asked for ${PROBE_PX}px more ${sizeProperty} and got ` +
-        `${probe.sizeDelta.toFixed(1)}px — the flex line is over-constrained, so flex-shrink is ` +
-        `overruling the declaration. Change its flex allocation instead.`,
+        `Measured: this element was asked for ${probe.requested.toFixed(0)}px of ${sizeProperty} ` +
+        `and got ${probe.sizeDelta.toFixed(1)}px — the flex line is over-constrained, so the flex ` +
+        `algorithm is overruling the declaration. Change its flex allocation instead.`,
     }
   }
 
-  const edgeResponse = Math.abs(probe.edgeDelta) / probe.sizeDelta
-
   // ── A grid item whose growth REALLY moves the track ──────────────────────
-  // Not every grid item does. Measured: under `justify-items: start` the item
-  // grew, its right edge moved 50px, and the sibling never moved — so the naive
-  // edit is exactly right and routing to the track was wrong. Requiring an
-  // observed sibling movement distinguishes them without guessing.
-  if (isGrid && probe.siblingMoved) {
+  // Not every grid item does. Under `justify-items: start` the item grew, its
+  // right edge moved, and no sibling changed — the naive edit is exactly right
+  // there. `siblingChanged` compares SIZE as well as origin, because a column
+  // widening leaves same-column siblings' origins untouched while resizing them.
+  if (isGrid && probe.siblingChanged) {
     return {
       target: 'grid-track',
-      property: TRACK_PROPERTY[axis],
+      property: trackProperty,
       appliesTo: 'parent',
       edgeResponse,
       reason:
-        `Measured: growing this element moved a sibling — its ${TRACK_PROPERTY[axis]} track ` +
-        `re-allocated space rather than the element growing into its own. Shrinking will not ` +
-        `move the sibling back, so resize the track instead.`,
+        `Measured: resizing this element changed a sibling — its ${trackProperty} track ` +
+        `re-allocated space rather than the element growing into its own. Resize the track instead.`,
     }
   }
 
-  if (edgeResponse < EPSILON / PROBE_PX) {
+  if (edgeResponse < EDGE_EPSILON) {
     return {
       target: 'element',
       property: sizeProperty,
@@ -512,16 +667,20 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
     }
   }
 
+  const directionNote = probe.shrinkOnly
+    ? ` It cannot grow any further (a max ${sizeProperty} is binding), but it can shrink.`
+    : ''
   return {
     target: 'element',
     property: sizeProperty,
     appliesTo: 'self',
     edgeResponse,
     reason:
-      edgeResponse > 0.95 && edgeResponse < 1.05
+      (edgeResponse > 0.95 && edgeResponse < 1.05
         ? `Measured: ${sizeProperty} on the element controls this edge, and the edge tracks it 1:1.`
         : `Measured: the ${edge} edge moves ${edgeResponse.toFixed(2)}px per 1px of ${sizeProperty} — ` +
-          `the element grows in more than one direction, so the drag delta must be scaled.`,
+          `the element grows in more than one direction, so the drag delta must be scaled.`) +
+      directionNote,
   }
 }
 

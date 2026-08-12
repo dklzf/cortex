@@ -89,6 +89,66 @@ const FIXTURE = `<!doctype html><body style="margin:0">
   <!-- Plain block child: the boring case must stay boring. -->
   <div id="blockWrap" style="width:600px">
     <div id="blockChild" style="width:200px;height:40px"></div></div>
+
+  <!-- ── Round-1 review fixtures ─────────────────────────────────────────── -->
+
+  <!-- A width transition: the synchronous read sees the transition's START
+       value unless transitions are suppressed for the probe. -->
+  <div id="transWrap" style="width:600px">
+    <div id="transChild" style="width:200px;height:40px;transition:width 3s linear"></div></div>
+
+  <!-- !important author rule: a normal-priority probe loses the cascade and
+       measures nothing, reporting a resizable element as pinned. -->
+  <style>#impChild { width: 200px !important }</style>
+  <div id="impWrap" style="width:600px">
+    <div id="impChild" style="height:40px"></div></div>
+
+  <!-- display:contents between the flex container and the item: reading
+       parentElement alone misses the flex context entirely. -->
+  <div id="contentsWrap" style="display:flex;width:600px">
+    <div style="display:contents">
+      <div id="contentsChild" style="flex:1;height:40px"></div></div></div>
+
+  <!-- Vertical writing mode grid: physical width is the BLOCK axis, so the
+       controlling tracks are grid-template-ROWS. -->
+  <div id="vwmWrap" style="display:grid;writing-mode:vertical-rl;grid-template-rows:1fr 1fr;width:600px;height:200px">
+    <div id="vwmChild"></div><div id="vwmSibling"></div></div>
+
+  <!-- Row flex whose child's HEIGHT (cross axis) is clamped by max-height.
+       flex-shrink governs the main axis only, so naming it here is a dead end. -->
+  <div id="crossWrap" style="display:flex;width:600px;height:300px">
+    <div id="crossChild" style="width:100px;height:40px;max-height:48px"></div></div>
+
+  <!-- Sitting on max-width: growth is clamped, but shrinking works fine.
+       A growth-only probe calls this pinned and refuses an inward drag. -->
+  <div id="maxWrap" style="width:600px">
+    <div id="maxChild" style="width:200px;max-width:200px;height:40px"></div></div>
+
+  <!-- Two stretched grid items in different ROWS of the same column: widening
+       the column resizes the sibling WITHOUT moving its origin. -->
+  <div id="colWrap" style="display:grid;grid-template-columns:auto 1fr;width:600px">
+    <div id="colChild" style="height:40px"></div><div style="height:40px"></div>
+    <div id="colSibling" style="height:40px"></div><div style="height:40px"></div></div>
+
+  <!-- A SCALED element: getBoundingClientRect reports transformed pixels, so a
+       100px box scaled 2x measures 200px. Writing 216px back would ask for +116
+       CSS px, not +16. -->
+  <div id="sclWrap" style="width:600px">
+    <div id="sclChild" style="width:100px;height:40px;transform:scale(2);transform-origin:left top"></div></div>
+
+  <!-- 40 children, space-between: growing the second-to-last moves its right
+       edge by only 16/39 ~ 0.41px — a REAL response of ~0.026 that an absolute
+       0.5px floor rounds to zero, disabling the edge entirely. -->
+  <div id="manyWrap" style="display:flex;justify-content:space-between;width:1200px">
+    ${Array.from({ length: 38 }, () => '<div style="width:10px;height:20px"></div>').join('')}
+    <div id="manyChild" style="width:10px;height:20px"></div>
+    <div style="width:10px;height:20px"></div></div>
+
+  <!-- A wrapping flex line the probe would tip over: two centred items totalling
+       290px in a 300px container become two lines at +16px. -->
+  <div id="wrapWrap" style="display:flex;flex-wrap:wrap;justify-content:center;width:300px">
+    <div id="wrapChild" style="width:145px;height:40px"></div>
+    <div style="width:145px;height:40px"></div></div>
 </body>`
 
 async function own(page: Page, id: string, edge: Edge): Promise<Ownership> {
@@ -170,7 +230,7 @@ test.describe('measureConstraintOwner — the cases prediction got right must st
     expect(o.target).toBe('grid-track')
     expect(o.property).toBe('grid-template-columns')
     expect(o.appliesTo).toBe('parent')
-    expect(o.reason).toContain('moved a sibling')
+    expect(o.reason).toContain('changed a sibling')
   })
 
   test('a plain block child is element-owned with 1:1 response', async ({ page }) => {
@@ -223,5 +283,117 @@ test.describe('the probe must leave the page exactly as it found it', () => {
     const before = await box()
     await own(page, 'sbMiddle', 'right')
     expect(await box()).toEqual(before)
+  })
+})
+
+test.describe('round-1 review: the probe must not be fooled by the page', () => {
+  test('a width TRANSITION does not make a resizable element look pinned', async ({ page }) => {
+    // The synchronous read lands at the transition's starting value, so
+    // sizeDelta comes back ~0 and the element is reported pinned or
+    // container-owned. Suppressing transitions for the probe is the only way to
+    // read the settled value inside one task.
+    const o = await own(page, 'transChild', 'right')
+    expect(o.target).toBe('element')
+    expect(o.edgeResponse).toBeCloseTo(1, 1)
+  })
+
+  test('an !important author width is still measurable', async ({ page }) => {
+    // A normal-priority inline probe loses the cascade to
+    // `#impChild { width: 200px !important }` and measures nothing — yet editing
+    // that important declaration WOULD resize the element, so calling it pinned
+    // is wrong. The probe outranks it to find out.
+    const o = await own(page, 'impChild', 'right')
+    expect(o.target).toBe('element')
+    expect(o.edgeResponse).toBeCloseTo(1, 1)
+  })
+
+  test('a flex child under display:contents is still flex-owned', async ({ page }) => {
+    // parentElement is the contents wrapper, which generates NO layout box; the
+    // child participates directly in the flex context above it. Reading the
+    // immediate parent left isFlex false and reported a `flex: 1` child as an
+    // element-owned pinned width.
+    const o = await own(page, 'contentsChild', 'right')
+    expect(o.target).toBe('flex-allocation')
+    expect(o.property).toBe('flex-grow')
+  })
+
+  test('a vertical-writing-mode grid names ROWS for a horizontal drag', async ({ page }) => {
+    // Under vertical-rl the inline axis runs vertically, so physical width is the
+    // BLOCK axis. Naming grid-template-columns sends the user to edit a property
+    // that does not control the edge they grabbed.
+    const o = await own(page, 'vwmChild', 'right')
+    expect(o.target).toBe('grid-track')
+    expect(o.property).toBe('grid-template-rows')
+  })
+
+  test('a PARTIALLY honoured cross-axis size is not blamed on flex-shrink', async ({ page }) => {
+    // flex-shrink governs the MAIN axis only. This row child asks for +16px of
+    // height and gets +8 because max-height clamps it — a partially honoured
+    // write, which is exactly the signature the flex-shrink branch keys on.
+    // Without the main-axis guard it names flex-shrink, sending the user to edit
+    // a property that cannot affect this edge.
+    const o = await own(page, 'crossChild', 'bottom')
+    expect(o.property).not.toBe('flex-shrink')
+    expect(o.property).not.toBe('flex-grow')
+  })
+
+  test('a CSS transform does not inflate the requested delta', async ({ page }) => {
+    // The write is in CSS pixels; the rect is in transformed pixels. Deriving
+    // the probe size from the RECT asked a 2x-scaled 100px element for 216px —
+    // +116 CSS px rather than +16 — measuring a perturbation six times larger
+    // than intended. The used size now comes from the computed style, which is
+    // untransformed by definition, and the scale is carried so `requested` and
+    // `sizeDelta` stay in one space.
+    const probe = await page.evaluate(() => {
+      const el = document.getElementById('sclChild')!
+      return (window as unknown as {
+        CO: { probeConstraint: (n: Element, e: string) => { sizeDelta: number; requested: number } | null }
+      }).CO.probeConstraint(el, 'right')
+    })
+    // 16 CSS px through a 2x scale is 32 rect px — and the element must have
+    // actually moved by that, not by 116-scaled nonsense.
+    expect(probe!.requested).toBeCloseTo(32, 0)
+    expect(probe!.sizeDelta).toBeCloseTo(32, 0)
+  })
+
+  test('a real but sub-pixel edge response is preserved, not rounded to pinned', async ({ page }) => {
+    // 40 items in a space-between row: the second-to-last child's right edge
+    // moves 16/39 ~ 0.41px for a 16px size change. That is a true response of
+    // ~0.026, and an absolute 0.5px floor called it zero — which makes
+    // pointerDeltaToSizeDelta refuse the drag outright.
+    const o = await own(page, 'manyChild', 'right')
+    expect(o.edgeResponse).toBeGreaterThan(0)
+    expect(o.edgeResponse).toBeLessThan(0.2)
+  })
+
+  test('an element on its max-width reports that it can still SHRINK', async ({ page }) => {
+    // Constraint response is directional. A growth-only probe is clamped to zero
+    // here and would call the edge pinned, so pointerDeltaToSizeDelta refuses an
+    // inward drag the user is entitled to make.
+    const o = await own(page, 'maxChild', 'right')
+    expect(o.target).toBe('element')
+    expect(o.edgeResponse).toBeGreaterThan(0)
+    expect(o.reason).toContain('shrink')
+  })
+
+  test('a grid sibling that RESIZES without moving still signals track ownership', async ({ page }) => {
+    // Two stretched items in different rows of one column keep their origins
+    // while the column widens. Comparing origins alone missed it and returned
+    // element ownership for a genuinely track-allocated item.
+    const o = await own(page, 'colChild', 'right')
+    expect(o.target).toBe('grid-track')
+  })
+
+  test('a probe that tips a flex line into wrapping reports UNKNOWN, not a number', async ({ page }) => {
+    // +16px pushes these two 145px items onto separate lines, and every
+    // measurement after that describes an arrangement the user is not dragging
+    // in — the edge can jump tens of pixels the wrong way. `probeConstraint`
+    // returns null and the caller falls back rather than inventing a ratio.
+    const probe = await page.evaluate(() => {
+      const el = document.getElementById('wrapChild')!
+      return (window as unknown as { CO: { probeConstraint: (n: Element, e: string) => unknown } })
+        .CO.probeConstraint(el, 'right')
+    })
+    expect(probe).toBeNull()
   })
 })
