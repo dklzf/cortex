@@ -2615,6 +2615,144 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     expect(sourceBanner.querySelector('.cortex-panel__scope-btn')).toBeNull()
   })
 
+  it('coerces scope to All when shared-SOURCE status appears after the user narrowed', async () => {
+    // COR-12 review (codex). The scope reset is pinned to [element] on purpose —
+    // ZF0-1292 established that an HMR bump must never silently flip a chosen
+    // 'All' back to 'instance' mid-edit. Source precedence opened a hole in that
+    // pinning: pick 'This element' for a shared CLASS, let HMR add a node with
+    // the same data-cortex-source while keeping the selected DOM node, and the
+    // detectors rerun while the reset does not. The toggle vanishes (source
+    // wins) and the banner reads "Editing all" while editScope is still
+    // 'instance' — so the emitted intent rewrites ONE call site.
+    const sharedCss = 'Row.module.css:.row'
+    const el1 = document.createElement('div')
+    el1.setAttribute('data-cortex-source', 'src/A.tsx:1:1')
+    el1.setAttribute('data-cortex-css', sharedCss)
+    document.body.appendChild(el1)
+    const el2 = document.createElement('div')
+    el2.setAttribute('data-cortex-source', 'src/B.tsx:2:2')
+    el2.setAttribute('data-cortex-css', sharedCss)
+    document.body.appendChild(el2)
+
+    const overrideManager = createStubOverrideManager()
+    const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
+    const mount = (hmrVersion: number) =>
+      render(
+        <Panel
+          selectedElements={[el1]}
+          overrideManager={overrideManager as any}
+          onClose={() => {}}
+          onSelectElement={() => {}}
+          buffer={makeFakeBuffer()}
+          {...panelPositionProps}
+          hmrAppliedVersion={hmrVersion}
+        />,
+        shadowRoot,
+      )
+    mount(0)
+    const extra: Element[] = []
+    cleanup = () => {
+      render(null, shadowRoot)
+      removeHost()
+      el1.remove(); el2.remove(); extra.forEach(e => e.remove())
+      void shadow
+    }
+
+    // Distinct sources + shared class ⇒ the toggle renders and 'This element' is
+    // a legitimate choice.
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('.cortex-panel__scope-toggle')).not.toBeNull()
+    }, { timeout: 500 })
+    const instanceBtn = shadowRoot.querySelector<HTMLButtonElement>('.cortex-panel__scope-btn:first-child')!
+    await act(async () => { instanceBtn.click(); await Promise.resolve() })
+    expect(instanceBtn.getAttribute('aria-checked')).toBe('true')
+
+    // HMR adds a sibling rendered from el1's OWN source. el1 itself is untouched,
+    // so the [element] reset does not fire — only the detectors rerun.
+    const twin = document.createElement('div')
+    twin.setAttribute('data-cortex-source', 'src/A.tsx:1:1')
+    document.body.appendChild(twin)
+    extra.push(twin)
+    await act(async () => { mount(1); await Promise.resolve() })
+
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('.cortex-panel__scope--source-only')).not.toBeNull()
+    }, { timeout: 500 })
+    // Per-instance is now impossible, so the toggle is gone...
+    expect(shadowRoot.querySelector('.cortex-panel__scope-toggle')).toBeNull()
+    expect(shadowRoot.querySelector('.cortex-panel__scope-label')!.textContent).toContain('Editing all')
+
+    // ...and the scope itself must have followed. The assertions above are NOT
+    // enough and I verified that: with the coercion deleted they all still pass,
+    // because removing the toggle is the precedence fix's doing, not the
+    // coercion's. editScope has no direct DOM representation once the toggle is
+    // gone — which is exactly why the bug could hide there.
+    //
+    // It does have one observable consequence. The shared CLASS is still
+    // detected, and `showPosition = !(sharedInfo && editScope === 'all')`, so
+    // the Position group is a readout of the scope: present means 'instance',
+    // absent means 'all'. Deleting the coercion makes this line fail.
+    expect(shadowRoot.querySelector('[data-group="position"]')).toBeNull()
+  })
+
+  it('the source banner carries the token-scope note when it reports a UNION', async () => {
+    // COR-12 review (codex). The union count is the STYLE blast radius — an edit
+    // at scope=all is satisfied by rewriting the shared CSS rule, so it reaches
+    // every class user. A token link takes applyClassChange, rewrites one
+    // className, and reaches fewer. Without the note here the union made THIS
+    // banner claim a radius no token op delivers — the same hole the class
+    // toggle already had, reopened one branch over.
+    const source = 'src/Row.tsx:7:3'
+    const sharedCss = 'Row.module.css:.row'
+    const fromMap = [0, 1].map(() => {
+      const el = document.createElement('div')
+      el.setAttribute('data-cortex-source', source)
+      el.setAttribute('data-cortex-css', sharedCss)
+      document.body.appendChild(el)
+      return el
+    })
+    const classOnly = ['src/Other.tsx:1:1'].map(src => {
+      const el = document.createElement('div')
+      el.setAttribute('data-cortex-source', src)
+      el.setAttribute('data-cortex-css', sharedCss)
+      document.body.appendChild(el)
+      return el
+    })
+
+    const overrideManager = createStubOverrideManager()
+    const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
+    render(
+      <Panel
+        selectedElements={[fromMap[0]!]}
+        overrideManager={overrideManager as any}
+        onClose={() => {}}
+        onSelectElement={() => {}}
+        buffer={makeFakeBuffer()}
+        {...panelPositionProps}
+      />,
+      shadowRoot,
+    )
+    cleanup = () => {
+      render(null, shadowRoot)
+      removeHost()
+      ;[...fromMap, ...classOnly].forEach(el => el.remove())
+      void shadow
+    }
+
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('.cortex-panel__scope--source-only')).not.toBeNull()
+    }, { timeout: 500 })
+
+    const banner = shadowRoot.querySelector('.cortex-panel__scope--source-only')!
+    // Precondition: this IS the union case (3 > 2), which is what triggers the note.
+    expect(banner.textContent).toContain('Editing all 3')
+    expect(banner.querySelector('.cortex-panel__scope-note')).not.toBeNull()
+    // And the label opts out of the ellipsis, or the explanation is cut off.
+    expect(
+      banner.querySelector('.cortex-panel__scope-label')!.classList.contains('cortex-panel__scope-label--wrap'),
+    ).toBe(true)
+  })
+
   it('the scope note renders for a NON-TEXT element too — the limit is the path, not the section', async () => {
     // COR-12 review (codex). The note first read "Typography links..." and was
     // gated on showTypography, which made the disclosure enumerate its call

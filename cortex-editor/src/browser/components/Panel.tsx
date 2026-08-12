@@ -618,6 +618,25 @@ export function Panel({
     setEditScope('all')
   }, [element])
 
+  // Coerce to 'all' whenever shared-SOURCE status becomes active, not just on
+  // element change (COR-12 review).
+  //
+  // The reset above is pinned to [element] on purpose — an HMR bump must never
+  // silently flip a user's chosen 'All' back to 'instance' mid-edit (ZF0-1292).
+  // But that pinning left a hole once source precedence landed: a user picks
+  // 'This element' for a shared CLASS, HMR then adds a node with the same
+  // data-cortex-source while keeping the selected DOM node, and the detectors
+  // rerun while this effect does not. The toggle disappears (source wins) and
+  // the banner reads "Editing all", yet editScope is still 'instance', so the
+  // emitted intent rewrites one call site and leaves the advertised set alone.
+  //
+  // Coercing is not the same regression ZF0-1292 guarded against: that was about
+  // narrowing a user's choice, this widens it to the only value the DOM can
+  // honour, and only when per-instance has become impossible.
+  useEffect(() => {
+    if (sharedSourceInfo) setEditScope('all')
+  }, [sharedSourceInfo])
+
   // Detect shared CSS classes when a new element is selected (ZF0-1018), and
   // re-run on hmrAppliedVersion bumps (ZF0-1292) because `sharedInfo.elements`
   // caches DOM refs — a stylesheet-only HMR edit can add or remove siblings
@@ -1846,7 +1865,12 @@ export function Panel({
           onMouseEnter={() => highlightSharedElements(sourceBlastRadius.info, element)}
           onMouseLeave={() => clearHighlights()}
         >
-          <span class="cortex-panel__scope-label">
+          {/* --wrap: this banner has no toggle competing for the row, and the
+              base label is nowrap/ellipsis — which silently truncated the union
+              copy right before the explanation that makes the larger number
+              make sense. Review caught the disclosure being cut off by the very
+              style meant to keep the label tidy. */}
+          <span class="cortex-panel__scope-label cortex-panel__scope-label--wrap">
             {sourceBlastRadius.info.count === sourceBlastRadius.sourceCount
               ? `Editing all ${sourceBlastRadius.info.count} — they share one source location`
               // The two groups change for DIFFERENT reasons, so collapsing them
@@ -1854,6 +1878,19 @@ export function Panel({
               // keeps the count honest and says why the extra elements are in it.
               : `Editing all ${sourceBlastRadius.info.count} — ${sourceBlastRadius.sourceCount} share one source location, the rest share its style rule`}
           </span>
+          {/* The count above is the STYLE blast radius: an edit at scope=all is
+              satisfied by rewriting the shared CSS rule, so it reaches every
+              class user. A token link takes applyClassChange, rewrites one
+              className, and reaches fewer — only the same-source instances even
+              see the same JSX position. Without this the union made the source
+              banner claim a radius no token op delivers, which is the same hole
+              the class-toggle branch already had. Same limitation, same
+              disclosure — it belongs to the path, not to one banner. */}
+          {sourceBlastRadius.info.count > sourceBlastRadius.sourceCount && (
+            <span class="cortex-panel__scope-note">
+              Token links (typography, background, border) apply to this element only
+            </span>
+          )}
         </div>
       )}
       <div class="cortex-panel__body" ref={bodyRef}>

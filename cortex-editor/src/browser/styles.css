@@ -567,6 +567,16 @@
   text-overflow: ellipsis;
 }
 
+/* Opt out of the nowrap/ellipsis above where the label carries an EXPLANATION
+   rather than a short count. In the source-only banner there is no toggle
+   sharing the row, so wrapping costs nothing — and truncating there cut the
+   clause that justifies the number, which is the part worth reading. */
+.cortex-panel__scope-label--wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .cortex-panel__scope-toggle {
   display: flex;
   border: 1px solid var(--cx-rule);
