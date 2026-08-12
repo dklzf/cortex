@@ -11,7 +11,7 @@
  * function signatures).
  */
 import { z } from 'zod'
-import { pendingEditSchema, intentIdSchema, MAX_FULL_SYNC_SIZE, classOpSchema } from './pending-edit.js'
+import { pendingEditSchema, intentIdSchema, MAX_FULL_SYNC_SIZE, classOpSchema, sourceResolutionHintSchema } from './pending-edit.js'
 
 // ---------------------------------------------------------------------------
 // Shared sub-schemas
@@ -59,6 +59,12 @@ const annotationSchema = z.object({
   id: z.string(),
   status: annotationStatusSchema,
   elementSource: z.string(),
+  /** COR-27 review. Zod STRIPS unrecognised keys, and webpack/Next serialize
+   *  `serverToBrowserSchema.parse(...)` output while Vite sends the original
+   *  object — so omitting this here silently dropped the hint on one adapter
+   *  and kept it on the other. A missing field in an outbound schema is not a
+   *  no-op; it is a deletion that only some code paths perform. */
+  sourceResolutionHint: sourceResolutionHintSchema.optional(),
   text: z.string(),
   elementContext: elementContextSchema.optional(),
   currentStyles: z.record(z.string(), z.string()).optional(),
@@ -151,6 +157,11 @@ export const browserToServerSchema = z.discriminatedUnion('type', [
     token: z.string().optional(),
     protocolVersion: z.number().optional(),
     elementSource: z.string(),
+    /** COR-27: present when the comment targets an element with no
+     *  `data-cortex-source`, so `elementSource` is a page-session preview id.
+     *  Optional, so an older browser bundle keeps working — but a preview source
+     *  WITHOUT it leaves the agent unable to locate what the user commented on. */
+    sourceResolutionHint: sourceResolutionHintSchema.optional(),
     text: z.string(),
     elementContext: elementContextSchema.optional(),
     currentStyles: z.record(z.string(), z.string()).optional(),

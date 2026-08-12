@@ -120,6 +120,7 @@ export class AnnotationStore {
       id: randomUUID(),
       status: 'pending',
       elementSource: cloned.elementSource,
+      sourceResolutionHint: cloned.sourceResolutionHint,
       text: cloned.text,
       elementContext: cloned.elementContext,
       currentStyles: cloned.currentStyles,

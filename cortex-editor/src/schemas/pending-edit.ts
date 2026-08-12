@@ -72,7 +72,11 @@ const requiredSourceHintField = (fieldName: string) =>
     { message: `${fieldName} exceeds ${MAX_SOURCE_HINT_FIELD_BYTES} UTF-8 bytes` },
   )
 
-const sourceResolutionHintSchema = z.object({
+/** Exported so the `comment` wire message reuses this EXACT shape rather than
+ *  redeclaring it. COR-27 gave comments a hint too; two independent declarations
+ *  of one page-derived payload would drift on the byte caps, and the caps are
+ *  what stop an oversized hint being rejected wholesale by the server. */
+export const sourceResolutionHintSchema = z.object({
   tagName: requiredSourceHintField('tagName'),
   className: sourceHintField('className').optional(),
   id: sourceHintField('id').optional(),

@@ -3,9 +3,77 @@ import { useState, useEffect, useCallback } from 'preact/hooks'
 import type { Annotation, CortexChannel } from '../../adapters/types.js'
 import { CommentThread } from './CommentThread.js'
 import { PANEL_WIDTH } from '../hooks/useSnapToEdge.js'
+import {
+  getElementEditTarget,
+  selectorForEditSource,
+  isPreviewSource,
+  PREVIEW_SOURCE_ATTR,
+  PREVIEW_SOURCE_PREFIX,
+  type SourceResolutionHint,
+} from '../preview-source.js'
 
-function sourceSelector(source: string): string {
-  return `[data-cortex-source="${CSS.escape(source)}"]`
+// COR-27: resolves BOTH source formats. It previously matched only
+// `data-cortex-source`, which is why a preview-sourced pin could not be located
+// at all — the reason comments were retargeted to an annotated ancestor rather
+// than refused. `selectorForEditSource` is the shared seam style edits already
+// use, so the two paths cannot drift on how a source is turned back into a node.
+const sourceSelector = selectorForEditSource
+
+/**
+ * Find the element an annotation refers to, surviving a page reload.
+ *
+ * A `cortex-preview:` source is a page-session id that lives ONLY as an
+ * attribute on the node that was clicked. After a reload the server rehydrates
+ * the annotation through `annotations-snapshot`, but the freshly-rendered
+ * element never receives the old id — so the selector matched nothing and the
+ * pin silently disappeared while the annotation was still active. Raised in
+ * review; a comment that vanishes is worse than one that is merely misplaced,
+ * because the user has no way to tell it still exists.
+ *
+ * The `sourceResolutionHint` already travels with the annotation for the
+ * agent's benefit, and its `domSelector` is exactly the locator needed here.
+ * Re-stamping the preview id on the match makes the recovery stick for the rest
+ * of the session, so this runs once per annotation rather than on every scroll
+ * frame.
+ *
+ * Deliberately no fallback for a `file:line:col` source: those survive reloads
+ * on their own, and inventing a second lookup for them would add a way to
+ * resolve the WRONG element to a path that currently cannot.
+ */
+function locateAnnotated(ann: Annotation): Element | null {
+  const direct = document.querySelector(sourceSelector(ann.elementSource))
+  if (direct) return direct
+
+  const selector = ann.sourceResolutionHint?.domSelector
+  if (!selector || !isPreviewSource(ann.elementSource)) return null
+  let matches: Element[] = []
+  try {
+    // Page-derived, so it can be malformed — querySelector THROWS on an invalid
+    // selector, which would take down every other pin on the page with it.
+    //
+    // querySelectorALL, not querySelector: `domSelector` is built from a tag and
+    // a first class, so several `button.btn` rows share one. Taking the first
+    // match meant every annotation on those rows recovered to the SAME element
+    // and each stamped its own preview id over the last — pins collapsing onto
+    // one node, and the DOM left carrying ids that name the wrong element for
+    // the rest of the session. Raised in review.
+    matches = Array.from(document.querySelectorAll(selector))
+  } catch {
+    return null
+  }
+  // Ambiguous means UNKNOWN. Recovering to an arbitrary one of N would place the
+  // comment on an element the user never picked, and be indistinguishable from a
+  // correct recovery — worse than the pin staying hidden, which at least does not
+  // assert anything false. `domSelector` carries no ordinal, so there is nothing
+  // here to disambiguate WITH.
+  const recovered = matches.length === 1 ? matches[0]! : null
+  if (recovered) {
+    recovered.setAttribute(
+      PREVIEW_SOURCE_ATTR,
+      ann.elementSource.slice(PREVIEW_SOURCE_PREFIX.length),
+    )
+  }
+  return recovered
 }
 
 export interface CommentPinProps {
@@ -17,7 +85,15 @@ export interface CommentPinProps {
 
 export function CommentPin({ annotations, commentMode, channel, onReply }: CommentPinProps): JSX.Element {
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null)
-  const [pinTarget, setPinTarget] = useState<{ clickX: number; clickY: number; elementSource: string } | null>(null)
+  const [pinTarget, setPinTarget] = useState<{
+    clickX: number
+    clickY: number
+    elementSource: string
+    /** Present when the clicked element carries no `data-cortex-source`, so the
+     *  source is a preview id that means nothing outside this page session.
+     *  Without it the agent receives a comment about an element it cannot find. */
+    sourceResolutionHint?: SourceResolutionHint
+  } | null>(null)
   const [pinInputPos, setPinInputPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
   const [pinText, setPinText] = useState('')
   const [positions, setPositions] = useState<Map<string, { x: number; y: number }>>(new Map())
@@ -33,7 +109,7 @@ export function CommentPin({ annotations, commentMode, channel, onReply }: Comme
       const newPositions = new Map<string, { x: number; y: number }>()
       for (const ann of annotations) {
         if (!ann.pinPosition) continue
-        const el = document.querySelector(sourceSelector(ann.elementSource))
+        const el = locateAnnotated(ann)
         if (!el) continue
         const rect = el.getBoundingClientRect()
         if (rect.width === 0 || rect.height === 0) continue
@@ -111,15 +187,38 @@ export function CommentPin({ annotations, commentMode, channel, onReply }: Comme
     function handleClick(e: MouseEvent): void {
       const target = e.target as HTMLElement
       if (!target || target.closest('[data-cortex-host]')) return
-      const source = target.getAttribute('data-cortex-source') || target.closest('[data-cortex-source]')?.getAttribute('data-cortex-source')
-      if (!source) return
-      const el = document.querySelector(sourceSelector(source))
-      if (!el) return
-      const rect = el.getBoundingClientRect()
+
+      // COR-27: the CLICKED element, never `closest('[data-cortex-source]')`.
+      //
+      // The old lookup walked up to the nearest annotated ancestor and recorded
+      // THAT, with nothing telling the user their target had been substituted.
+      // On a component-library app the majority of pointable nodes are
+      // unannotated (67.8% aggregate on zerofog-web, because source-transform
+      // skips node_modules by design), so substitution was the common case — and
+      // the gesture whose entire purpose is describing one specific element is
+      // the one most damaged by silently pointing somewhere else.
+      //
+      // Worse than the wrong source: the pin was POSITIONED from the ancestor's
+      // rect too, and `querySelector` returns the FIRST element with that source,
+      // which for a `.map()`-rendered ancestor need not even contain the click.
+      // A comment on a button could render over a different row entirely.
+      //
+      // `getElementEditTarget` is the seam style edits already use: annotated
+      // elements resolve directly, unannotated ones get a preview id stamped and
+      // a DOM hint built so the agent can locate the real call site.
+      const editTarget = getElementEditTarget(target)
+      const rect = target.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) return
       e.preventDefault()
       e.stopPropagation()
-      setPinTarget({ clickX: e.clientX, clickY: e.clientY, elementSource: source })
+      setPinTarget({
+        clickX: e.clientX,
+        clickY: e.clientY,
+        elementSource: editTarget.source,
+        ...(editTarget.applyMode === 'agent-resolve'
+          ? { sourceResolutionHint: editTarget.sourceResolutionHint }
+          : {}),
+      })
     }
 
     window.addEventListener('click', handleClick, true)
@@ -138,6 +237,11 @@ export function CommentPin({ annotations, commentMode, channel, onReply }: Comme
     channel.send({
       type: 'comment',
       elementSource: pinTarget.elementSource,
+      // Travels with the comment or the agent cannot act on it: a preview source
+      // is a page-session id, meaningless once the page reloads.
+      ...(pinTarget.sourceResolutionHint
+        ? { sourceResolutionHint: pinTarget.sourceResolutionHint }
+        : {}),
       text: pinText.trim(),
       pinPosition: {
         x: (pinTarget.clickX - rect.left) / rect.width,
