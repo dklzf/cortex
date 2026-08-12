@@ -14,20 +14,23 @@
  * user. Counting "has the attribute" would report ~100% on exactly the apps
  * where identity is hardest.
  *
+ * Coverage alone cannot say the anchors are RIGHT (COR-29). Adding a constant to
+ * every line number is one-to-one, so the 19-line offset that made 100% of Vite
+ * anchors false in COR-28 left every figure in this report untouched. Pass
+ * `--verify-root <app-dir>` to additionally resolve each anchor against its
+ * source file and report how many point at the element they claim.
+ *
  * Usage:
  *   node scripts/anchor-coverage.mjs --base http://localhost:3000 --routes / /about
  *   node scripts/anchor-coverage.mjs --base http://localhost:3000 --routes-file routes.txt
- *
- * With --verify-root <project dir> it also reports CORRECTNESS (COR-29): whether
- * each anchor's recorded position resolves to the element it claims. Uniqueness
- * cannot answer that — adding a constant to every line number is a one-to-one
- * mapping, so COR-28's 19-line offset left every label exactly as unique as
- * before while pointing all of them at the wrong element.
+ *   node scripts/anchor-coverage.mjs --base http://localhost:5173 --verify-root ../dev-app
  *
  * Output: per-route and aggregate buckets, plus a shared-source histogram, and
  * a second table restricted to the REORDERABLE-SIBLING population (nodes with
  * >= 2 element siblings inside a flex/grid layout parent) — the only nodes a
  * drag-reorder gesture can target, and a strictly harder case for identity.
+ * With --verify-root, a third table reports anchor CORRECTNESS over the same
+ * pointable population the coverage table uses.
  * Exits non-zero only on harness failure, never on a bad score — this measures,
  * it does not gate.
  */
@@ -41,7 +44,7 @@ function parseArgs(argv) {
     const a = argv[i]
     if (a === '--base') out.base = argv[++i]
     else if (a === '--settle') out.settleMs = Number(argv[++i])
-    else if (a === '--verify-root') out.verifyRoot = argv[++i]
+    else if (a === '--verify-root') out.verifyRoot = path.resolve(argv[++i])
     else if (a === '--routes-file') {
       out.routes.push(...fs.readFileSync(argv[++i], 'utf8').split('\n').map(s => s.trim()).filter(Boolean))
     } else if (a === '--routes') {
@@ -51,6 +54,57 @@ function parseArgs(argv) {
   if (!out.base) throw new Error('--base is required (e.g. --base http://localhost:3000)')
   if (out.routes.length === 0) out.routes.push('/')
   return out
+}
+
+/**
+ * Load the anchor verifier without shipping it.
+ *
+ * `src/core/anchor-verify.ts` is a MEASUREMENT utility, not product API. Adding
+ * it to `src/index.ts` would put it on the package's public export surface —
+ * which RELEASING.md treats as a breakable, semver-governed contract — to serve
+ * one dev script. Bundling it on demand here keeps it out of both `exports` and
+ * the published tarball (`files: ["dist"]`) while the vitest suite still imports
+ * the TypeScript source directly.
+ *
+ * ts-morph stays external so the on-the-fly bundle resolves the same copy the
+ * rest of the toolchain uses, and so this stays fast.
+ */
+async function loadVerifier() {
+  const esbuild = await import('esbuild')
+  // Emit INSIDE the package, not os.tmpdir(). Node resolves a bare specifier by
+  // walking node_modules up from the importing FILE's directory, so an
+  // out-of-tree bundle has no path back to `ts-morph` and fails at import time.
+  // node_modules/.cache is on the resolution path and already ignored by git.
+  const outfile = new URL('../node_modules/.cache/cortex/anchor-verify.mjs', import.meta.url).pathname
+  fs.mkdirSync(path.dirname(outfile), { recursive: true })
+  await esbuild.build({
+    entryPoints: [new URL('../src/core/anchor-verify.ts', import.meta.url).pathname],
+    outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node20',
+    external: ['ts-morph'],
+    logLevel: 'silent',
+  })
+  return import(outfile)
+}
+
+/** Read a file named by an anchor, resolving relative paths against the app root. */
+function makeReader(verifyRoot) {
+  const cache = new Map()
+  return (filePath) => {
+    if (cache.has(filePath)) return cache.get(filePath)
+    const abs = path.isAbsolute(filePath) ? filePath : path.join(verifyRoot, filePath)
+    let text = null
+    try {
+      text = fs.readFileSync(abs, 'utf8')
+    } catch {
+      text = null   // unreadable ⇒ `unresolvable`, never counted as wrong
+    }
+    cache.set(filePath, text)
+    return text
+  }
 }
 
 /**
@@ -76,11 +130,6 @@ const PROBE = () => {
   const buckets = { unique: 0, shared: 0, unannotated: 0 }
   const sharedSizes = []
   const unannotatedSample = []
-  // COR-29: every (source, localName) pair, for CORRECTNESS verification back in
-  // Node. localName, not tagName — it lower-cases HTML while preserving SVG
-  // casing, and an SVG anchor compared against an upper-cased tagName would read
-  // as a mismatch that is really a casing artifact.
-  const anchorSamples = []
 
   for (const el of document.querySelectorAll('*')) {
     const tag = el.tagName.toLowerCase()
@@ -104,7 +153,6 @@ const PROBE = () => {
     const n = sourceCounts.get(src) ?? 1
     if (n === 1) buckets.unique++
     else { buckets.shared++; sharedSizes.push(n) }
-    anchorSamples.push({ source: src, domTag: el.localName })
   }
 
   // ── Second, stricter population: what a designer can actually POINT AT. ──
@@ -114,6 +162,13 @@ const PROBE = () => {
   // is the population a drag gesture actually draws from.
   const hit = { unique: 0, shared: 0, unannotated: 0 }
   const seen = new Set()
+  // Correctness samples, drawn from the pointable population below. Capped so a
+  // huge page cannot blow up the serialized probe result; `anchorSamplesDropped`
+  // is returned and PRINTED rather than swallowed, because a silent cap reads as
+  // "we verified everything" when we did not.
+  const anchorSamples = []
+  const SAMPLE_CAP = 3000
+  let anchorSamplesDropped = 0
   const STEP = 24
   const maxY = Math.max(document.documentElement.scrollHeight, window.innerHeight)
   for (let y = 0; y < maxY; y += STEP) {
@@ -131,6 +186,20 @@ const PROBE = () => {
       const s = el.getAttribute('data-cortex-source')
       if (!s) { hit.unannotated++; continue }
       ;(sourceCounts.get(s) ?? 1) === 1 ? hit.unique++ : hit.shared++
+      // Sample from THIS population, not the all-elements walk. COVERAGE and
+      // UNIQUE are computed over elementFromPoint hits, so verifying a different
+      // (much larger) set would let correctness failures among real pointable
+      // targets be diluted by non-pointable wrapper divs.
+      if (anchorSamples.length < SAMPLE_CAP) {
+        anchorSamples.push({
+          source: s,
+          // localName, NOT tagName: tagName upper-cases HTML but preserves case
+          // for SVG (`linearGradient`), so it does not compare cleanly with the
+          // JSX tag text on the source side.
+          domTag: el.localName,
+          ...(el.getAttribute('class') ? { domClass: el.getAttribute('class') } : {}),
+        })
+      } else anchorSamplesDropped++
     }
   }
   window.scrollTo(0, 0)
@@ -224,7 +293,6 @@ const PROBE = () => {
 
   return {
     buckets,
-    anchorSamples,
     hit,
     hitTotal: hit.unique + hit.shared + hit.unannotated,
     total: buckets.unique + buckets.shared + buckets.unannotated,
@@ -239,6 +307,8 @@ const PROBE = () => {
     reorderPairsTotal: reorderPairs.unique + reorderPairs.shared + reorderPairs.unannotated,
     reorderSharedSizes,
     reorderUnannotatedSample,
+    anchorSamples,
+    anchorSamplesDropped,
     cortexPresent: !!document.querySelector('[data-cortex-source]'),
   }
 }
@@ -255,7 +325,6 @@ async function main() {
   const aggRP = { unique: 0, shared: 0, unannotated: 0, total: 0 }
   const aggRPairs = { unique: 0, shared: 0, unannotated: 0, total: 0 }
   const allShared = []
-  const allAnchorSamples = []
   const allReorderShared = []
   const rows = []
 
@@ -286,11 +355,25 @@ async function main() {
     aggRP.total += r.reorderPointableTotal
     aggRPairs.total += r.reorderPairsTotal
     allShared.push(...r.sharedGroupSizes)
-    allAnchorSamples.push(...(r.anchorSamples ?? []))
     allReorderShared.push(...r.reorderSharedSizes)
     rows.push({ route, ...r })
   }
   await browser.close()
+
+  // ── Correctness pass (opt-in via --verify-root) ──────────────────────────
+  // Runs against the SAME pointable population the coverage table reports, so
+  // the two numbers describe one set of anchors rather than two.
+  let verify = null
+  if (verifyRoot) {
+    const samples = rows.filter(r => !r.error).flatMap(r => r.anchorSamples ?? [])
+    const dropped = rows.filter(r => !r.error).reduce((n, r) => n + (r.anchorSamplesDropped ?? 0), 0)
+    try {
+      const { summarizeAnchors } = await loadVerifier()
+      verify = { ...(await summarizeAnchors(samples, makeReader(verifyRoot))), dropped }
+    } catch (err) {
+      verify = { error: err.message.split('\n')[0] }
+    }
+  }
 
   console.log('\nM0-zero/1 — unique-anchor coverage')
   console.log('Population = elements reachable by elementFromPoint (what a cursor can actually grab),')
@@ -364,54 +447,44 @@ async function main() {
     if (rSample) console.log(`  unannotated sample: ${rSample.slice(0, 8).join(', ')}`)
     console.log('  ∩ pointable = reorderable nodes elementFromPoint also returned (the strict intersection).')
     console.log('  >=1 sibling  = same filter with the threshold relaxed to a 2-item row, as a sensitivity check.')
+
+    // ── ANCHOR CORRECTNESS ───────────────────────────────────────────────────
+    console.log('\n' + '='.repeat(78))
+    console.log('ANCHOR CORRECTNESS — does each anchor point at the element it claims?')
+    console.log('='.repeat(78))
+    if (!verify) {
+      console.log('  not measured. Pass --verify-root <app-dir> to resolve anchors against source.')
+      console.log('  Coverage above says anchors EXIST and are unique. It cannot say they are RIGHT:')
+      console.log('  adding a constant to every line number is one-to-one, so a uniform offset leaves')
+      console.log('  every uniqueness figure untouched while every anchor points elsewhere (COR-28).')
+    } else if (verify.error) {
+      console.log(`  verification failed: ${verify.error}`)
+    } else {
+      const t = verify.total
+      console.log('  VERIFIED      ' + String(verify.verified).padStart(6) + pct(verify.verified, t).padStart(9) +
+        '   resolved, tag agrees, and a class discriminator confirms it')
+      console.log('  tag-only      ' + String(verify.tagOnly).padStart(6) + pct(verify.tagOnly, t).padStart(9) +
+        '   tag agrees but nothing discriminates — NOT contradicted, NOT confirmed')
+      console.log('  SILENTLY-WRONG' + String(verify.silentlyWrong).padStart(6) + pct(verify.silentlyWrong, t).padStart(9) +
+        '   points at a different element, or at no JSX at all')
+      console.log('  unresolvable  ' + String(verify.unresolvable).padStart(6) + pct(verify.unresolvable, t).padStart(9) +
+        '   file unreadable, or the anchor names a component — a refusal, not a lie')
+      if (verify.dropped > 0) {
+        console.log(`\n  NOTE: ${verify.dropped} pointable anchors exceeded the per-page sample cap and were NOT verified.`)
+      }
+      if (verify.mismatches.length) {
+        console.log('\n  mismatches (first 10):')
+        for (const m of verify.mismatches.slice(0, 10)) {
+          console.log(`    ${m.source}  DOM <${m.domTag}> vs source <${m.sourceTag}>  — ${m.why}`)
+        }
+      }
+      console.log('\n  SILENTLY-WRONG is the number that matters. Uniqueness cannot see it: a uniform')
+      console.log('  line offset is one-to-one, so it leaves every coverage figure unchanged while')
+      console.log('  making every anchor false. tag-only is reported separately and never folded into')
+      console.log('  VERIFIED — "consistent with" is not "is".')
+    }
   } else {
     console.log('\nNo pages measured. Every route errored — see above.')
-  }
-
-  // ── COR-29: CORRECTNESS, which uniqueness cannot see ──────────────────────
-  //
-  // Adding a constant to every line number is a one-to-one mapping, so every
-  // label stays exactly as unique as it was. COR-28's 19-line offset — where
-  // 100% of Vite anchors pointed at the wrong element — would have scored
-  // identically above. These four numbers are kept SEPARATE on purpose: one
-  // blended "accuracy" figure scores a tool that refuses 40% of the time and is
-  // never wrong the same as one that answers always and is wrong 10% of the
-  // time, and those are not the same tool.
-  if (verifyRoot && allAnchorSamples.length) {
-    let summarize
-    try {
-      ;({ summarizeAnchors: summarize } = await import('../dist/index.js'))
-    } catch {
-      console.log('\nCORRECTNESS: skipped — run `npm run build` first (the verifier ships from dist).')
-      console.log('')
-      return
-    }
-    const fileCache = new Map()
-    const readFile = (rel) => {
-      if (fileCache.has(rel)) return fileCache.get(rel)
-      let text = null
-      try { text = fs.readFileSync(path.resolve(verifyRoot, rel), 'utf8') } catch { text = null }
-      fileCache.set(rel, text)
-      return text
-    }
-    const sum = summarize(allAnchorSamples, readFile)
-    console.log('\nCORRECTNESS — does each anchor resolve to the element it claims?')
-    console.log(`corpus: ${verifyRoot}  (always name the corpus — the same harness scored dev-app 91.7% and real routes 7.0%)`)
-    console.log('='.repeat(78))
-    console.log(`  COVERAGE        ${pct(agg.unique + agg.shared, agg.total)}  of pointable elements carry a label`)
-    console.log(`  VERIFIED        ${pct(sum.verified, sum.total)}  position resolves to a matching tag`)
-    console.log(`  UNIQUE          ${pct(agg.unique, agg.total)}  identifies exactly one element (NOT a correctness claim)`)
-    console.log(`  SILENTLY-WRONG  ${pct(sum.silentlyWrong, sum.total)}  resolves to a DIFFERENT element — must be 0`)
-    console.log(`  (unresolvable   ${pct(sum.unresolvable, sum.total)}  refused, not wrong: component anchors, unreadable files)`)
-    if (sum.mismatches.length) {
-      console.log('\n  mismatches (first 10) — named, because a bare count is not actionable:')
-      for (const m of sum.mismatches.slice(0, 10)) {
-        console.log(`    ${m.source}  DOM <${m.domTag}>  but source has <${m.sourceTag}>`)
-      }
-    }
-  } else if (!verifyRoot) {
-    console.log('\nCORRECTNESS: not measured. Pass --verify-root <project dir> to check whether')
-    console.log('anchors point at the elements they claim. Uniqueness above CANNOT answer that.')
   }
   console.log('')
 }
