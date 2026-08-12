@@ -14,6 +14,7 @@
 import type { JSX } from 'preact'
 import { useCallback } from 'preact/hooks'
 import { isDimmed } from './types.js'
+import { makeSizingDimension, type SizingDimension } from '../../sizing-value.js'
 import type { SectionChange } from './types.js'
 import { SegmentedControl } from '../controls/SegmentedControl.js'
 import { FlexControls } from './FlexControls.js'
@@ -38,14 +39,13 @@ export interface LayoutValues {
   gridTemplateRows: string
   gridAutoFlow: string
   justifyItems: string
-  width: string
-  height: string
-  /** Used (rendered) pixel size, from getComputedStyle. `width`/`height` carry
-   *  the AUTHORED value and so may be `100%` / `fit-content` / `auto`, which
-   *  are not measurements. Optional: callers that only have computed styles
-   *  (tests, the empty-selection snapshot) may omit it. */
-  widthUsed?: string
-  heightUsed?: string
+  /** COR-6: ONE field per axis, not an authored string plus an independently
+   *  optional used string. The two could previously be set apart, and a
+   *  producer that set a non-fixed `width` without `widthUsed` made the panel
+   *  render "0" — then "switch to Fixed" wrote `width: 0px` and collapsed the
+   *  element. See SizingDimension for the full reasoning. */
+  width: SizingDimension
+  height: SizingDimension
   minWidth: string
   maxWidth: string
   minHeight: string
@@ -111,8 +111,11 @@ export function parseLayoutValues(cs: CSSStyleDeclaration): LayoutValues {
     gridTemplateRows: cs.gridTemplateRows || 'none',
     gridAutoFlow: cs.gridAutoFlow || 'row',
     justifyItems: cs.justifyItems || 'stretch',
-    width: cs.width ?? 'auto',
-    height: cs.height ?? 'auto',
+    // `cs.width` is the USED value here — parseLayoutValues only ever sees
+    // computed styles. The authored value is installed by the snapshot
+    // producer, which is the only caller with access to Typed OM.
+    width: makeSizingDimension(cs.width ?? 'auto', cs.width),
+    height: makeSizingDimension(cs.height ?? 'auto', cs.height),
     minWidth: cs.minWidth ?? '0px',
     maxWidth: cs.maxWidth ?? 'none',
     minHeight: cs.minHeight ?? '0px',
@@ -268,8 +271,6 @@ export function LayoutSection({
             values={{
               width: values.width,
               height: values.height,
-              widthUsed: values.widthUsed,
-              heightUsed: values.heightUsed,
               minWidth: values.minWidth,
               maxWidth: values.maxWidth,
               minHeight: values.minHeight,

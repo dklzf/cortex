@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { readComputedSize, classifySizingValue, isSizeInert } from '../../src/browser/sizing-value.js'
+import { readComputedSize, classifySizingValue, isSizeInert, makeSizingDimension } from '../../src/browser/sizing-value.js'
 
 /**
  * B5 — the Panel could not read a sizing mode.
@@ -215,5 +215,39 @@ describe('isSizeInert — width/height that cannot be set at all', () => {
     ;(globalThis as Record<string, unknown>).getComputedStyle = () => { throw new TypeError('detached') }
     expect(() => isSizeInert(node)).not.toThrow()
     expect(isSizeInert(node)).toBe(false)
+  })
+})
+
+describe('makeSizingDimension — the pairing cannot be half-set (COR-6)', () => {
+  it('classifies the AUTHORED value and measures the USED one, from a single call', () => {
+    // The whole point: authored and used enter together. `100%` decides the
+    // MODE and is not a measurement; `1264px` is the measurement and says
+    // nothing about the mode. Two fields let a producer supply one without the
+    // other; one constructor does not.
+    const d = makeSizingDimension('100%', '1264px')
+    expect(d).toEqual({ mode: 'fill', authored: '100%', usedPx: 1264 })
+  })
+
+  it('reports an unmeasured axis as null, NOT as zero', () => {
+    // The trap this ticket exists to close. With two loose strings, a missing
+    // `widthUsed` rendered "0" — indistinguishable from an empty selection —
+    // and clicking Fixed then wrote `width: 0px` and collapsed the element.
+    // `null` is a distinct state a consumer must handle deliberately.
+    expect(makeSizingDimension('fit-content', undefined).usedPx).toBeNull()
+  })
+
+  it('reports a genuinely zero size as 0, not null', () => {
+    // The other half of the same distinction, and the reason `usedPx` is not
+    // just `number` with 0 as the sentinel: a collapsed box and an unmeasured
+    // box are different facts, and only one of them is safe to seed into a
+    // "switch to Fixed" write.
+    expect(makeSizingDimension('0px', '0px').usedPx).toBe(0)
+  })
+
+  it('rejects a non-length used value instead of storing NaN', () => {
+    // `auto` is what getComputedStyle reports for height on some inline boxes.
+    // parseFloat gives NaN, which every downstream `isNaN` check then had to
+    // re-discover — the dance this type removes.
+    expect(makeSizingDimension('auto', 'auto').usedPx).toBeNull()
   })
 })

@@ -1,3 +1,4 @@
+import { makeSizingDimension } from '../../../src/browser/sizing-value.js'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render } from 'preact'
 import { LayoutSection, parseLayoutValues, inlineDisplayApplies } from '../../../src/browser/components/sections/LayoutSection.js'
@@ -34,8 +35,12 @@ describe('LayoutSection', () => {
     justifyItems: 'stretch',
     // Units matter: getComputedStyle().width always returns one, so a bare
     // `320` cannot reach this component. See SizingControls.test.tsx.
-    width: '320px',
-    height: '48px',
+    // COR-6: one structured value per axis. Constructed through the real
+    // helper rather than hand-built, so a test fixture cannot express a
+    // shape the producer never emits — which is how the authored/used pair
+    // drifted apart in the first place.
+    width: makeSizingDimension('320px', '320px'),
+    height: makeSizingDimension('48px', '48px'),
     minWidth: '0px',
     maxWidth: 'none',
     minHeight: '0px',
@@ -177,7 +182,7 @@ describe('LayoutSection', () => {
   // mode SizingControls derives — this is the pass-through half of the same
   // contract asserted in SizingControls.test.tsx.
   it('passes auto width through to SizingControls, which reports it as auto', () => {
-    setup({ values: { ...DEFAULT_VALUES, width: 'auto' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('auto', 'auto') } })
     expect(container.querySelector('[data-testid="sizing-controls"]')).not.toBeNull()
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
     expect(modeLabels[0]?.textContent).toBe('auto')

@@ -199,6 +199,57 @@ export function readComputedSize(
  * `custom` matters as much as the rest: without it, `50%` classifies as fixed
  * and the panel renders "50 px" for an element that is half its parent's width.
  */
+/**
+ * One axis of sizing, as ONE value (COR-6).
+ *
+ * `LayoutValues` used to carry two independently-optional strings per axis:
+ * `width` (what the developer wrote — `100%`, `fit-content`, `320px`) and
+ * `widthUsed` (how wide the box actually is — `1264px`). Nothing forced them to
+ * be filled in together.
+ *
+ * That was a trap with no type-level protection. A future producer setting a
+ * non-fixed `width` and forgetting `widthUsed` makes the panel render "0",
+ * indistinguishable from an empty selection — and clicking "Fixed" then writes
+ * `width: 0px` and collapses the element. That is precisely the bug B5 was
+ * written to fix, reachable through a second door.
+ *
+ * Three things this shape buys:
+ *   - the pairing is enforced by there being ONE field, not two that must agree
+ *   - `usedPx` is a number, which kills the `parseFloat(… ?? '')` NaN dance at
+ *     every call site
+ *   - `mode` is classified ONCE by the producer instead of re-derived on every
+ *     render by each consumer
+ */
+export interface SizingDimension {
+  /** What `classifySizingValue` decided about `authored`. */
+  mode: SizingMode
+  /** The value as WRITTEN. May be `100%`, `fit-content`, `auto` — none of which
+   *  are measurements, which is exactly why `usedPx` exists separately. */
+  authored: string
+  /** The rendered size in CSS pixels, or null when genuinely unmeasured (an
+   *  empty selection, a test that supplies no computed styles). Null is a real
+   *  state and must not be conflated with zero — a box of width 0 and a box
+   *  nobody measured are different facts. */
+  usedPx: number | null
+}
+
+/**
+ * Build a `SizingDimension` from the two strings a producer has.
+ *
+ * The single constructor is the point: it is the only place the authored value
+ * and the used value are brought together, so they cannot be set apart. A
+ * `used` string that is not a length (`auto` on a display:inline element)
+ * yields `usedPx: null` rather than NaN.
+ */
+export function makeSizingDimension(authored: string, used: string | undefined): SizingDimension {
+  const usedNum = used === undefined ? Number.NaN : Number.parseFloat(used)
+  return {
+    mode: classifySizingValue(authored),
+    authored,
+    usedPx: Number.isFinite(usedNum) ? usedNum : null,
+  }
+}
+
 export function classifySizingValue(value: string): SizingMode {
   const v = value.trim().toLowerCase()
 

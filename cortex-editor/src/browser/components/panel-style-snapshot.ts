@@ -17,6 +17,7 @@
 import type { InteractionState } from '../state-detector.js'
 import type { SharedClassInfo } from '../shared-class-detector.js'
 import { parseLayoutValues } from './sections/LayoutSection.js'
+import { makeSizingDimension } from '../sizing-value.js'
 import { parseTypographyValues } from './sections/TypographySection.js'
 import { parseFillValues } from './sections/fill-utils.js'
 import { parseBorderValues } from './sections/BorderSection.js'
@@ -133,12 +134,14 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   // because a data dependency that exists only as statement order is one
   // "consolidate these four similar assignments" refactor away from silently
   // corrupting every non-fixed element. Raised in architecture review.
-  const usedWidth = layout.width
-  const usedHeight = layout.height
-  layout.width = readComputedSize(element, 'width', pseudo)
-  layout.height = readComputedSize(element, 'height', pseudo)
-  layout.widthUsed = usedWidth
-  layout.heightUsed = usedHeight
+  // COR-6: one constructor call per axis, so the authored value and the used
+  // value cannot be set apart. The old shape needed the two locals below to be
+  // bound BEFORE the authored values overwrote layout.width/height — a data
+  // dependency that existed only as statement order, and one "consolidate these
+  // similar assignments" refactor away from silently corrupting every non-fixed
+  // element. Passing both into one call removes the ordering hazard entirely.
+  layout.width = makeSizingDimension(readComputedSize(element, 'width', pseudo), layout.width.authored)
+  layout.height = makeSizingDimension(readComputedSize(element, 'height', pseudo), layout.height.authored)
   // Cortex's own staged override still wins: it is the value the user just
   // asked for and has not yet been applied to source, so it is more current
   // than anything the cascade can report. This special case predates the Typed
@@ -146,8 +149,11 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   // ONLY way any keyword mode ever reached the panel.
   const widthOverride = overrideManager.get(source, 'width', pseudo)
   const heightOverride = overrideManager.get(source, 'height', pseudo)
-  if (widthOverride !== undefined) layout.width = widthOverride
-  if (heightOverride !== undefined) layout.height = heightOverride
+  // An override replaces the AUTHORED value only; the measurement is still the
+  // real box, which has not moved yet — the override is what the user just
+  // asked for and source has not caught up with.
+  if (widthOverride !== undefined) layout.width = makeSizingDimension(widthOverride, layout.width.usedPx?.toString())
+  if (heightOverride !== undefined) layout.height = makeSizingDimension(heightOverride, layout.height.usedPx?.toString())
 
   const parsed = {
     spacing: parseSpacingValues(cs),
