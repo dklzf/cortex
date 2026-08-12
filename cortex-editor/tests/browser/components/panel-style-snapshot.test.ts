@@ -115,8 +115,18 @@ describe('computePanelStyleSnapshot', () => {
         overrideManager,
         defaultStyles: null,
       })
-      expect(result.computedStyles.layout.width).toBe('100%')
-      expect(result.computedStyles.layout.height).toBe('fit-content')
+      // COR-6: width/height are structured now. The override replaces the
+      // AUTHORED value and classifies from it; the measurement is untouched,
+      // because the box has not moved yet — the override is what the user just
+      // asked for and source has not caught up with. Asserting the mode too,
+      // since an override that reached `authored` but left `mode` stale would
+      // be exactly the drift the single constructor exists to prevent.
+      expect(result.computedStyles.layout.width).toMatchObject({
+        authored: '100%', mode: 'fill', usedPx: 200,
+      })
+      expect(result.computedStyles.layout.height).toMatchObject({
+        authored: 'fit-content', mode: 'fit', usedPx: 100,
+      })
     } finally {
       restoreStyles()
       target.remove()

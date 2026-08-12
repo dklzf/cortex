@@ -199,6 +199,94 @@ export function readComputedSize(
  * `custom` matters as much as the rest: without it, `50%` classifies as fixed
  * and the panel renders "50 px" for an element that is half its parent's width.
  */
+/**
+ * One axis of sizing, as ONE value (COR-6).
+ *
+ * `LayoutValues` used to carry two independently-optional strings per axis:
+ * `width` (what the developer wrote — `100%`, `fit-content`, `320px`) and
+ * `widthUsed` (how wide the box actually is — `1264px`). Nothing forced them to
+ * be filled in together.
+ *
+ * That was a trap with no type-level protection. A future producer setting a
+ * non-fixed `width` and forgetting `widthUsed` makes the panel render "0",
+ * indistinguishable from an empty selection — and clicking "Fixed" then writes
+ * `width: 0px` and collapses the element. That is precisely the bug B5 was
+ * written to fix, reachable through a second door.
+ *
+ * Three things this shape buys:
+ *   - the pairing is enforced by there being ONE field, not two that must agree
+ *   - `usedPx` is a number, which kills the `parseFloat(… ?? '')` NaN dance at
+ *     every call site
+ *   - `mode` is classified ONCE by the producer instead of re-derived on every
+ *     render by each consumer
+ */
+export interface SizingDimension {
+  /** What `classifySizingValue` decided about `authored`. */
+  mode: SizingMode
+  /** The value as WRITTEN. May be `100%`, `fit-content`, `auto` — none of which
+   *  are measurements, which is exactly why `usedPx` exists separately. */
+  authored: string
+  /** The rendered size in CSS pixels, or null when genuinely unmeasured (an
+   *  empty selection, a test that supplies no computed styles). Null is a real
+   *  state and must not be conflated with zero — a box of width 0 and a box
+   *  nobody measured are different facts. */
+  usedPx: number | null
+}
+
+/**
+ * Build a `SizingDimension` from the two strings a producer has.
+ *
+ * The single constructor is the point: it is the only place the authored value
+ * and the used value are brought together, so they cannot be set apart. A
+ * `used` string that is not a length (`auto` on a display:inline element)
+ * yields `usedPx: null` rather than NaN.
+ */
+export function makeSizingDimension(authored: string, used: string | undefined): SizingDimension {
+  return {
+    mode: classifySizingValue(authored),
+    authored,
+    usedPx: parseUsedPx(used),
+  }
+}
+
+/**
+ * Replace the AUTHORED value, keeping the measurement.
+ *
+ * What a staged override is: the user has asked for a new value and source has
+ * not caught up, so the box has not moved yet and the existing measurement is
+ * still the true one.
+ *
+ * Exists because the alternative was round-tripping the number back through the
+ * string constructor — `usedPx.toString()` yields `"200"`, a bare number with no
+ * unit, which the pixel-length check correctly rejects and the measurement was
+ * silently lost. Serializing a number only to re-parse it is where the unit went
+ * missing, and an override never needed to re-measure at all.
+ */
+export function withAuthoredSize(current: SizingDimension, authored: string): SizingDimension {
+  return { mode: classifySizingValue(authored), authored, usedPx: current.usedPx }
+}
+
+/**
+ * A used size is a PIXEL LENGTH or it is nothing.
+ *
+ * `Number.parseFloat('50%')` returns 50, so a bare parse stored `usedPx: 50`
+ * for an element with no pixel measurement at all — and a later switch to Fixed
+ * would write `50px` from it. That is the same fabricated-measurement bug this
+ * whole type exists to prevent, reachable through its own constructor. Raised
+ * in review.
+ *
+ * `classifySizingValue` already owns the "is this a pixel length" question for
+ * the AUTHORED side, including the magnitude guard against a hijacked
+ * getComputedStyle returning `1e300px`. Reusing it keeps one definition of what
+ * counts as a length rather than a second regex that can drift from it.
+ */
+function parseUsedPx(used: string | undefined): number | null {
+  if (used === undefined) return null
+  if (classifySizingValue(used) !== 'fixed') return null
+  const n = Number.parseFloat(used)
+  return Number.isFinite(n) ? n : null
+}
+
 export function classifySizingValue(value: string): SizingMode {
   const v = value.trim().toLowerCase()
 

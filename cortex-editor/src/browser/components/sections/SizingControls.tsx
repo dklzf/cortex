@@ -24,7 +24,7 @@ import type { SectionChange } from './types.js'
 import { NumericInput } from '../controls/NumericInput.js'
 import { SizingDropdown } from '../controls/SizingDropdown.js'
 import { Check, Lock, LockOpen, X } from '../icons.js'
-import type { SelectableSizingMode } from '../../sizing-value.js'
+import type { SelectableSizingMode, SizingDimension } from '../../sizing-value.js'
 import { classifySizingValue } from '../../sizing-value.js'
 
 export type SizingChange = SectionChange
@@ -34,11 +34,9 @@ const ASPECT_LOCK_REQUIRES_FIXED_TOOLTIP = 'Aspect lock requires fixed dimension
 
 export interface SizingControlsProps {
   values: {
-    width: string
-    height: string
-    /** Used (rendered) pixel size. See LayoutValues.widthUsed. */
-    widthUsed?: string
-    heightUsed?: string
+    width: SizingDimension
+    height: SizingDimension
+
     minWidth: string
     maxWidth: string
     minHeight: string
@@ -89,8 +87,9 @@ export function SizingControls({
   const [aspectLocked, setAspectLocked] = useState(false)
 
   // Derive modes from values — fixes stale-state bug (Task 2 flag).
-  const widthMode = classifySizingValue(values.width)
-  const heightMode = classifySizingValue(values.height)
+  // COR-6: classified ONCE by the producer, not re-derived here on every render.
+  const widthMode = values.width.mode
+  const heightMode = values.height.mode
   const minWidthEnabled = isMinEnabled(values.minWidth)
   const maxWidthEnabled = isMaxEnabled(values.maxWidth)
   const minHeightEnabled = isMinEnabled(values.minHeight)
@@ -99,22 +98,37 @@ export function SizingControls({
   // Only a `fixed` value is a pixel count. Parsing `50%` yields 50 and would
   // render "50 px" for an element that is half its parent's width; parsing
   // `auto` yields NaN and renders "0". Both are worse than showing nothing.
-  const widthNum = widthMode === 'fixed' ? parseFloat(values.width) : NaN
-  const heightNum = heightMode === 'fixed' ? parseFloat(values.height) : NaN
+  const widthNum = widthMode === 'fixed' ? parseFloat(values.width.authored) : NaN
+  const heightNum = heightMode === 'fixed' ? parseFloat(values.height.authored) : NaN
   const isAutoWidth = isNaN(widthNum)
   const isAutoHeight = isNaN(heightNum)
 
-  // The element's true rendered size. For a non-fixed element this is the ONLY
-  // honest number available: `100%` and `fit-content` are not measurements, and
-  // showing 0 in their place fabricates a width for a box that plainly has one.
-  // Figma does the same — a Fill/Hug element still reports its current size.
-  const usedWidthNum = parseFloat(values.widthUsed ?? '')
-  const usedHeightNum = parseFloat(values.heightUsed ?? '')
   // What the W/H fields display. Fixed shows its authored value; anything else
-  // shows the measured one. Falls back to 0 only when there is no measurement
-  // at all (empty selection).
-  const widthDisplay = isAutoWidth ? (isNaN(usedWidthNum) ? 0 : usedWidthNum) : widthNum
-  const heightDisplay = isAutoHeight ? (isNaN(usedHeightNum) ? 0 : usedHeightNum) : heightNum
+  // shows the MEASURED one, because `100%` and `fit-content` are not
+  // measurements and showing 0 in their place fabricates a width for a box that
+  // plainly has one. Figma does the same — a Fill/Hug element still reports its
+  // current size.
+  //
+  // COR-6: `usedPx` is `number | null`, so the fallback distinguishes "no
+  // measurement" from "measured zero" without a NaN round-trip. It used to be
+  // `parseFloat(values.widthUsed ?? '')`, which conflated an absent field, a
+  // non-length value and a genuine 0 into the same NaN.
+  const widthDisplay = isAutoWidth ? (values.width.usedPx ?? 0) : widthNum
+  const heightDisplay = isAutoHeight ? (values.height.usedPx ?? 0) : heightNum
+
+  // Whether a real measurement exists to PIN. The display fallback above may
+  // legitimately show 0 for an unmeasured element — a blank field would be
+  // worse — but seeding a Fixed write from that 0 recreates the exact collapse
+  // this ticket exists to prevent, now at the consumer instead of the producer.
+  // A `display: contents` element has no box and its computed width stays
+  // `auto`, so `usedPx` is null; writing `width: 0px` there collapses it the
+  // moment its display changes back. Raised in review.
+  //
+  // Separate constants from the display values on purpose: conflating "what to
+  // show" with "what is safe to write" is how the 0 leaked into the write in
+  // the first place.
+  const canPinWidth = !isAutoWidth || values.width.usedPx !== null
+  const canPinHeight = !isAutoHeight || values.height.usedPx !== null
 
   const canLockAspect = widthMode === 'fixed' && heightMode === 'fixed'
   const widthDisabled = widthMode !== 'fixed'
@@ -207,14 +221,17 @@ export function SizingControls({
     // Switching TO Fixed must pin the element at the size it currently RENDERS.
     // Seeding from `widthNum` wrote `0px` for every non-fixed element, because
     // widthNum is NaN unless the value was authored in pixels.
-    else onChange({ property: 'width', value: `${widthDisplay}px` })
-  }, [onChange, widthDisplay])
+    //
+    // And refuse outright when there is no measurement: `0px` is not a
+    // conservative default here, it is a collapse.
+    else if (canPinWidth) onChange({ property: 'width', value: `${widthDisplay}px` })
+  }, [onChange, widthDisplay, canPinWidth])
 
   const handleHeightModeChange = useCallback((mode: SelectableSizingMode) => {
     if (mode === 'fit') onChange({ property: 'height', value: 'fit-content' })
     else if (mode === 'fill') onChange({ property: 'height', value: '100%' })
-    else onChange({ property: 'height', value: `${heightDisplay}px` })
-  }, [onChange, heightDisplay])
+    else if (canPinHeight) onChange({ property: 'height', value: `${heightDisplay}px` })
+  }, [onChange, heightDisplay, canPinHeight])
 
   // ── Min/max handlers ────────────────────────────────────────────
   const handleMinWidthChange = useCallback(

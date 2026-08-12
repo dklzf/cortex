@@ -1,3 +1,4 @@
+import { makeSizingDimension } from '../../../src/browser/sizing-value.js'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render } from 'preact'
 import { SizingControls } from '../../../src/browser/components/sections/SizingControls.js'
@@ -24,8 +25,12 @@ describe('SizingControls', () => {
     // ("320px"), and computedStyleMap() stringifies to one, so a bare `320`
     // cannot reach this component. It only ever passed because the old
     // deriveSizingMode fell through to 'fixed' for anything unrecognised.
-    width: '320px',
-    height: '48px',
+    // COR-6: one structured value per axis. Constructed through the real
+    // helper rather than hand-built, so a test fixture cannot express a
+    // shape the producer never emits — which is how the authored/used pair
+    // drifted apart in the first place.
+    width: makeSizingDimension('320px', '320px'),
+    height: makeSizingDimension('48px', '48px'),
     minWidth: '0px',
     maxWidth: 'none',
     minHeight: '0px',
@@ -173,7 +178,7 @@ describe('SizingControls', () => {
   })
 
   it('aspect lock: changing W fires proportional H change', async () => {
-    const { onChange } = setup({ values: { ...DEFAULT_VALUES, width: '200px', height: '100px' } })
+    const { onChange } = setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('200px', '200px'), height: makeSizingDimension('100px', '100px') } })
     // Lock aspect
     const lockBtn = container.querySelector('.cortex-lock-btn') as HTMLElement
     expect(lockBtn).not.toBeNull()
@@ -195,7 +200,7 @@ describe('SizingControls', () => {
   })
 
   it('aspect lock is disabled with an explanation when either dimension is non-fixed', async () => {
-    setup({ values: { ...DEFAULT_VALUES, width: 'fit-content', height: '100px' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('fit-content', 'fit-content'), height: makeSizingDimension('100px', '100px') } })
     let lockBtn = container.querySelector('.cortex-lock-btn') as HTMLButtonElement
     expect(lockBtn).not.toBeNull()
     expect(lockBtn.classList.contains('cortex-lock-btn--disabled')).toBe(true)
@@ -216,7 +221,7 @@ describe('SizingControls', () => {
     const onChange = vi.fn()
     render(
       <SizingControls
-        values={{ ...DEFAULT_VALUES, width: '200px', height: '100px' }}
+        values={{ ...DEFAULT_VALUES, width: makeSizingDimension('200px', '200px'), height: makeSizingDimension('100px', '100px') }}
         onChange={onChange}
       />,
       container,
@@ -231,7 +236,7 @@ describe('SizingControls', () => {
 
     render(
       <SizingControls
-        values={{ ...DEFAULT_VALUES, width: 'fit-content', height: '100px' }}
+        values={{ ...DEFAULT_VALUES, width: makeSizingDimension('fit-content', 'fit-content'), height: makeSizingDimension('100px', '100px') }}
         onChange={onChange}
       />,
       container,
@@ -279,7 +284,7 @@ describe('SizingControls', () => {
     // First render with width=100%
     render(
       <SizingControls
-        values={{ ...DEFAULT_VALUES, width: '100%' }}
+        values={{ ...DEFAULT_VALUES, width: makeSizingDimension('100%', '100%') }}
         onChange={onChange}
       />,
       container,
@@ -290,7 +295,7 @@ describe('SizingControls', () => {
     // Re-render with width=320px — dropdown must update to "px" (fixed)
     render(
       <SizingControls
-        values={{ ...DEFAULT_VALUES, width: '320px' }}
+        values={{ ...DEFAULT_VALUES, width: makeSizingDimension('320px', '320px') }}
         onChange={onChange}
       />,
       container,
@@ -329,7 +334,7 @@ describe('SizingControls', () => {
   // Fixed told the user a pixel width was authored when none was, and left the
   // px input enabled so editing it silently introduced one.
   it('reports auto as "auto" and disables the pixel input', () => {
-    setup({ values: { ...DEFAULT_VALUES, width: 'auto' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('auto', 'auto') } })
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
     expect(modeLabels[0]?.textContent).toBe('auto')
     const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
@@ -339,7 +344,7 @@ describe('SizingControls', () => {
   it('reports an author-written 100% as fill — the headline B5 case', () => {
     // Before B5 this read as Fixed, because getComputedStyle resolved it to a
     // pixel count before the panel ever saw it.
-    setup({ values: { ...DEFAULT_VALUES, width: '100%' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('100%', '100%') } })
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
     expect(modeLabels[0]?.textContent).toBe('fill')
   })
@@ -347,7 +352,7 @@ describe('SizingControls', () => {
   it('reports a percentage that is not 100% as custom, never as a pixel count', () => {
     // parseFloat('50%') === 50, so the pre-B5 path rendered "50 px" for an
     // element that is half its parent's width.
-    setup({ values: { ...DEFAULT_VALUES, width: '50%' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('50%', '50%') } })
     const modeLabels = container.querySelectorAll('.cortex-sizing-trigger__label')
     expect(modeLabels[0]?.textContent).toBe('custom')
     const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
@@ -360,20 +365,22 @@ describe('SizingControls', () => {
   // it fabricates one.
 
   it('shows the element\'s rendered width for a fill element, not 0', () => {
-    setup({ values: { ...DEFAULT_VALUES, width: '100%', widthUsed: '1264px' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('100%', '1264px') } })
     const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
     expect(widthInput.value).toBe('1264')
     expect(widthInput.disabled).toBe(true)
   })
 
   it('shows the rendered width for a fit-content element too', () => {
-    setup({ values: { ...DEFAULT_VALUES, width: 'fit-content', widthUsed: '86px' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('fit-content', '86px') } })
     const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
     expect(widthInput.value).toBe('86')
   })
 
   it('falls back to 0 only when there is no measurement at all', () => {
-    setup({ values: { ...DEFAULT_VALUES, width: 'auto' } })
+    // `undefined`, not `'auto'` — the point is an ABSENT measurement. COR-6
+    // makes that state explicit as `usedPx: null`, distinct from a measured 0.
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('auto', undefined) } })
     const widthInput = container.querySelector('.cortex-numeric-input input') as HTMLInputElement
     expect(widthInput.value).toBe('0')
   })
@@ -381,7 +388,7 @@ describe('SizingControls', () => {
   it('pins a fill element at its rendered width when switched to Fixed', async () => {
     // The regression this guards: seeding from the authored value wrote "0px"
     // and collapsed the element, because a `100%` width parses to NaN.
-    const { onChange } = setup({ values: { ...DEFAULT_VALUES, width: '100%', widthUsed: '1264px' } })
+    const { onChange } = setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('100%', '1264px') } })
     const triggers = container.querySelectorAll('.cortex-sizing-trigger')
     ;(triggers[0] as HTMLElement).click()
     await vi.waitFor(() => {
@@ -393,7 +400,7 @@ describe('SizingControls', () => {
   })
 
   it('pins height at its rendered size when switched to Fixed', async () => {
-    const { onChange } = setup({ values: { ...DEFAULT_VALUES, height: 'fit-content', heightUsed: '40px' } })
+    const { onChange } = setup({ values: { ...DEFAULT_VALUES, height: makeSizingDimension('fit-content', '40px') } })
     const triggers = container.querySelectorAll('.cortex-sizing-trigger')
     ;(triggers[1] as HTMLElement).click()
     await vi.waitFor(() => {
@@ -406,7 +413,7 @@ describe('SizingControls', () => {
   it('does not offer the aspect lock when a dimension is auto', () => {
     // canLockAspect requires BOTH axes fixed. Everything read as fixed before
     // B5, so the lock was permanently enabled.
-    setup({ values: { ...DEFAULT_VALUES, width: 'auto', height: '48px' } })
+    setup({ values: { ...DEFAULT_VALUES, width: makeSizingDimension('auto', 'auto'), height: makeSizingDimension('48px', '48px') } })
     const lockBtn = container.querySelector('.cortex-lock-btn') as HTMLButtonElement
     expect(lockBtn.getAttribute('aria-disabled')).toBe('true')
   })
@@ -429,5 +436,39 @@ describe('SizingControls', () => {
     // Expect all 6 (width, height, min-width, max-width, min-height, max-height)
     // Under pre-fix code only 2 (width + height) receive stale, so this must fail.
     expect(staleInputs.length).toBe(6)
+  })
+
+  it('refuses to write 0px when there is no measurement', async () => {
+    // A `display: contents` element has no box and its computed width stays
+    // `auto`, so `usedPx` is null. The display fallback legitimately shows 0 —
+    // a blank field would be worse — but seeding a Fixed WRITE from that 0
+    // emits `width: 0px` and collapses the element the moment its display
+    // changes back. That is the exact bug this ticket exists to prevent,
+    // recreated at the consumer instead of the producer.
+    const { onChange } = setup({
+      values: { ...DEFAULT_VALUES, width: makeSizingDimension('auto', undefined) },
+    })
+    const triggers = container.querySelectorAll('.cortex-sizing-trigger')
+    ;(triggers[0] as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fixed"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fixed"]') as HTMLElement).click()
+    expect(onChange).not.toHaveBeenCalledWith({ property: 'width', value: '0px' })
+  })
+
+  it('still pins at the rendered size when a measurement DOES exist', async () => {
+    // The guard must not break the case it sits next to: a fill element with a
+    // real measurement is exactly what "switch to Fixed" is for.
+    const { onChange } = setup({
+      values: { ...DEFAULT_VALUES, width: makeSizingDimension('100%', '1264px') },
+    })
+    const triggers = container.querySelectorAll('.cortex-sizing-trigger')
+    ;(triggers[0] as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fixed"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fixed"]') as HTMLElement).click()
+    expect(onChange).toHaveBeenCalledWith({ property: 'width', value: '1264px' })
   })
 })
