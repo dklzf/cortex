@@ -1225,24 +1225,31 @@ export function Panel({
         : { kind: 'remove' as const, remove: opts.remove! }
 
       if (target.applyMode === 'agent-resolve') {
-        const pseudoForIntent = activePseudo !== 'element' ? activePseudo : undefined
+        // scope 'all' must carry the OTHER targets, exactly as the style path
+        // does. Without them the agent gets a locator for one element and a
+        // scope flag claiming all of them — and if the matches are rendered from
+        // different call sites it cannot find the rest. Same shape as the style
+        // path's `editSourcesForElements(sharedInfo.elements)`.
+        const isAll = !!sharedInfo && editScope === 'all'
         const staged: PendingEdit = {
           kind: 'class' as const,
           intentId: generateId(),
           source: target.source,
           classOp,
-          ...(pseudoForIntent ? { pseudo: pseudoForIntent } : {}),
           ...(opts.inlineSets?.length ? { inlineSets: [...opts.inlineSets] } : {}),
           ...(opts.inlineRemoves?.length ? { inlineRemoves: [...opts.inlineRemoves] } : {}),
           scope: editScope,
+          ...(isAll ? { instanceSources: editSourcesForElements(sharedInfo!.elements) } : {}),
           ...pendingEditTargetFields(target),
           timestamp: Date.now(),
         }
         buffer.append(staged)
-        // Same activity-log sentinel as the direct path, so a staged class op
-        // renders as one row rather than disappearing from the user's view of
-        // what they just did.
-        onEditDispatch?.(staged.intentId, target.source, '__class__', formatCompoundDescription(opts))
+        // Deliberately NOT onEditDispatch. That registers the id in CortexApp's
+        // map of DIRECT edits awaiting a terminal `edit_status`, and this branch
+        // sends no wire message — so the entry would never be consumed, and
+        // enough staged gestures would fill the 500-entry cap and evict tracking
+        // for genuinely in-flight edits. The callback adds no activity row, so
+        // there is nothing gained to weigh against that.
         return
       }
 

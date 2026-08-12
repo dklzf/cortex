@@ -30,8 +30,9 @@ import { isStructuralEdit, isClassEdit } from './../schemas/pending-edit.js'
  * intents removed the need for the log, and with it that whole failure class —
  * including the unbounded growth that unique-per-drag keys caused.
  *
- * A class intent collapses per (source, pseudo, OPERATION) — deliberately not
- * per (source, pseudo). Style edits collapse per property because a scrub emits
+ * A class intent collapses per (source, OPERATION) — deliberately not per
+ * source alone. It carries no pseudo: a class attaches to the owning element,
+ * never to a ::before box. Style edits collapse per property because a scrub emits
  * hundreds of intermediate values and only the last matters. Class ops are
  * discrete clicks, and `add text-lg` followed by `add font-bold` are INDEPENDENT
  * mutations; last-write-wins there would silently drop one. Including the
@@ -50,7 +51,7 @@ export function compositeKey(edit: PendingEditSchema): string {
       op.kind === 'swap' ? `swap\0${op.remove}\0${op.add}`
       : op.kind === 'add' ? `add\0${op.add}`
       : `remove\0${op.remove}`
-    return `class\0${edit.source}\0${edit.pseudo ?? ''}\0${sig}`
+    return `class\0${edit.source}\0${sig}`
   }
   return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
 }

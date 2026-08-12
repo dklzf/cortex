@@ -255,7 +255,11 @@ export const classEditSchema = z.object({
   ...intentBase,
   kind: z.literal('class'),
   classOp: classOpSchema,
-  pseudo: z.enum(['::before', '::after']).optional(),
+  // NO `pseudo`. A class attaches to the OWNING element — there is no way to put
+  // one on a ::before box — so carrying the panel's active pseudo tab here would
+  // tell the agent to make a change at a target that does not exist, and the
+  // reason string would read "on the ::before pseudo-element" for an edit that
+  // must land on the element itself.
   inlineSets: z
     .array(z.object({ property: z.string().min(1), value: z.string() }))
     .max(MAX_INTENT_INSTANCE_SOURCES)

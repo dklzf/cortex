@@ -346,7 +346,6 @@ async function applyOne(
       intent,
       reason:
         `Class change: ${describeClassOp(intent.classOp)}` +
-        (intent.pseudo ? ` on the ${intent.pseudo} pseudo-element` : '') +
         `. This intent carries no file position — the element had no build-time anchor, so ` +
         `locate the call site from its sourceResolutionHint and edit the className there.` +
         inlineNote +
