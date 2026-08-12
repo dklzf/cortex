@@ -504,6 +504,12 @@ export function Panel({
   // Shared source detection for warning-only banner (ZF0-1583)
   const [sharedSourceInfo, setSharedSourceInfo] = useState<SharedSourceInfo | null>(null)
 
+  /** True once the user has picked a scope for THIS element. Gates the
+   *  detect-time default so re-detection (every HMR bump produces fresh
+   *  sharedInfo objects) cannot overwrite a deliberate choice — the ZF0-1292
+   *  regression. Cleared on element change. */
+  const userChoseScopeRef = useRef(false)
+
   /**
    * What a scope=all edit ACTUALLY reaches when a repeated call site's class is
    * also used elsewhere (COR-12 review).
@@ -611,12 +617,34 @@ export function Panel({
   // "instance" mid-edit (cubic + Copilot flagged in ZF0-1292 review).
   useEffect(() => {
     clearHighlights()
-    // Reset to the DEFAULT, which is 'all'. Resetting to 'instance' here was the
-    // second half of the same inversion: even after a user chose 'All', the next
-    // selection silently put them back on a narrower scope than the source
-    // supports.
-    setEditScope('all')
+    // Reset to 'instance' — but see the effect below: this is the value for
+    // "sharing UNKNOWN", not the product default.
+    //
+    // Setting 'all' unconditionally here was wrong for a case with no UI at all.
+    // An element without `data-cortex-css` (the RuntimeCSSResolver compatibility
+    // path) makes detectSharedClasses return null, so neither the toggle nor any
+    // disclosure renders — yet an All-scoped edit still went out, and the
+    // runtime-resolver branch rewrites the CSS RULE rather than going through
+    // InlineStyleRewriter. That could change other users of the class with no
+    // control offered and nothing on screen saying so. The old 'instance'
+    // default happened to protect that path; the flip removed the protection
+    // without replacing it. Found in review.
+    setEditScope('instance')
+    userChoseScopeRef.current = false
   }, [element])
+
+  // Edit-all is the default WHERE SHARING EXISTS — applied once detection lands,
+  // and only if the user has not chosen for themselves.
+  //
+  // The guard is what keeps this from re-introducing ZF0-1292. `sharedInfo` is a
+  // fresh object on every re-detection, so this effect fires on every HMR bump;
+  // without the ref it would silently flip a user who deliberately picked 'This
+  // element' back to 'All' mid-edit, which is exactly the regression that
+  // pinned the reset above to [element] in the first place.
+  useEffect(() => {
+    if (userChoseScopeRef.current) return
+    if (sharedInfo || sharedSourceInfo) setEditScope('all')
+  }, [sharedInfo, sharedSourceInfo])
 
   // Coerce to 'all' whenever shared-SOURCE status becomes active, not just on
   // element change (COR-12 review).
@@ -952,8 +980,22 @@ export function Panel({
         // truth (`c.pseudo`) is always correct.
         pseudo: c.pseudo,
         // PendingEdit.scope mirrors the server's CortexEdit.scope contract
-        // ('instance' | 'all'); editScope already uses the same shape.
-        scope: editScope,
+        // ('instance' | 'all').
+        //
+        // `isShared`, NOT raw editScope — matching the multi-select branch above,
+        // which built this same field the safe way all along. `isShared` is
+        // `!!sharedInfo && editScope === 'all'`, so it cannot claim 'all' for an
+        // element with no detected sharing. Passing editScope through raw meant
+        // an element without `data-cortex-css` (the RuntimeCSSResolver path,
+        // where detectSharedClasses returns null and NO scope UI renders at all)
+        // staged scope 'all' purely because that is what the panel defaulted to
+        // — and the server's runtime-resolver branch rewrites the CSS RULE
+        // rather than using InlineStyleRewriter, so it could change other users
+        // of that class with no control offered and nothing on screen saying so.
+        //
+        // Two branches building one field two different ways is the asymmetry
+        // class this repo keeps getting bitten by; they are identical now.
+        scope: isShared ? 'all' : 'instance',
         instanceSources,
         ...pendingEditTargetFields(primaryTarget),
         timestamp: Date.now(),
@@ -1808,7 +1850,7 @@ export function Panel({
               role="radio"
               aria-checked={editScope === 'instance'}
               tabIndex={editScope === 'instance' ? 0 : -1}
-              onClick={() => { setEditScope('instance'); clearHighlights() }}
+              onClick={() => { userChoseScopeRef.current = true; setEditScope('instance'); clearHighlights() }}
             >
               This element
             </button>
@@ -1818,7 +1860,7 @@ export function Panel({
               role="radio"
               aria-checked={editScope === 'all'}
               tabIndex={editScope === 'all' ? 0 : -1}
-              onClick={() => { setEditScope('all'); highlightSharedElements(sharedInfo, element) }}
+              onClick={() => { userChoseScopeRef.current = true; setEditScope('all'); highlightSharedElements(sharedInfo, element) }}
               // Hover previews unconditionally. It used to gate on
               // `editScope !== 'all'` on the assumption that scope=all is only
               // ever reached by CLICKING here, which also highlights — so the
@@ -1888,7 +1930,14 @@ export function Panel({
               disclosure — it belongs to the path, not to one banner. */}
           {sourceBlastRadius.info.count > sourceBlastRadius.sourceCount && (
             <span class="cortex-panel__scope-note">
-              Token links (typography, background, border) apply to this element only
+              {/* NOT "this element only" — that copy is right in the class-toggle
+                  branch and WRONG here, in the opposite direction. A token link
+                  rewrites the selected element's single JSX position, and in this
+                  branch that position is shared, so every one of the sourceCount
+                  instances changes. Reusing the other branch's wording would have
+                  understated the radius while the sentence beside it overstated
+                  it. Neither number is "this element". */}
+              Token links (typography, background, border) reach the {sourceBlastRadius.sourceCount} sharing this source location, not the others
             </span>
           )}
         </div>

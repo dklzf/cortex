@@ -2543,9 +2543,21 @@ describe('commitScrub multi-select fan-out (ZF0-1195 / T4)', () => {
     expect(stored).toHaveLength(1)
     expect(stored[0].source).toBe('src/Hero.tsx:14:5')
     expect(stored[0].instanceSources).toBeUndefined()
-    // Default scope ('all' since COR-12). What this test guards is the ABSENCE
-    // of fan-out for a single-select, not the scope label.
-    expect(stored[0].scope).toBe('all')
+    // 'instance' — and this line is the whole story of a COR-12 review round.
+    //
+    // This target carries a data-cortex-source but NO data-cortex-css, so
+    // detectSharedClasses returns null and there is no sharing to scope over.
+    // When COR-12 flipped the default I changed this expectation from 'instance'
+    // to 'all' so it would match the new behaviour, which ratified a real
+    // regression into the suite: the single-select branch staged raw editScope
+    // while the multi-select branch beside it used `isShared ? 'all' :
+    // 'instance'` and was immune. codex found it from the other end (the server's
+    // runtime-resolver branch rewrites the CSS RULE, so a spurious 'all' can
+    // change other users of the class with no control offered).
+    //
+    // The branches are symmetric now, so an element with no detected sharing can
+    // never stage 'all'. The test was right the first time.
+    expect(stored[0].scope).toBe('instance')
 
     render(null, container)
     container.remove()
@@ -2613,6 +2625,61 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     // No scope-toggle buttons inside the source banner
     expect(sourceBanner.querySelector('.cortex-panel__scope-toggle')).toBeNull()
     expect(sourceBanner.querySelector('.cortex-panel__scope-btn')).toBeNull()
+  })
+
+  it('an explicit "This element" survives an HMR re-detection (ZF0-1292 guard)', async () => {
+    // The detect-time default that makes All the default where sharing exists
+    // fires on [sharedInfo, sharedSourceInfo], and sharedInfo is a FRESH OBJECT
+    // on every re-detection — so without the user-choice ref it would run on
+    // every HMR bump and silently flip a deliberate 'This element' back to
+    // 'All'. That is precisely the regression which pinned the scope reset to
+    // [element] in the first place, so re-introducing it through the new
+    // default would be a straight trade of one bug for another.
+    const sharedCss = 'Row.module.css:.row'
+    const els = ['src/A.tsx:1:1', 'src/B.tsx:2:2'].map(src => {
+      const el = document.createElement('div')
+      el.setAttribute('data-cortex-source', src)
+      el.setAttribute('data-cortex-css', sharedCss)
+      document.body.appendChild(el)
+      return el
+    })
+
+    const overrideManager = createStubOverrideManager()
+    const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
+    const mount = (hmrVersion: number) =>
+      render(
+        <Panel
+          selectedElements={[els[0]!]}
+          overrideManager={overrideManager as any}
+          onClose={() => {}}
+          onSelectElement={() => {}}
+          buffer={makeFakeBuffer()}
+          {...panelPositionProps}
+          hmrAppliedVersion={hmrVersion}
+        />,
+        shadowRoot,
+      )
+    mount(0)
+    cleanup = () => { render(null, shadowRoot); removeHost(); els.forEach(e => e.remove()); void shadow }
+
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('.cortex-panel__scope-toggle')).not.toBeNull()
+    }, { timeout: 500 })
+
+    // Default lands on All where sharing exists, so Position is hidden...
+    expect(shadowRoot.querySelector('[data-group="position"]')).toBeNull()
+
+    // ...the user deliberately narrows...
+    const instanceBtn = shadowRoot.querySelector<HTMLButtonElement>('.cortex-panel__scope-btn:first-child')!
+    await act(async () => { instanceBtn.click(); await Promise.resolve() })
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('[data-group="position"]')).not.toBeNull()
+    }, { timeout: 500 })
+
+    // ...and an HMR bump re-runs detection. The choice must survive.
+    await act(async () => { mount(1); await Promise.resolve() })
+    expect(shadowRoot.querySelector('[data-group="position"]')).not.toBeNull()
+    expect(instanceBtn.getAttribute('aria-checked')).toBe('true')
   })
 
   it('coerces scope to All when shared-SOURCE status appears after the user narrowed', async () => {
@@ -2746,7 +2813,14 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     const banner = shadowRoot.querySelector('.cortex-panel__scope--source-only')!
     // Precondition: this IS the union case (3 > 2), which is what triggers the note.
     expect(banner.textContent).toContain('Editing all 3')
-    expect(banner.querySelector('.cortex-panel__scope-note')).not.toBeNull()
+    const srcNote = banner.querySelector('.cortex-panel__scope-note')
+    expect(srcNote).not.toBeNull()
+    // The COPY matters, not just the presence. "this element only" is right in
+    // the class-toggle branch and WRONG here in the opposite direction: the
+    // source is shared, so a token link changes all sourceCount instances.
+    // Asserting only presence would pass with the understating wording.
+    expect(srcNote!.textContent).toContain('reach the 2 sharing this source location')
+    expect(srcNote!.textContent).not.toContain('this element only')
     // And the label opts out of the ellipsis, or the explanation is cut off.
     expect(
       banner.querySelector('.cortex-panel__scope-label')!.classList.contains('cortex-panel__scope-label--wrap'),
