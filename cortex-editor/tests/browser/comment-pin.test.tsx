@@ -260,3 +260,100 @@ describe('CommentPin — the pin targets what the user CLICKED (COR-27)', () => 
     expect(msg!.sourceResolutionHint).toBeUndefined()
   })
 })
+
+describe('CommentPin — a preview-sourced pin survives a reload (COR-27 review)', () => {
+  let container: HTMLDivElement
+  let button: HTMLButtonElement
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    // A FRESH element, exactly as a reload produces it: it matches the recorded
+    // domSelector but carries no preview id, because that id only ever existed
+    // as an attribute on the node from the previous page session.
+    button = document.createElement('button')
+    button.id = 'save-btn'
+    document.body.appendChild(button)
+    ;(button as HTMLElement).getBoundingClientRect = () => ({
+      x: 100, y: 200, width: 200, height: 40,
+      left: 100, top: 200, right: 300, bottom: 240,
+      toJSON() { return this },
+    }) as DOMRect
+  })
+
+  afterEach(() => {
+    render(null, container)
+    container.remove()
+    button.remove()
+  })
+
+  const rehydrated = (hint?: Record<string, string>): Annotation => ({
+    id: 'a-reload', status: 'pending',
+    elementSource: 'cortex-preview:p-from-last-session',
+    text: 'too small', pinPosition: { x: 0.5, y: 0.5 },
+    createdAt: Date.now(), updatedAt: Date.now(), thread: [],
+    ...(hint ? { sourceResolutionHint: hint as never } : {}),
+  })
+
+  it('recovers the element through the hint domSelector', async () => {
+    render(
+      <CommentPin
+        annotations={[rehydrated({ tagName: 'button', textPreview: 'Save', domSelector: 'button#save-btn' })]}
+        commentMode={false} channel={mockChannel()} onReply={vi.fn()} />,
+      container,
+    )
+    await new Promise(r => setTimeout(r, 20))
+    // Before this, the selector matched nothing and the pin silently vanished
+    // while the annotation was still active — a comment the user cannot see is
+    // worse than one that is merely misplaced.
+    expect(container.querySelector('.cortex-pin')).not.toBeNull()
+    // And it re-stamps the id, so the recovery holds for the rest of the session
+    // instead of re-running the selector on every scroll frame.
+    expect(button.getAttribute('data-cortex-preview-id')).toBe('p-from-last-session')
+  })
+
+  // TODO: requires a real browser. happy-dom neither THROWS on an invalid
+  // selector nor rejects it — `document.querySelector('button#((')` matches the
+  // button — so this cannot distinguish a guarded implementation from an
+  // unguarded one. In Chromium querySelector throws, which without the try/catch
+  // aborts the position loop and hides EVERY pin on the page. Asserting it here
+  // would inflate the pass count while proving nothing; the guard is exercised
+  // by the e2e layer or not at all.
+  it.skip('a malformed hint selector does not take down the OTHER pins', async () => {
+    // domSelector is page-derived, so it can be invalid — and in a real browser
+    // querySelector THROWS on one, which would abort the whole position loop and
+    // hide every pin on the page. Asserting "this pin does not render" would be
+    // theatre here: happy-dom returns null instead of throwing, so that
+    // assertion passes with or without the try/catch. What IS observable in
+    // either engine is the consequence — a second, valid annotation must still
+    // get its pin.
+    const good: Annotation = {
+      ...rehydrated({ tagName: 'button', textPreview: 'Save', domSelector: 'button#save-btn' }),
+      id: 'a-good',
+    }
+    const bad: Annotation = {
+      ...rehydrated({ tagName: 'button', textPreview: '', domSelector: 'button#((' }),
+      id: 'a-bad',
+      // A DISTINCT source. Sharing one with `good` made this test measure the
+      // wrong thing: recovery re-stamps the preview id on the element, so a
+      // second annotation naming the SAME source then resolves directly and
+      // never reaches the selector path at all.
+      elementSource: 'cortex-preview:p-other-session',
+    }
+    render(
+      <CommentPin annotations={[bad, good]} commentMode={false} channel={mockChannel()} onReply={vi.fn()} />,
+      container,
+    )
+    await new Promise(r => setTimeout(r, 20))
+    expect(container.querySelectorAll('.cortex-pin').length).toBe(1)
+  })
+
+  it('does not guess when there is no hint at all', async () => {
+    render(
+      <CommentPin annotations={[rehydrated()]} commentMode={false} channel={mockChannel()} onReply={vi.fn()} />,
+      container,
+    )
+    await new Promise(r => setTimeout(r, 20))
+    expect(container.querySelector('.cortex-pin')).toBeNull()
+  })
+})

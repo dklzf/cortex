@@ -3,7 +3,14 @@ import { useState, useEffect, useCallback } from 'preact/hooks'
 import type { Annotation, CortexChannel } from '../../adapters/types.js'
 import { CommentThread } from './CommentThread.js'
 import { PANEL_WIDTH } from '../hooks/useSnapToEdge.js'
-import { getElementEditTarget, selectorForEditSource, type SourceResolutionHint } from '../preview-source.js'
+import {
+  getElementEditTarget,
+  selectorForEditSource,
+  isPreviewSource,
+  PREVIEW_SOURCE_ATTR,
+  PREVIEW_SOURCE_PREFIX,
+  type SourceResolutionHint,
+} from '../preview-source.js'
 
 // COR-27: resolves BOTH source formats. It previously matched only
 // `data-cortex-source`, which is why a preview-sourced pin could not be located
@@ -11,6 +18,50 @@ import { getElementEditTarget, selectorForEditSource, type SourceResolutionHint 
 // than refused. `selectorForEditSource` is the shared seam style edits already
 // use, so the two paths cannot drift on how a source is turned back into a node.
 const sourceSelector = selectorForEditSource
+
+/**
+ * Find the element an annotation refers to, surviving a page reload.
+ *
+ * A `cortex-preview:` source is a page-session id that lives ONLY as an
+ * attribute on the node that was clicked. After a reload the server rehydrates
+ * the annotation through `annotations-snapshot`, but the freshly-rendered
+ * element never receives the old id — so the selector matched nothing and the
+ * pin silently disappeared while the annotation was still active. Raised in
+ * review; a comment that vanishes is worse than one that is merely misplaced,
+ * because the user has no way to tell it still exists.
+ *
+ * The `sourceResolutionHint` already travels with the annotation for the
+ * agent's benefit, and its `domSelector` is exactly the locator needed here.
+ * Re-stamping the preview id on the match makes the recovery stick for the rest
+ * of the session, so this runs once per annotation rather than on every scroll
+ * frame.
+ *
+ * Deliberately no fallback for a `file:line:col` source: those survive reloads
+ * on their own, and inventing a second lookup for them would add a way to
+ * resolve the WRONG element to a path that currently cannot.
+ */
+function locateAnnotated(ann: Annotation): Element | null {
+  const direct = document.querySelector(sourceSelector(ann.elementSource))
+  if (direct) return direct
+
+  const selector = ann.sourceResolutionHint?.domSelector
+  if (!selector || !isPreviewSource(ann.elementSource)) return null
+  let recovered: Element | null = null
+  try {
+    // Page-derived, so it can be malformed — querySelector THROWS on an invalid
+    // selector, which would take down every other pin on the page with it.
+    recovered = document.querySelector(selector)
+  } catch {
+    return null
+  }
+  if (recovered) {
+    recovered.setAttribute(
+      PREVIEW_SOURCE_ATTR,
+      ann.elementSource.slice(PREVIEW_SOURCE_PREFIX.length),
+    )
+  }
+  return recovered
+}
 
 export interface CommentPinProps {
   annotations: Annotation[]
@@ -45,7 +96,7 @@ export function CommentPin({ annotations, commentMode, channel, onReply }: Comme
       const newPositions = new Map<string, { x: number; y: number }>()
       for (const ann of annotations) {
         if (!ann.pinPosition) continue
-        const el = document.querySelector(sourceSelector(ann.elementSource))
+        const el = locateAnnotated(ann)
         if (!el) continue
         const rect = el.getBoundingClientRect()
         if (rect.width === 0 || rect.height === 0) continue
