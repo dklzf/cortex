@@ -1,0 +1,45 @@
+cortex-editor/src/browser/components/CortexApp.tsx
+  s_515b894c608172::t_766dc3f3d65300 14,765-769
+cortex-editor/src/shared/composite-key.ts
+  s_515b894c608172::t_48862d5b268611 12
+  s_515b894c608172::t_b3ee93dd4ff088 33-41,47-53
+  s_515b894c608172::t_fe6fd313506edb 54
+cortex-editor/tests/browser/panel.classop.test.tsx
+  s_515b894c608172::t_6f90ab524caddf 162-243
+  s_515b894c608172::t_406869034455f0 8,70,77-82,106
+cortex-editor/src/schemas/pending-edit.ts
+  s_515b894c608172::t_513611130af6e1 224-268
+  s_515b894c608172::t_3aba62d1acab24 359-364,366,376,378-388,391
+  s_515b894c608172::t_9d172541f97500 305
+  s_515b894c608172::t_5bf644f1cdca96 365,367-375,377
+cortex-editor/src/browser/hooks/useEditStagingBuffer.ts
+  s_515b894c608172::t_1a67f3c9784a3e 185-187
+  s_515b894c608172::t_766dc3f3d65300 2
+  s_515b894c608172::t_eca88f2ce3fc4c 322-328
+cortex-editor/src/browser/components/Panel.tsx
+  s_515b894c608172::t_3889ae87ac4d2e 1328,1333
+  s_515b894c608172::t_766dc3f3d65300 930-932
+  s_515b894c608172::t_44face2104960e 1210-1249
+  s_515b894c608172::t_116f2657f7dcab 45
+  s_515b894c608172::t_6387c5a03b8a81 1363-1369
+  s_515b894c608172::t_52e86aba330aa4 1250
+cortex-editor/src/core/staged-edits.ts
+  s_515b894c608172::t_b28b6229b726e6 319-358
+  s_515b894c608172::t_b6ed34eb1eda6b 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cb0219feca58f8efe49206a31377152abf0e1591",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
