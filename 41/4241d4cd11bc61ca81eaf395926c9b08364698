@@ -1,0 +1,25 @@
+cortex-editor/tests/e2e/panel-template-blast-radius.spec.ts
+  s_515b894c608172::t_07a574dc41455f 8-9,18,20,72,91,93-98,111
+cortex-editor/tests/e2e/fixtures/basic.html
+  s_515b894c608172::t_833d73be8ea6e0 49
+cortex-editor/src/browser/shared-source-detector.ts
+  s_515b894c608172::t_833d73be8ea6e0 25
+cortex-editor/tests/e2e/helpers/fixture-server.ts
+  s_515b894c608172::t_833d73be8ea6e0 47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "414241d4cd11bc61ca81eaf395926c9b08364698",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
