@@ -50,6 +50,18 @@ const AnnotationSchema = z.object({
   id: z.string(),
   status: AnnotationStatusSchema,
   elementSource: z.string(),
+  /** COR-27. Optional so annotations persisted before this field still load —
+   *  a stricter schema would make the whole store fail to parse and silently
+   *  drop every existing comment. */
+  sourceResolutionHint: z
+    .object({
+      tagName: z.string(),
+      className: z.string().optional(),
+      id: z.string().optional(),
+      textPreview: z.string(),
+      domSelector: z.string(),
+    })
+    .optional(),
   text: z.string(),
   elementContext: ElementContextSchema.optional(),
   currentStyles: z.record(z.string(), z.string()).optional(),

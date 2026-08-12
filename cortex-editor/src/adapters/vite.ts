@@ -1347,6 +1347,9 @@ export function cortexEditor(_options?: CortexEditorOptions): Plugin {
           }
           const ann = currentSession!.annotations.create({
             elementSource: data.elementSource,
+            // COR-27: without this the agent gets a `cortex-preview:` id and no
+            // way to resolve it — a comment it can read but cannot act on.
+            sourceResolutionHint: data.sourceResolutionHint,
             text: data.text,
             elementContext: data.elementContext,
             currentStyles: data.currentStyles,

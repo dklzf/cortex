@@ -154,10 +154,29 @@ export interface FixMeta {
 
 export type AnnotationStatus = 'pending' | 'acknowledged' | 'resolved' | 'dismissed'
 
+/** The DOM facts that let an agent locate an element the source transform never
+ *  annotated. Mirrors `SourceResolutionHint` in the pending-edit schema; declared
+ *  here because this file is the protocol contract and must not import from
+ *  `browser/`. The zod schema in `schemas/pending-edit.ts` is the enforcement. */
+export interface SourceResolutionHint {
+  tagName: string
+  className?: string
+  id?: string
+  textPreview: string
+  domSelector: string
+}
+
 export interface Annotation {
   id: string
   status: AnnotationStatus
   elementSource: string
+  /** COR-27: set when `elementSource` is a `cortex-preview:` id, i.e. the user
+   *  commented on an element the source transform never annotated. The id is
+   *  meaningless outside the page session that minted it, so this hint is the
+   *  only thing that lets the agent find the call site. Page-derived, therefore
+   *  fenced on the way out — `sanitizeHintsForAgent` already walks any
+   *  `sourceResolutionHint` key, so it is covered by construction. */
+  sourceResolutionHint?: SourceResolutionHint
   text: string
   elementContext?: ElementContext
   currentStyles?: Record<string, string>
@@ -180,6 +199,8 @@ export interface ThreadMessage {
 
 export interface CreateAnnotationParams {
   elementSource: string
+  /** COR-27 — see Annotation.sourceResolutionHint. */
+  sourceResolutionHint?: SourceResolutionHint
   text: string
   elementContext?: ElementContext
   currentStyles?: Record<string, string>

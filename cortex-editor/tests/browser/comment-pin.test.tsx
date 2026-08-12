@@ -129,3 +129,134 @@ describe('CommentPin', () => {
     }, { timeout: 500 })
   })
 })
+
+describe('CommentPin — the pin targets what the user CLICKED (COR-27)', () => {
+  let container: HTMLDivElement
+  let wrapper: HTMLDivElement
+  let button: HTMLButtonElement
+
+  const rect = (el: Element, box: { left: number; top: number; width: number; height: number }): void => {
+    ;(el as HTMLElement).getBoundingClientRect = () => ({
+      x: box.left, y: box.top, width: box.width, height: box.height,
+      left: box.left, top: box.top, right: box.left + box.width, bottom: box.top + box.height,
+      toJSON() { return this },
+    }) as DOMRect
+  }
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+
+    // An ANNOTATED layout wrapper containing an UNANNOTATED button — the shape
+    // of a component-library app, where source-transform skips node_modules so
+    // the majority of pointable nodes carry no source at all.
+    wrapper = document.createElement('div')
+    wrapper.setAttribute('data-cortex-source', 'src/Layout.tsx:4:3')
+    rect(wrapper, { left: 0, top: 0, width: 1000, height: 800 })
+    button = document.createElement('button')
+    button.className = 'btn btn-primary'
+    button.textContent = 'Save'
+    rect(button, { left: 100, top: 200, width: 200, height: 40 })
+    wrapper.appendChild(button)
+    document.body.appendChild(wrapper)
+  })
+
+  afterEach(() => {
+    render(null, container)
+    container.remove()
+    wrapper.remove()
+  })
+
+  // Effects must flush before the click: the handler is attached inside a
+  // useEffect, and Preact defers those past render(). Dispatching immediately
+  // hits a window with no listener, which surfaces as "the click was rejected"
+  // and would have been read as a product bug.
+  const flush = (): Promise<void> => new Promise(r => setTimeout(r, 20))
+
+  const clickAndSubmit = async (channel: ReturnType<typeof mockChannel>, clientX: number, clientY: number): Promise<void> => {
+    render(<CommentPin annotations={[]} commentMode channel={channel} onReply={vi.fn()} />, container)
+    await flush()
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX, clientY }))
+    await flush()
+    const input = container.querySelector<HTMLInputElement>('.cortex-pin__input-field')
+    if (!input) throw new Error('[test] comment input did not open — the click was rejected')
+    input.value = 'this button is too small'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    // Enter must not be dispatched in the same tick: the submit handler closes
+    // over pinText, and the state update from the input event has to commit
+    // first or it reads the empty initial value and refuses to send.
+    await flush()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await flush()
+  }
+
+  it('records the unannotated BUTTON, not the annotated wrapper above it', async () => {
+    // The whole defect: `closest('[data-cortex-source]')` recorded the wrapper,
+    // and nothing told the user their target had been substituted. The comment
+    // gesture exists to describe ONE specific element.
+    const channel = mockChannel()
+    await clickAndSubmit(channel, 150, 220)
+    const msg = channel._lastSent.find(
+      (m): m is { type: string; elementSource: string } =>
+        (m as { type?: string }).type === 'comment',
+    )
+    expect(msg).toBeDefined()
+    expect(msg!.elementSource).not.toBe('src/Layout.tsx:4:3')
+    expect(msg!.elementSource).toMatch(/^cortex-preview:/)
+  })
+
+  it('carries a resolution hint, or the agent has an id it cannot resolve', async () => {
+    // A preview source is a page-session id. Without the hint the agent receives
+    // a comment it can read and cannot act on — worse than the substitution,
+    // because it looks like it worked.
+    const channel = mockChannel()
+    await clickAndSubmit(channel, 150, 220)
+    const msg = channel._lastSent.find(
+      (m): m is { type: string; sourceResolutionHint?: Record<string, string> } =>
+        (m as { type?: string }).type === 'comment',
+    )
+    expect(msg!.sourceResolutionHint).toMatchObject({
+      tagName: 'button',
+      className: 'btn btn-primary',
+      textPreview: 'Save',
+    })
+  })
+
+  it('positions the pin within the CLICKED element rect, not the ancestor rect', async () => {
+    // The second half of the bug, and the more visible one: pinPosition was a
+    // fraction of the ANCESTOR's box. Clicking the button's centre stored
+    // (0.15, 0.275) of a 1000x800 wrapper instead of (0.25, 0.5) of the button
+    // — so the pin rendered somewhere else entirely.
+    const channel = mockChannel()
+    await clickAndSubmit(channel, 150, 220)
+    const msg = channel._lastSent.find(
+      (m): m is { type: string; pinPosition: { x: number; y: number } } =>
+        (m as { type?: string }).type === 'comment',
+    )
+    expect(msg!.pinPosition.x).toBeCloseTo((150 - 100) / 200, 3)
+    expect(msg!.pinPosition.y).toBeCloseTo((220 - 200) / 40, 3)
+  })
+
+  it('still uses the real source when the clicked element HAS one', async () => {
+    // The annotated path must not regress into preview ids — that would push
+    // every comment through agent resolution for no reason.
+    const channel = mockChannel()
+    render(<CommentPin annotations={[]} commentMode channel={channel} onReply={vi.fn()} />, container)
+    await flush()
+    wrapper.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 10, clientY: 10 }))
+    await flush()
+    const input = container.querySelector<HTMLInputElement>('.cortex-pin__input-field')
+    if (!input) throw new Error('[test] comment input did not open')
+    input.value = 'wrapper comment'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await flush()
+    const msg = channel._lastSent.find(
+      (m): m is { type: string; elementSource: string; sourceResolutionHint?: unknown } =>
+        (m as { type?: string }).type === 'comment',
+    )
+    expect(msg!.elementSource).toBe('src/Layout.tsx:4:3')
+    expect(msg!.sourceResolutionHint).toBeUndefined()
+  })
+})
