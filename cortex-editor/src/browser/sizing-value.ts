@@ -250,6 +250,23 @@ export function makeSizingDimension(authored: string, used: string | undefined):
 }
 
 /**
+ * Replace the AUTHORED value, keeping the measurement.
+ *
+ * What a staged override is: the user has asked for a new value and source has
+ * not caught up, so the box has not moved yet and the existing measurement is
+ * still the true one.
+ *
+ * Exists because the alternative was round-tripping the number back through the
+ * string constructor — `usedPx.toString()` yields `"200"`, a bare number with no
+ * unit, which the pixel-length check correctly rejects and the measurement was
+ * silently lost. Serializing a number only to re-parse it is where the unit went
+ * missing, and an override never needed to re-measure at all.
+ */
+export function withAuthoredSize(current: SizingDimension, authored: string): SizingDimension {
+  return { mode: classifySizingValue(authored), authored, usedPx: current.usedPx }
+}
+
+/**
  * A used size is a PIXEL LENGTH or it is nothing.
  *
  * `Number.parseFloat('50%')` returns 50, so a bare parse stored `usedPx: 50`

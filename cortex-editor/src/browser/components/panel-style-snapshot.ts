@@ -17,7 +17,7 @@
 import type { InteractionState } from '../state-detector.js'
 import type { SharedClassInfo } from '../shared-class-detector.js'
 import { parseLayoutValues } from './sections/LayoutSection.js'
-import { makeSizingDimension } from '../sizing-value.js'
+import { makeSizingDimension, withAuthoredSize } from '../sizing-value.js'
 import { parseTypographyValues } from './sections/TypographySection.js'
 import { parseFillValues } from './sections/fill-utils.js'
 import { parseBorderValues } from './sections/BorderSection.js'
@@ -152,8 +152,8 @@ export function computePanelStyleSnapshot(input: ComputePanelStyleSnapshotInput)
   // An override replaces the AUTHORED value only; the measurement is still the
   // real box, which has not moved yet — the override is what the user just
   // asked for and source has not caught up with.
-  if (widthOverride !== undefined) layout.width = makeSizingDimension(widthOverride, layout.width.usedPx?.toString())
-  if (heightOverride !== undefined) layout.height = makeSizingDimension(heightOverride, layout.height.usedPx?.toString())
+  if (widthOverride !== undefined) layout.width = withAuthoredSize(layout.width, widthOverride)
+  if (heightOverride !== undefined) layout.height = withAuthoredSize(layout.height, heightOverride)
 
   const parsed = {
     spacing: parseSpacingValues(cs),
