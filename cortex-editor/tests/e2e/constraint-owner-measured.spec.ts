@@ -167,6 +167,36 @@ const FIXTURE = `<!doctype html><body style="margin:0">
     <div id="implicitChild" style="height:40px"></div>
     <div style="height:40px"></div></div>
 
+  <!-- rotate(90deg): the bounding WIDTH is derived from the element's HEIGHT,
+       so a rect/offset ratio measures the wrong dimension entirely. -->
+  <div id="rotWrap" style="width:600px;height:300px">
+    <div id="rotChild" style="width:100px;height:40px;transform:rotate(90deg)"></div></div>
+
+  <!-- No style attribute at all: the probe must not leave style="" behind, or
+       the element permanently starts matching [style]. -->
+  <div id="cleanWrap" style="width:600px">
+    <div id="cleanChild" class="plain"></div></div>
+
+  <!-- Smaller than the 16px probe and sitting on its max: the shrink fallback
+       must not write a NEGATIVE size. -->
+  <div id="tinyWrap" style="width:600px">
+    <div id="tinyChild" style="width:10px;max-width:10px;height:10px"></div></div>
+
+  <!-- max-width clamp in a line with ample free space: a partial delta that is
+       NOT flex-shrink's doing. -->
+  <div id="clampWrap" style="display:flex;width:600px">
+    <div id="clampChild" style="width:40px;max-width:48px;height:40px"></div></div>
+
+  <!-- Zero-grow item with an INTRINSIC basis. -->
+  <div id="intrinsicWrap" style="display:flex;width:600px">
+    <div id="intrinsicChild" style="flex:0 0 max-content;height:40px">some content here</div>
+    <div style="flex:1;height:40px"></div></div>
+
+  <!-- Two grid items each inside their OWN display:contents wrapper. -->
+  <div id="cousinWrap" style="display:grid;grid-template-columns:1fr 1fr;width:600px">
+    <div style="display:contents"><div id="cousinChild" style="height:40px"></div></div>
+    <div style="display:contents"><div id="cousinSibling" style="height:40px"></div></div></div>
+
   <!-- A wrapping flex line the probe would tip over: two centred items totalling
        290px in a 300px container become two lines at +16px. -->
   <div id="wrapWrap" style="display:flex;flex-wrap:wrap;justify-content:center;width:300px">
@@ -447,16 +477,23 @@ test.describe('round-2 review: box models, bases, and axes', () => {
     expect(o.property).toBe('flex-basis')
   })
 
-  test('a non-replaced inline box is refused, not answered', async ({ page }) => {
-    // `width` does not apply to a <span>, and its computed width stays `auto`.
-    // The prediction fallback would report element-owned width at 1:1 — a
-    // confident answer about a property that cannot move this edge.
+  test('a non-replaced inline box is refused, and the refusal SURVIVES', async ({ page }) => {
+    // `width` does not apply to a <span>. The probe reports 'inert' — a distinct
+    // verdict from "could not measure" — because returning null for both let
+    // measureConstraintOwner fall through to the PREDICTOR, which answers
+    // element-owned width at 1:1 and tells the user that dragging this edge
+    // writes a width that moves it. Asserting only the probe would have missed
+    // that; the caller's answer is what the user sees.
     const probe = await page.evaluate(() => {
       const el = document.getElementById('inlineChild')!
       return (window as unknown as { CO: { probeConstraint: (n: Element, e: string) => unknown } })
         .CO.probeConstraint(el, 'right')
     })
-    expect(probe).toBeNull()
+    expect(probe).toBe('inert')
+
+    const o = await own(page, 'inlineChild', 'right')
+    expect(o.edgeResponse).toBe(0)
+    expect(o.reason).toContain('does not apply')
   })
 
   test('an implicit grid track is NOT distinguishable, and the code says so', async ({ page }) => {
@@ -492,5 +529,72 @@ test.describe('round-2 review: box models, bases, and axes', () => {
       return CO.pointerDeltaToSizeDelta(CO.measureConstraintOwner(el, 'right'), 'right', 20)
     })
     expect(cssDelta).toBeCloseTo(10, 1)
+  })
+})
+
+test.describe('round-3 review: the page can still lie in eleven more ways', () => {
+  test('a rotated element is refused, not measured on the wrong axis', async ({ page }) => {
+    // Under rotate(90deg) the bounding WIDTH comes from the element's HEIGHT, so
+    // rect/offset is not an axis scale — it measures the other dimension.
+    //
+    // HONEST NOTE, verified by mutation: this refusal is currently
+    // over-determined. Removing the transform guard leaves the test passing,
+    // because a 90-degree rotation also makes the measured size delta zero (the
+    // bounding width tracks the unchanged height), which the size-did-not-move
+    // path catches anyway. The guard is therefore defence-in-depth here rather
+    // than the thing under test — it exists for partial rotations and skews
+    // where the delta is NON-zero and the scale would be silently wrong. I have
+    // not built a fixture that isolates it, so this asserts the behaviour and
+    // says plainly what it does and does not prove.
+    const probe = await page.evaluate(() => {
+      const el = document.getElementById('rotChild')!
+      return (window as unknown as { CO: { probeConstraint: (n: Element, e: string) => unknown } })
+        .CO.probeConstraint(el, 'right')
+    })
+    expect(probe).toBeNull()
+  })
+
+  test('an element with no style attribute does not gain style=""', async ({ page }) => {
+    // Not cosmetic: the element would permanently start matching `[style]`,
+    // which author CSS and test selectors both use.
+    const after = await page.evaluate(() => {
+      const el = document.getElementById('cleanChild')!
+      ;(window as unknown as { CO: { probeConstraint: (n: Element, e: string) => unknown } })
+        .CO.probeConstraint(el, 'right')
+      return { has: el.hasAttribute('style'), matches: el.matches('[style]') }
+    })
+    expect(after).toEqual({ has: false, matches: false })
+  })
+
+  test('an element smaller than the probe still reports that it can shrink', async ({ page }) => {
+    // 10px on its max: growth clamps, and a fixed -16px shrink writes `-6px` —
+    // an invalid declaration the engine discards, leaving the element reported
+    // as pinned in BOTH directions when it shrinks perfectly well.
+    const o = await own(page, 'tinyChild', 'right')
+    expect(o.edgeResponse).toBeGreaterThan(0)
+  })
+
+  test('a max-width clamp is named, not blamed on flex-shrink', async ({ page }) => {
+    // Ample free space in the line, so flex-shrink is not what stopped it.
+    const o = await own(page, 'clampChild', 'right')
+    expect(o.property).toBe('max-width')
+    expect(o.reason).toContain('max-width')
+  })
+
+  test('an intrinsic flex-basis is basis-owned', async ({ page }) => {
+    // `flex: 0 0 max-content` supplies the main size just as a length does, so
+    // naming flex-grow is the same dead end.
+    const o = await own(page, 'intrinsicChild', 'right')
+    expect(o.target).toBe('flex-allocation')
+    expect(o.property).toBe('flex-basis')
+  })
+
+  test('a grid cousin promoted out of display:contents is still seen', async ({ page }) => {
+    // Each item sits in its own contents wrapper, so listing the host's children
+    // returned WRAPPERS: self's was filtered by `contains`, and the other
+    // generates no box so its rect never changes. The track reallocation went
+    // unseen and the item was reported element-owned.
+    const o = await own(page, 'cousinChild', 'right')
+    expect(o.target).toBe('grid-track')
   })
 })

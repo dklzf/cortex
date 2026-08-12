@@ -401,7 +401,13 @@ const edgeValue = (r: DOMRect, edge: ResizeEdge): number =>
  *  the flex or grid container entirely, and a `flex: 1` child under a
  *  contents-wrapper was reported as an element-owned pinned width. */
 function layoutParentOf(el: Element): { parent: Element; style: CSSStyleDeclaration } | null {
-  let p = el.parentElement
+  // A SLOTTED element participates in the formatting context containing its
+  // <slot>, not its light-DOM host — so a `flex: 1` child slotted into a
+  // shadow-root flex container was resolved against the wrong parent entirely
+  // and reported element-owned. `assignedSlot` is the documented hop. Raised in
+  // review.
+  const slot = (el as Element & { assignedSlot?: HTMLSlotElement | null }).assignedSlot
+  let p = slot ? slot.parentElement : el.parentElement
   while (p) {
     const style = readStyle(p)
     if (!style) return null
@@ -418,10 +424,18 @@ function layoutParentOf(el: Element): { parent: Element; style: CSSStyleDeclarat
  *  `grid-template-columns` for a left/right drag there sends the user to edit a
  *  property that does not control the edge they grabbed. */
 function trackPropertyFor(edge: ResizeEdge, containerStyle: CSSStyleDeclaration): string {
-  const verticalWm = (containerStyle.writingMode || '').startsWith('vertical')
   const physicalInline = INLINE_EDGES.has(edge)
-  const isInlineAxis = verticalWm ? !physicalInline : physicalInline
+  const isInlineAxis = isVerticalWritingMode(containerStyle) ? !physicalInline : physicalInline
   return isInlineAxis ? TRACK_PROPERTY.inline : TRACK_PROPERTY.block
+}
+
+/** `sideways-rl` / `sideways-lr` run the inline axis vertically exactly as
+ *  `vertical-rl` does. A `startsWith('vertical')` test missed them and routed a
+ *  horizontal resize to the wrong axis — silently, since the gesture still
+ *  "works". */
+function isVerticalWritingMode(style: CSSStyleDeclaration): boolean {
+  const wm = (style.writingMode || '').trim()
+  return wm.startsWith('vertical') || wm.startsWith('sideways')
 }
 
 // KNOWN LIMITATION — an item in an IMPLICIT track is sized by
@@ -445,16 +459,84 @@ function trackPropertyFor(edge: ResizeEdge, containerStyle: CSSStyleDeclaration)
 /** True when the flex MAIN axis runs along the dragged physical edge. */
 function draggingFlexMainAxis(edge: ResizeEdge, containerStyle: CSSStyleDeclaration): boolean {
   const dir = containerStyle.flexDirection || 'row'
-  const verticalWm = (containerStyle.writingMode || '').startsWith('vertical')
-  // `row` follows the INLINE axis, which a vertical writing mode rotates.
-  const mainIsPhysicallyInline = dir.startsWith('row') !== verticalWm
+  // `row` follows the INLINE axis, which a vertical (or sideways) writing mode
+  // rotates.
+  const mainIsPhysicallyInline = dir.startsWith('row') !== isVerticalWritingMode(containerStyle)
   return mainIsPhysicallyInline === INLINE_EDGES.has(edge)
+}
+
+/** True when the computed transform rotates or skews, so a bounding-box ratio
+ *  no longer measures a single axis. `matrix(a,b,c,d,…)` is axis-aligned only
+ *  when b and c are both zero; `matrix3d` is rejected outright rather than
+ *  decomposed, because getting that wrong is silent. */
+function hasNonAxisAlignedTransform(style: CSSStyleDeclaration): boolean {
+  const t = (style.transform || 'none').trim()
+  if (t === 'none' || t === '') return false
+  const m = /^matrix\(([^)]+)\)$/.exec(t)
+  if (!m?.[1]) return true
+  const parts = m[1].split(',').map(v => Number.parseFloat(v))
+  const b = parts[1] ?? 0
+  const c = parts[2] ?? 0
+  return Math.abs(b) > 1e-6 || Math.abs(c) > 1e-6
+}
+
+/** The min/max property the element is sitting on, if the probe stopped there.
+ *
+ *  Distinguishes "the flex line is over-constrained" from "this box has its own
+ *  ceiling" — two different edits, and naming the wrong one wastes the user's
+ *  time on a property that is not holding the element. */
+function bindingClamp(
+  element: Element,
+  sizeProperty: 'width' | 'height',
+  probe: { sizeDelta: number; requested: number; scale: number },
+): string | null {
+  if (Math.abs(probe.sizeDelta - probe.requested) <= EPSILON) return null
+  const style = readStyle(element)
+  if (!style) return null
+  const cap = sizeProperty === 'width' ? 'max-width' : 'max-height'
+  const floor = sizeProperty === 'width' ? 'min-width' : 'min-height'
+  const growing = probe.requested > 0
+  const raw = style.getPropertyValue(growing ? cap : floor)
+  const limit = Number.parseFloat(raw)
+  if (!Number.isFinite(limit)) return null
+  // Did we land ON the limit? Compared in CSS pixels, so a transform cannot
+  // make a real clamp look like a near-miss.
+  const used = Number.parseFloat(style.getPropertyValue(sizeProperty))
+  const scale = probe.scale || 1
+  const reached = Number.isFinite(used) && Math.abs((used + probe.sizeDelta / scale) - limit) < 1
+  return reached ? (growing ? cap : floor) : null
 }
 
 interface Snapshot { rect: DOMRect; siblings: DOMRect[] }
 
 function snapshot(el: Element, siblings: Element[]): Snapshot {
   return { rect: el.getBoundingClientRect(), siblings: siblings.map(s => s.getBoundingClientRect()) }
+}
+
+/** The element's real layout siblings, with `display: contents` wrappers
+ *  replaced by the boxes they promote.
+ *
+ *  Listing `layoutHost.children` returned the WRAPPERS when items are each
+ *  inside their own contents wrapper: the selected element's wrapper was
+ *  filtered out by `contains`, and the other wrapper generates no box, so its
+ *  rect is empty and never appears to change. A track reallocation that resized
+ *  a cousin therefore went unseen. Raised in review. */
+function layoutSiblingsOf(host: Element | null | undefined, self: Element): Element[] {
+  const out: Element[] = []
+  const walk = (node: Element): void => {
+    for (const child of node.children) {
+      if (child === self || child.contains(self)) {
+        // A contents wrapper CONTAINING self still promotes self's true
+        // siblings, so descend rather than skipping the subtree wholesale.
+        if (readStyle(child)?.display === 'contents') walk(child)
+        continue
+      }
+      if (readStyle(child)?.display === 'contents') walk(child)
+      else out.push(child)
+    }
+  }
+  if (host) walk(host)
+  return out
 }
 
 const siblingsDiffer = (a: DOMRect[], b: DOMRect[]): boolean =>
@@ -485,7 +567,7 @@ const siblingsDiffer = (a: DOMRect[], b: DOMRect[]): boolean =>
  * changed the layout it was trying to measure (a crossed flex-wrap boundary).
  * Both mean "unknown", never "no response".
  */
-export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintProbe | null {
+export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintProbe | 'inert' | null {
   const el = element as HTMLElement
   if (!el.style || typeof el.getBoundingClientRect !== 'function') return null
 
@@ -501,7 +583,7 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
   // actually resized — and `siblingChanged` stayed false for a genuinely
   // track-allocated item.
   const layoutHost = layoutParentOf(el)?.parent ?? el.parentElement
-  const siblings = Array.from(layoutHost?.children ?? []).filter(s => s !== el && !s.contains(el))
+  const siblings = layoutSiblingsOf(layoutHost, el)
   const before = snapshot(el, siblings)
   const baseSize = inline ? before.rect.width : before.rect.height
   if (!(baseSize > 0)) return null
@@ -511,7 +593,7 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
   // prediction fallback, which cheerfully reports element-owned `width` at 1:1 —
   // a confident answer about a property that cannot move this edge. Refuse
   // instead; `isSizeInert` already encodes exactly this rule for the panel.
-  if (isSizeInert(el)) return null
+  if (isSizeInert(el)) return 'inert'
 
   // The write is in CSS pixels; the rect is in TRANSFORMED pixels, so the two
   // must be related before a requested delta can be compared to a measured one.
@@ -524,11 +606,22 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
   // greater than 1 with no transform present at all — and a fully honoured 16px
   // write was then compared against an inflated `requested` and misread as
   // partial. Raised in review.
+  // A ratio of rect to offset is an AXIS SCALE only for axis-aligned transforms.
+  // Under `rotate(90deg)` the bounding width is derived from the element's
+  // HEIGHT, so the ratio measures the wrong dimension entirely. Detect any
+  // non-axis-aligned matrix and refuse rather than report a confident number
+  // built from the other axis. Raised in review.
+  if (hasNonAxisAlignedTransform(own)) return null
   const offsetSize = inline ? el.offsetWidth : el.offsetHeight
   const scale = offsetSize > 0 ? baseSize / offsetSize : 1
   const cssBase = Number.parseFloat(own.getPropertyValue(sizeProperty))
   if (!Number.isFinite(cssBase) || cssBase <= 0) return null
 
+  // Whether a `style` attribute existed AT ALL. Removing the temporary
+  // declarations leaves `style=""` behind, and that is not a cosmetic
+  // reserialization: the element permanently starts matching `[style]`, which
+  // author CSS and test selectors both use. Raised in review.
+  const hadStyleAttr = el.hasAttribute('style')
   const priorValue = el.style.getPropertyValue(sizeProperty)
   const priorPriority = el.style.getPropertyPriority(sizeProperty)
   const priorTransition = el.style.getPropertyValue('transition')
@@ -550,6 +643,14 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
     // STARTING value, so sizeDelta comes back ~0 and a resizable element looks
     // pinned or container-owned. Suppressing transitions for the duration is the
     // only way to read the settled value in one task.
+    //
+    // But NOT while one is already running: `transition: none` cancels a live
+    // transition, so the geometry jumps from its interpolated value to the
+    // endpoint and the measured delta includes the remaining animation as if it
+    // were the probe's doing. Refusing is right — the element is mid-flight, so
+    // there is no stable layout to measure and any number would describe a frame
+    // rather than a constraint. Raised in review.
+    if (el.getAnimations && el.getAnimations().some(a => a.playState === 'running')) return null
     el.style.setProperty('transition', 'none', 'important')
 
     let after = perturb(PROBE_PX)
@@ -562,11 +663,17 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
     // pinned would refuse an inward drag the user is entitled to. Constraint
     // response is DIRECTIONAL, so ask the other question before concluding.
     if (Math.abs(sizeDelta) < EPSILON) {
-      const shrunk = perturb(-PROBE_PX)
+      // Never below zero. On an element smaller than the probe, `10 - 16` writes
+      // `-6px` — an invalid declaration the engine discards, leaving the size
+      // unchanged and the element reported as pinned in BOTH directions when it
+      // shrinks perfectly well. Half the current size keeps the write valid at
+      // any scale. Raised in review.
+      const shrinkBy = Math.min(PROBE_PX, cssBase / 2)
+      const shrunk = perturb(-shrinkBy)
       const shrunkDelta = (inline ? shrunk.rect.width : shrunk.rect.height) - baseSize
       if (Math.abs(shrunkDelta) > EPSILON) {
         after = shrunk
-        requested = -PROBE_PX * scale
+        requested = -shrinkBy * scale
         sizeDelta = shrunkDelta
         shrinkOnly = true
       }
@@ -613,6 +720,7 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
     else el.style.removeProperty(sizeProperty)
     if (priorTransition) el.style.setProperty('transition', priorTransition, priorTransitionPriority)
     else el.style.removeProperty('transition')
+    if (!hadStyleAttr && el.getAttribute('style') === '') el.removeAttribute('style')
   }
 }
 
@@ -627,6 +735,26 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
  */
 export function measureConstraintOwner(element: Element, edge: ResizeEdge): ConstraintOwnership {
   const probe = probeConstraint(element, edge)
+
+  // INERT is a real answer, not a missing one. `width` does not apply to a
+  // non-replaced inline box, so handing it to the predictor — which reports
+  // element-owned width at 1:1 — tells the user that dragging this edge writes
+  // a width that moves it. Refusing to fall through is the whole point of
+  // distinguishing the two. Raised in review after the first fix returned null
+  // for both and the fallback happily answered anyway.
+  if (probe === 'inert') {
+    const sizeProp = INLINE_EDGES.has(edge) ? 'width' : 'height'
+    return {
+      target: 'element',
+      property: sizeProp,
+      appliesTo: 'self',
+      edgeResponse: 0,
+      screenPxPerCssPx: 1,
+      reason:
+        `${sizeProp} does not apply to a non-replaced inline element, so no ${sizeProp} value can ` +
+        `move this edge. Give it display: inline-block or block first.`,
+    }
+  }
   if (!probe) return resolveConstraintOwner(element, edge)
 
   const inline = INLINE_EDGES.has(edge)
@@ -669,8 +797,14 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
       // but the size comes from free-space distribution there, so flex-grow is
       // what to change. Testing "basis is not auto" alone got that backwards and
       // the display:contents fixture caught it.
-      const definiteBasis = basis !== 'auto' && basis !== 'content' && basis !== '' &&
-        Number.parseFloat(basis) > 0
+      // `content`, `max-content`, `min-content` and `fit-content` all supply an
+      // INTRINSIC main size, so a zero-grow item ignores both width probes and
+      // naming flex-grow is a dead end — exactly as for a definite length. The
+      // first version excluded `content` explicitly, which got this backwards.
+      // Raised in review.
+      const INTRINSIC_BASES = ['content', 'max-content', 'min-content', 'fit-content']
+      const definiteBasis = basis !== 'auto' && basis !== '' &&
+        (INTRINSIC_BASES.includes(basis) || Number.parseFloat(basis) > 0)
       const basisOverrides = definiteBasis && (!Number.isFinite(grow) || grow === 0)
       return {
         target: 'flex-allocation',
@@ -714,6 +848,24 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
   // negative for a positive request. Comparing |delta| to |requested| reads that
   // as "more than asked" and lets it through as element-owned; the sign is the
   // diagnostic. Caught by the e2e fixture, which is the only place it shows.
+  // A min/max clamp is NOT flex-shrink. A row child at `width: 40px;
+  // max-width: 48px` yields a partial delta in a line with ample free space, and
+  // blaming flex-shrink sends the user to edit a property that is not what is
+  // holding it. Check the clamp first and say which one. Raised in review.
+  const clampProp = bindingClamp(element, sizeProperty, probe)
+  if (clampProp) {
+    return {
+      target: 'element',
+      property: clampProp,
+      appliesTo: 'self',
+      edgeResponse,
+      screenPxPerCssPx: probe.scale,
+      reason:
+        `Measured: this element stopped at its ${clampProp}, so ${sizeProperty} cannot take it ` +
+        `further in that direction. Change ${clampProp} instead.`,
+    }
+  }
+
   if (isFlex && mainAxis && Math.abs(probe.sizeDelta - probe.requested) > EPSILON) {
     return {
       target: 'flex-allocation',
@@ -734,6 +886,24 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
   // there. `siblingChanged` compares SIZE as well as origin, because a column
   // widening leaves same-column siblings' origins untouched while resizing them.
   if (isGrid && probe.siblingChanged) {
+    // A `subgrid` parent does not OWN its track sizes — they are inherited from
+    // the ancestor grid — so pointing the user at this parent's property gives
+    // them something that cannot change the track. Say where it actually lives.
+    // Raised in review.
+    const isSubgrid = (layout?.style.getPropertyValue(trackProperty) ?? '').trim().startsWith('subgrid')
+    if (isSubgrid) {
+      return {
+        target: 'grid-track',
+        property: trackProperty,
+        appliesTo: 'parent',
+        edgeResponse,
+        screenPxPerCssPx: probe.scale,
+        reason:
+          `Measured: resizing this element changed a sibling, but its parent declares ` +
+          `${trackProperty}: subgrid — the track sizes are inherited from an ANCESTOR grid, not ` +
+          `owned here. Resize the track on that ancestor.`,
+      }
+    }
     return {
       target: 'grid-track',
       property: trackProperty,
