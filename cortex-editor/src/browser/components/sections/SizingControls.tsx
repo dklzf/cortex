@@ -116,6 +116,20 @@ export function SizingControls({
   const widthDisplay = isAutoWidth ? (values.width.usedPx ?? 0) : widthNum
   const heightDisplay = isAutoHeight ? (values.height.usedPx ?? 0) : heightNum
 
+  // Whether a real measurement exists to PIN. The display fallback above may
+  // legitimately show 0 for an unmeasured element — a blank field would be
+  // worse — but seeding a Fixed write from that 0 recreates the exact collapse
+  // this ticket exists to prevent, now at the consumer instead of the producer.
+  // A `display: contents` element has no box and its computed width stays
+  // `auto`, so `usedPx` is null; writing `width: 0px` there collapses it the
+  // moment its display changes back. Raised in review.
+  //
+  // Separate constants from the display values on purpose: conflating "what to
+  // show" with "what is safe to write" is how the 0 leaked into the write in
+  // the first place.
+  const canPinWidth = !isAutoWidth || values.width.usedPx !== null
+  const canPinHeight = !isAutoHeight || values.height.usedPx !== null
+
   const canLockAspect = widthMode === 'fixed' && heightMode === 'fixed'
   const widthDisabled = widthMode !== 'fixed'
   const heightDisabled = heightMode !== 'fixed'
@@ -207,14 +221,17 @@ export function SizingControls({
     // Switching TO Fixed must pin the element at the size it currently RENDERS.
     // Seeding from `widthNum` wrote `0px` for every non-fixed element, because
     // widthNum is NaN unless the value was authored in pixels.
-    else onChange({ property: 'width', value: `${widthDisplay}px` })
-  }, [onChange, widthDisplay])
+    //
+    // And refuse outright when there is no measurement: `0px` is not a
+    // conservative default here, it is a collapse.
+    else if (canPinWidth) onChange({ property: 'width', value: `${widthDisplay}px` })
+  }, [onChange, widthDisplay, canPinWidth])
 
   const handleHeightModeChange = useCallback((mode: SelectableSizingMode) => {
     if (mode === 'fit') onChange({ property: 'height', value: 'fit-content' })
     else if (mode === 'fill') onChange({ property: 'height', value: '100%' })
-    else onChange({ property: 'height', value: `${heightDisplay}px` })
-  }, [onChange, heightDisplay])
+    else if (canPinHeight) onChange({ property: 'height', value: `${heightDisplay}px` })
+  }, [onChange, heightDisplay, canPinHeight])
 
   // ── Min/max handlers ────────────────────────────────────────────
   const handleMinWidthChange = useCallback(

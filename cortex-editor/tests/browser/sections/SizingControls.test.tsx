@@ -437,4 +437,38 @@ describe('SizingControls', () => {
     // Under pre-fix code only 2 (width + height) receive stale, so this must fail.
     expect(staleInputs.length).toBe(6)
   })
+
+  it('refuses to write 0px when there is no measurement', async () => {
+    // A `display: contents` element has no box and its computed width stays
+    // `auto`, so `usedPx` is null. The display fallback legitimately shows 0 —
+    // a blank field would be worse — but seeding a Fixed WRITE from that 0
+    // emits `width: 0px` and collapses the element the moment its display
+    // changes back. That is the exact bug this ticket exists to prevent,
+    // recreated at the consumer instead of the producer.
+    const { onChange } = setup({
+      values: { ...DEFAULT_VALUES, width: makeSizingDimension('auto', undefined) },
+    })
+    const triggers = container.querySelectorAll('.cortex-sizing-trigger')
+    ;(triggers[0] as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fixed"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fixed"]') as HTMLElement).click()
+    expect(onChange).not.toHaveBeenCalledWith({ property: 'width', value: '0px' })
+  })
+
+  it('still pins at the rendered size when a measurement DOES exist', async () => {
+    // The guard must not break the case it sits next to: a fill element with a
+    // real measurement is exactly what "switch to Fixed" is for.
+    const { onChange } = setup({
+      values: { ...DEFAULT_VALUES, width: makeSizingDimension('100%', '1264px') },
+    })
+    const triggers = container.querySelectorAll('.cortex-sizing-trigger')
+    ;(triggers[0] as HTMLElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-value="fixed"]')).not.toBeNull()
+    }, { timeout: 500 })
+    ;(container.querySelector('[data-value="fixed"]') as HTMLElement).click()
+    expect(onChange).toHaveBeenCalledWith({ property: 'width', value: '1264px' })
+  })
 })
