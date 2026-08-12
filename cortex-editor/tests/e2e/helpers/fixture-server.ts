@@ -44,7 +44,7 @@ export const FIXTURE_SECONDARY_SOURCE = 'fixture:2:1'
  *  banner specs. All three `#map-item-*` elements share FIXTURE_MAP_SOURCE,
  *  simulating items rendered from the same `.map()` call site. Selecting any
  *  of them causes detectSharedSource() to return count=3 and Panel to show
- *  the "Used by N elements" banner. */
+ *  the "Editing all N" shared-source banner. */
 export const FIXTURE_MAP_SELECTOR = '#map-item-0'
 export const FIXTURE_MAP_SOURCE = 'fixture:map:1'
 /** Total count of elements sharing FIXTURE_MAP_SOURCE in basic.html.

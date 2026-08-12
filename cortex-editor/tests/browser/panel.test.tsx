@@ -2600,7 +2600,6 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     }, { timeout: 500 })
 
     const sourceBanner = shadowRoot.querySelector('.cortex-panel__scope--source-only')!
-    // Banner copy: "Used by N elements"
     // COR-12: the label now STATES why there is no per-instance option, rather
     // than only reporting a count. A control that cannot be honoured is not
     // rendered here; saying nothing about why left the user to infer it.
