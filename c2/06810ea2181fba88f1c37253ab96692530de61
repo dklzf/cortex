@@ -1,0 +1,26 @@
+cortex-editor/src/schemas/wire-format.ts
+  s_515b894c608172::t_43a203d924090a 62-67
+cortex-editor/src/browser/components/CommentPin.tsx
+  s_515b894c608172::t_a981d50d09bc7a 6-13,22-65,99
+cortex-editor/tests/browser/comment-pin.test.tsx
+  s_515b894c608172::t_d9c7fc06c086e3 315-322
+  s_515b894c608172::t_3e12001e8caf40 337-341
+  s_515b894c608172::t_dab17ebc57118d 323-336,342,344,348
+  s_515b894c608172::t_1b7626c03ab3e1 263-314,343,345-347,349-359
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c206810ea2181fba88f1c37253ab96692530de61",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
