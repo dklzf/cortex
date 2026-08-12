@@ -1,0 +1,23 @@
+cortex-editor/src/browser/constraint-owner.ts
+  s_515b894c608172::t_6f376cafceff87 54-60
+  s_515b894c608172::t_f734226ad405b3 296-527
+cortex-editor/tests/e2e/constraint-owner-measured.spec.ts
+  s_515b894c608172::t_e9c9968ac21ced 185-195,197-201
+  s_515b894c608172::t_0de5a12fed4e36 1-184,196,202-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b664a50ea381a9b92ad9b9a1f619fe5d5bd30ad0",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
