@@ -1,0 +1,21 @@
+cortex-editor/src/browser/components/sections/SizingControls.tsx
+  s_515b894c608172::t_cd4fb12df3305f 119-132,224-228,233-234
+cortex-editor/tests/browser/sections/SizingControls.test.tsx
+  s_515b894c608172::t_cfd8eb7b854492 440-473
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "84162c839fe2eef71922a4cb65f395fff1b32b14",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
