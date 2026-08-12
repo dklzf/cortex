@@ -242,12 +242,32 @@ export interface SizingDimension {
  * yields `usedPx: null` rather than NaN.
  */
 export function makeSizingDimension(authored: string, used: string | undefined): SizingDimension {
-  const usedNum = used === undefined ? Number.NaN : Number.parseFloat(used)
   return {
     mode: classifySizingValue(authored),
     authored,
-    usedPx: Number.isFinite(usedNum) ? usedNum : null,
+    usedPx: parseUsedPx(used),
   }
+}
+
+/**
+ * A used size is a PIXEL LENGTH or it is nothing.
+ *
+ * `Number.parseFloat('50%')` returns 50, so a bare parse stored `usedPx: 50`
+ * for an element with no pixel measurement at all — and a later switch to Fixed
+ * would write `50px` from it. That is the same fabricated-measurement bug this
+ * whole type exists to prevent, reachable through its own constructor. Raised
+ * in review.
+ *
+ * `classifySizingValue` already owns the "is this a pixel length" question for
+ * the AUTHORED side, including the magnitude guard against a hijacked
+ * getComputedStyle returning `1e300px`. Reusing it keeps one definition of what
+ * counts as a length rather than a second regex that can drift from it.
+ */
+function parseUsedPx(used: string | undefined): number | null {
+  if (used === undefined) return null
+  if (classifySizingValue(used) !== 'fixed') return null
+  const n = Number.parseFloat(used)
+  return Number.isFinite(n) ? n : null
 }
 
 export function classifySizingValue(value: string): SizingMode {

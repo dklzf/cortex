@@ -251,3 +251,28 @@ describe('makeSizingDimension — the pairing cannot be half-set (COR-6)', () =>
     expect(makeSizingDimension('auto', 'auto').usedPx).toBeNull()
   })
 })
+
+describe('makeSizingDimension — a used value must be a PIXEL length (COR-6 review)', () => {
+  it.each(['50%', 'fit-content', 'min-content', 'calc(100% - 10px)', '10em', ''])(
+    'rejects %s as a measurement instead of parsing a number out of it',
+    (used) => {
+      // parseFloat('50%') is 50. Storing that meant an element with no pixel
+      // measurement reported one, and a later switch to Fixed wrote `50px` from
+      // it — the fabricated measurement this type exists to prevent, reached
+      // through its own constructor.
+      expect(makeSizingDimension('100%', used).usedPx).toBeNull()
+    },
+  )
+
+  it('still accepts a genuine pixel length', () => {
+    expect(makeSizingDimension('100%', '1264px').usedPx).toBe(1264)
+  })
+
+  it('rejects an absurd magnitude, inheriting the authored-side guard', () => {
+    // These strings come from a page cortex does not control, and
+    // getComputedStyle is a page-overridable prototype method. Sharing
+    // classifySizingValue means the used side cannot drift from the authored
+    // side's bound.
+    expect(makeSizingDimension('100%', '1e300px').usedPx).toBeNull()
+  })
+})
