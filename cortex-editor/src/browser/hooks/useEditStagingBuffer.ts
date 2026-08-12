@@ -318,7 +318,11 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         // a false-positive storm, which is worse. Same first-seen-wins rule.
         for (const el of deepQueryAllElements(`[${PREVIEW_SOURCE_ATTR}]`)) {
           const id = el.getAttribute(PREVIEW_SOURCE_ATTR)
-          if (id === null) continue
+          // Falsy, not `=== null`: the attribute can be PRESENT but empty, and
+          // `ensurePreviewId` already treats empty as missing. Indexing '' would
+          // key an element under the bare prefix `cortex-preview:` and collide
+          // with any other empty-id element, resolving intents to the wrong node.
+          if (!id) continue
           const s = `${PREVIEW_SOURCE_PREFIX}${id}`
           if (!elBySource.has(s)) elBySource.set(s, el)
         }

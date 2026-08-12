@@ -978,6 +978,28 @@ describe('COR-26: structural intents with a preview source revalidate', () => {
     expect(divergent).toHaveLength(0)
   })
 
+  it('ignores an element whose preview id attribute is present but EMPTY', () => {
+    // getAttribute returns '' for a present-but-unset attribute, and
+    // ensurePreviewId already treats empty as missing. Indexing it would key the
+    // element under the bare prefix and collide with every other empty-id
+    // element, resolving intents to the wrong node.
+    mountRows(['a', 'b'])
+    const ghost = document.createElement('li')
+    ghost.setAttribute('data-cortex-preview-id', '')
+    parent.appendChild(ghost)
+
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => {
+      result.current.append(structuralIntent(['cortex-preview:a', 'cortex-preview:b']))
+    })
+
+    // The ghost is a third child, so the baseline genuinely drifted — but the
+    // point is that it must not be indexed under `cortex-preview:` and answer
+    // a lookup for some other intent.
+    const { divergent } = result.current.reconcile(['src/List.tsx'])
+    expect(divergent).toHaveLength(1)
+  })
+
   it('still skips a file-sourced intent whose file did not change', () => {
     // Control: the fix must not make everything unconditionally revalidate.
     const el = document.createElement('div')
