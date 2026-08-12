@@ -46,14 +46,27 @@ function locateAnnotated(ann: Annotation): Element | null {
 
   const selector = ann.sourceResolutionHint?.domSelector
   if (!selector || !isPreviewSource(ann.elementSource)) return null
-  let recovered: Element | null = null
+  let matches: Element[] = []
   try {
     // Page-derived, so it can be malformed — querySelector THROWS on an invalid
     // selector, which would take down every other pin on the page with it.
-    recovered = document.querySelector(selector)
+    //
+    // querySelectorALL, not querySelector: `domSelector` is built from a tag and
+    // a first class, so several `button.btn` rows share one. Taking the first
+    // match meant every annotation on those rows recovered to the SAME element
+    // and each stamped its own preview id over the last — pins collapsing onto
+    // one node, and the DOM left carrying ids that name the wrong element for
+    // the rest of the session. Raised in review.
+    matches = Array.from(document.querySelectorAll(selector))
   } catch {
     return null
   }
+  // Ambiguous means UNKNOWN. Recovering to an arbitrary one of N would place the
+  // comment on an element the user never picked, and be indistinguishable from a
+  // correct recovery — worse than the pin staying hidden, which at least does not
+  // assert anything false. `domSelector` carries no ordinal, so there is nothing
+  // here to disambiguate WITH.
+  const recovered = matches.length === 1 ? matches[0]! : null
   if (recovered) {
     recovered.setAttribute(
       PREVIEW_SOURCE_ATTR,

@@ -348,6 +348,35 @@ describe('CommentPin — a preview-sourced pin survives a reload (COR-27 review)
     expect(container.querySelectorAll('.cortex-pin').length).toBe(1)
   })
 
+  it('refuses to recover when the hint selector matches SEVERAL elements', async () => {
+    // domSelector is a tag plus a first class, so repeated rows share one.
+    // Taking the first match placed every annotation on the same element and
+    // stamped each preview id over the last — pins collapsing onto one node,
+    // and the DOM left carrying ids naming the wrong element for the session.
+    // An arbitrary pick is indistinguishable from a correct recovery, which is
+    // worse than a hidden pin: a hidden pin asserts nothing.
+    const twin = document.createElement('button')
+    twin.id = 'save-btn-2'
+    twin.className = 'row'
+    document.body.appendChild(twin)
+    button.className = 'row'
+    try {
+      render(
+        <CommentPin
+          annotations={[rehydrated({ tagName: 'button', textPreview: '', domSelector: 'button.row' })]}
+          commentMode={false} channel={mockChannel()} onReply={vi.fn()} />,
+        container,
+      )
+      await new Promise(r => setTimeout(r, 20))
+      expect(container.querySelector('.cortex-pin')).toBeNull()
+      // And neither candidate is stamped — a wrong id would outlive the render.
+      expect(button.hasAttribute('data-cortex-preview-id')).toBe(false)
+      expect(twin.hasAttribute('data-cortex-preview-id')).toBe(false)
+    } finally {
+      twin.remove()
+    }
+  })
+
   it('does not guess when there is no hint at all', async () => {
     render(
       <CommentPin annotations={[rehydrated()]} commentMode={false} channel={mockChannel()} onReply={vi.fn()} />,
