@@ -1,0 +1,37 @@
+cortex-editor/tests/browser/sections/SizingControls.test.tsx
+  s_515b894c608172::t_c0f0d070436b4c 1,28-33,181,203,224,239,287,298,337,347,355,416
+  s_515b894c608172::t_36b79806897b44 368,375,381-383,391,403
+cortex-editor/src/browser/components/sections/LayoutSection.tsx
+  s_515b894c608172::t_2325677398ae1f 42-48,114-118
+  s_515b894c608172::t_8e8b46ea99e148 17
+cortex-editor/tests/browser/components/panel-style-snapshot.test.ts
+  s_515b894c608172::t_70d6a441c60f77 118-129
+cortex-editor/src/browser/components/sections/SizingControls.tsx
+  s_515b894c608172::t_68085734e69616 27
+  s_515b894c608172::t_166975191dc1f3 37-39,90-92,101-102,107-117
+cortex-editor/src/browser/sizing-value.ts
+  s_515b894c608172::t_dc5694bd90ed59 202-252
+cortex-editor/tests/browser/sections/layout-section.test.tsx
+  s_515b894c608172::t_c0f0d070436b4c 1,38-43,185
+cortex-editor/src/browser/components/panel-style-snapshot.ts
+  s_515b894c608172::t_8e8b46ea99e148 20,137-144,152-156
+cortex-editor/tests/browser/sizing-value.test.ts
+  s_515b894c608172::t_7ac5f36908c38e 220-253
+  s_515b894c608172::t_023a725101855a 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1968b3c7a8c177af6dc90a07004dc34bbc198d65",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
