@@ -22,7 +22,7 @@ export interface SharedSourceInfo {
  * Business logic: When a user selects an element in the visual editor, this
  * function determines whether editing it would affect other elements rendered
  * from the same source location (e.g., list items from the same .map() call).
- * If so, the Panel can display a "Used by N elements" warning, letting the
+ * If so, the Panel can display an "Editing all N" scope banner, letting the
  * designer make an informed decision before applying changes.
  *
  * This parallels detectSharedClasses (for CSS-Module elements) but operates

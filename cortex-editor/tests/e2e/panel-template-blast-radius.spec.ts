@@ -5,8 +5,8 @@
  * when a selected element shares its data-cortex-source with 2+ siblings —
  * the hallmark of a .map()-rendered list where editing one item edits all.
  * T2 (ZF0-1583) wired that into Panel: when sharedSourceInfo is non-null AND
- * no CSS-class sharing is detected, Panel renders a "Used by N elements"
- * banner (cortex-panel__scope--source-only). Hovering the banner calls
+ * no CSS-class sharing is detected, Panel renders an "Editing all N — they
+ * share one source location" banner (cortex-panel__scope--source-only). Hovering the banner calls
  * highlightSharedElements(), which adds data-cortex-blast-radius to every
  * sibling (excluding the selected element). Mouse-leave calls clearHighlights()
  * to remove the attribute.
@@ -15,9 +15,9 @@
  *
  *   1. Select #map-item-0 (shares data-cortex-source="fixture:map:1" with two
  *      siblings). Panel's detectSharedSource() sees count=3.
- *   2. Assert: banner renders with text "Used by".
+ *   2. Assert: banner states the edit scope ("Editing all N").
  *   3. Assert: the count shown in the banner matches the actual DOM sibling
- *      count (3 elements in the fixture, so banner says "Used by 3 elements").
+ *      count (3 in the fixture, so the banner reads "Editing all 3").
  *   4. Hover the banner → assert data-cortex-blast-radius is present on
  *      #map-item-1 and #map-item-2 (the non-selected siblings). rAF-deferred;
  *      poll required.
@@ -69,7 +69,7 @@ import {
 
 test.describe('Template blast-radius banner (ZF0-1584) @fast-ci', () => {
   test(
-    'selecting a .map()-rendered element shows "Used by N elements" banner, ' +
+    'selecting a .map()-rendered element shows the "Editing all N" banner, ' +
       'hover adds data-cortex-blast-radius to siblings, mouse-leave clears it',
     async ({ page }) => {
       // ── Boot ──────────────────────────────────────────────────────────────
@@ -88,11 +88,14 @@ test.describe('Template blast-radius banner (ZF0-1584) @fast-ci', () => {
       // async state commit and can find the null-state branch instead.
       await waitForElementStatePanel(page)
 
-      // ── Step 2: banner text contains "Used by" ────────────────────────────
+      // ── Step 2: banner states the edit SCOPE ──────────────────────────────
       // cortex-panel__scope--source-only is the stable class for the
-      // SharedSourceInfo banner (Panel.tsx:1647). Text is inner: "Used by N
-      // elements". We assert on text-content after polling because detectSharedSource
-      // fires inside a useEffect — Preact commits asynchronously after selectElement.
+      // SharedSourceInfo banner. Copy is "Editing all N — they share one source
+      // location": COR-12 changed it from "Used by N elements" because that
+      // described the SOURCE while leaving the consequence — that the edit hits
+      // all N — for the user to infer. We assert on text-content after polling
+      // because detectSharedSource fires inside a useEffect, so Preact commits
+      // asynchronously after selectElement.
       await expect
         .poll(
           () =>
@@ -105,7 +108,7 @@ test.describe('Template blast-radius banner (ZF0-1584) @fast-ci', () => {
             }),
           { timeout: 3000 },
         )
-        .toContain('Used by')
+        .toContain('Editing all')
 
       // ── Step 3: displayed count matches actual DOM sibling count ──────────
       // FIXTURE_MAP_COUNT is the source of truth (3). The banner renders

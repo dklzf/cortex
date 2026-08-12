@@ -21,7 +21,13 @@
  * rendering and the `setSelection([], 'replace')` clear path.
  */
 export function expandSharedSource(elements: Element[]): Element[] {
-  if (elements.length === 0) return elements
+  // `return []`, not `return elements`. This returned the CALLER's array on the
+  // empty path, so clearing a selection stored a reference the caller still
+  // held — a later `push` on it would rewrite live selection state with no
+  // metadata capture and no re-render. The comment in resolveSelectionTargets
+  // claimed "expandSharedSource already allocates", which was true of every
+  // path except this one; that claim is corrected there.
+  if (elements.length === 0) return []
   const result: Element[] = []
   const seen = new Set<Element>()
   const seenSources = new Set<string>()
@@ -116,8 +122,12 @@ export function resolveSelectionTargets(
   // Copy, never the caller's array. `applySelectionUpdate` returns its input
   // directly for a 'replace', so returning `elements` by reference would let
   // selection state alias an array the caller still holds — a later mutation of
-  // that array would silently rewrite the live selection. `expandSharedSource`
-  // already allocates, so only this branch needed it.
+  // that array would silently rewrite the live selection.
+  //
+  // This used to say "expandSharedSource already allocates, so only this branch
+  // needed it". That was false for its empty-input path, which returned the
+  // caller's array — so the aliasing hole stayed open on exactly the case this
+  // comment asserted was safe. Both paths allocate now.
   if (options?.expandShared === false) return [...elements]
   return expandSharedSource(elements)
 }

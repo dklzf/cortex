@@ -541,6 +541,13 @@
 
 .cortex-panel__scope {
   display: flex;
+  /* Required for the `flex-basis: 100%` on __scope-note to actually start a new
+     row. Without it the container stays one line (flex-wrap defaults to nowrap),
+     the basis is just a shrink hint, and label + toggle + note compress together
+     — ellipsizing the label and squeezing the toggle, the exact opposite of what
+     the note's own comment claimed it did. Caught in review; the comment was
+     describing an intent the CSS did not implement. */
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   padding: var(--cx-sp-3) var(--cx-sp-5);
@@ -558,6 +565,16 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Opt out of the nowrap/ellipsis above where the label carries an EXPLANATION
+   rather than a short count. In the source-only banner there is no toggle
+   sharing the row, so wrapping costs nothing — and truncating there cut the
+   clause that justifies the number, which is the part worth reading. */
+.cortex-panel__scope-label--wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .cortex-panel__scope-toggle {
@@ -600,9 +617,23 @@
   background: var(--cx-btn-hover);
 }
 
+/* Scope note: a limitation of the ACTIVE scope, stated next to the control that
+   would otherwise imply it (COR-12). Secondary ink and xs type keep it
+   subordinate to the scope label, which is the warning-coloured primary signal —
+   this is a clarification, not a second alarm. Wraps to its own line via the
+   flex basis so a long note never squeezes the toggle. */
+.cortex-panel__scope-note {
+  flex-basis: 100%;
+  color: var(--cx-ink-secondary);
+  font-size: var(--cx-text-xs);
+}
+
 /* Source-only variant: inherits base scope banner styles; no toggle buttons.
-   Gated on {sharedSourceInfo && !sharedInfo} so CSS-class banner wins precedence
-   and this modifier never co-renders with the full scope banner (ZF0-1583).
+   Gated on {sharedSourceInfo} ALONE — COR-12 gave shared SOURCE precedence over
+   shared CLASS, reversing ZF0-1583. Sharing a class is a soft grouping (distinct
+   call sites, so per-instance is possible); sharing a source is a hard constraint
+   (one JSX location renders all N). When both hold the hard constraint decides,
+   so this modifier now REPLACES the toggle banner instead of yielding to it.
    Tighter block padding compensates for the absent toggle child's visual mass. */
 .cortex-panel__scope--source-only {
   padding-block: var(--cx-sp-2);
