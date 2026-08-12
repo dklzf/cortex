@@ -1,0 +1,21 @@
+cortex-editor/tests/browser/comment-pin.test.tsx
+  s_515b894c608172::t_1b974b1f7ee13e 351-379
+cortex-editor/src/browser/components/CommentPin.tsx
+  s_515b894c608172::t_1b974b1f7ee13e 49,53-60,64-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4617e15f7616fb2e556e2ea8d968c8a605b7aac8",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
