@@ -1561,6 +1561,11 @@ describe('Panel — staging buffer wiring (ZF0-1451)', () => {
         source: 'src/Hero.tsx:14:5',
         classOp: { kind: 'remove', remove: 'bg-white' },
         inlineSets: [{ property: 'background-color', value: 'rgb(255, 255, 255)' }],
+        // COR-12: a class op declares 'instance' on the wire because that is
+        // what it DOES — it rewrites one className attribute and has no fan-out.
+        // Omitting the field let the message stay silent while the panel's scope
+        // default (now 'all') implied otherwise; codex flagged the mismatch.
+        scope: 'instance',
       })
       expect(commandStack.undoCount).toBe(1)
     } finally {
@@ -2610,9 +2615,73 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     expect(sourceBanner.querySelector('.cortex-panel__scope-btn')).toBeNull()
   })
 
-  it('does NOT render source-only banner when CSS-class shared (precedence: class wins)', async () => {
-    // Element has BOTH shared CSS class AND shared source — CSS-class banner takes precedence,
-    // source banner must NOT render simultaneously.
+  it('hovering the ALREADY-ACTIVE All option still previews the blast radius', async () => {
+    // COR-12 regression, found by codex. The handler used to gate on
+    // `editScope !== 'all'`, which was safe only while 'all' was reached
+    // exclusively by CLICKING here — the click highlights, so hovering an active
+    // All had nothing to add. Making 'all' the DEFAULT broke that premise: a user
+    // who never clicked has nothing lit, and the gate made hover a no-op, leaving
+    // the preview reachable only by clicking an already-selected radio.
+    const sharedCss = 'Card.module.css:.card'
+    const els = ['src/A.tsx:1:1', 'src/B.tsx:2:2', 'src/C.tsx:3:3'].map(src => {
+      const el = document.createElement('div')
+      el.setAttribute('data-cortex-source', src)
+      el.setAttribute('data-cortex-css', sharedCss)
+      document.body.appendChild(el)
+      return el
+    })
+
+    const overrideManager = createStubOverrideManager()
+    const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
+    render(
+      <Panel
+        selectedElements={[els[0]!]}
+        overrideManager={overrideManager as any}
+        onClose={() => {}}
+        onSelectElement={() => {}}
+        buffer={makeFakeBuffer()}
+        {...panelPositionProps}
+      />,
+      shadowRoot,
+    )
+    cleanup = () => {
+      render(null, shadowRoot)
+      removeHost()
+      els.forEach(el => el.remove())
+      void shadow
+    }
+
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('.cortex-panel__scope-toggle')).not.toBeNull()
+    }, { timeout: 500 })
+
+    const allBtn = shadowRoot.querySelector<HTMLButtonElement>('.cortex-panel__scope-btn:last-child')!
+    // Precondition: All is ALREADY active and NOTHING is highlighted. Without
+    // this the test would pass on a stale highlight left by some other action.
+    expect(allBtn.getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelectorAll('[data-cortex-blast-radius]').length).toBe(0)
+
+    await act(async () => {
+      allBtn.dispatchEvent(new MouseEvent('mouseenter'))
+      await new Promise(r => requestAnimationFrame(() => r(null)))  // highlight is rAF-batched
+    })
+
+    // The two NON-selected siblings light up; the selected element never does.
+    expect(els[1]!.hasAttribute('data-cortex-blast-radius')).toBe(true)
+    expect(els[2]!.hasAttribute('data-cortex-blast-radius')).toBe(true)
+    expect(els[0]!.hasAttribute('data-cortex-blast-radius')).toBe(false)
+  })
+
+  it('shared SOURCE outranks shared CLASS — the scope toggle is replaced, not suppressed', async () => {
+    // Element has BOTH shared CSS class AND shared source. This assertion is the
+    // REVERSE of ZF0-1583's: codex flagged (COR-12 review) that letting the class
+    // banner win offers "This element", an option that cannot be honoured here.
+    //
+    // Sharing a class is a SOFT grouping — distinct JSX call sites that happen to
+    // carry the same className, so editing exactly one IS possible. Sharing a
+    // source is a HARD constraint — one JSX location renders all N, so rewriting
+    // it changes every one of them whatever the toggle says. When both hold the
+    // hard constraint decides.
     const source = 'src/Badge.tsx:10:3'
     const sharedCss = 'Badge.module.css:.badge'
 
@@ -2653,10 +2722,14 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
       expect(shadowRoot.querySelector('.cortex-panel__scope')).not.toBeNull()
     }, { timeout: 500 })
 
-    // CSS-class banner is present
+    // The scope BANNER is present (both variants share this base class)...
     expect(shadowRoot.querySelector('.cortex-panel__scope')).not.toBeNull()
-    // Source-only banner must NOT be rendered (class wins precedence)
-    expect(shadowRoot.querySelector('.cortex-panel__scope--source-only')).toBeNull()
+    // ...and it is the SOURCE variant, carrying no per-instance option.
+    expect(shadowRoot.querySelector('.cortex-panel__scope--source-only')).not.toBeNull()
+    // The load-bearing half: no toggle, so "This element" is never offered.
+    // Asserting only the banner class would pass if the toggle rendered beside it.
+    expect(shadowRoot.querySelector('.cortex-panel__scope-toggle')).toBeNull()
+    expect(shadowRoot.querySelector('.cortex-panel__scope-btn')).toBeNull()
   })
 
   it('renders neither banner when neither detector returns sharing', async () => {

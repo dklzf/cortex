@@ -1353,6 +1353,24 @@ export function Panel({
         value: '',
         elementSelector: element.tagName.toLowerCase(),
         classOp,
+        // ALWAYS 'instance', regardless of what the scope toggle shows.
+        //
+        // This path rewrites the className attribute at ONE JSX position. It has
+        // no fan-out: unlike a style edit at scope='all', which the server
+        // satisfies by rewriting the shared CSS-module rule once, adding a class
+        // token to one call site cannot change the other N-1 call sites.
+        //
+        // Before COR-12 the scope default was 'instance', so the omission was
+        // invisible — the declaration happened to match the behaviour. Making
+        // 'all' the default turned the same omission into a false promise on the
+        // ordinary no-click flow. Declaring the truth on the wire keeps the
+        // server's behaviour and the message agreeing; the UI states the same
+        // limitation next to the control (see the scope-note below).
+        //
+        // Real fan-out — applying a class op across every instance source — is a
+        // multi-file transaction with its own undo grouping and HMR
+        // verification. That is a feature, not a fix, and is filed separately.
+        scope: 'instance',
         ...(opts.inlineSets && opts.inlineSets.length > 0 ? { inlineSets: opts.inlineSets } : {}),
         ...(opts.inlineRemoves && opts.inlineRemoves.length > 0 ? { inlineRemoves: opts.inlineRemoves } : {}),
       })
@@ -1711,7 +1729,16 @@ export function Panel({
           }}
         />
       )}
-      {sharedInfo && (
+      {/* COR-12: shared SOURCE outranks shared CLASS. The precedence used to run
+          the other way, so an element that shared both rendered this toggle and
+          offered "This element" — an option that cannot be honoured. Sharing a
+          class is a SOFT grouping: distinct JSX call sites that happen to carry
+          the same className, so editing exactly one is possible. Sharing a
+          source is a HARD constraint: one JSX location renders all N, and
+          rewriting it changes every one of them no matter what the toggle says.
+          When both hold the hard constraint decides, so the banner below replaces
+          this toggle rather than being suppressed by it. */}
+      {sharedInfo && !sharedSourceInfo && (
         <div class="cortex-panel__scope">
           <span class="cortex-panel__scope-label">
             Shared by {sharedInfo.count} elements
@@ -1747,15 +1774,37 @@ export function Panel({
               aria-checked={editScope === 'all'}
               tabIndex={editScope === 'all' ? 0 : -1}
               onClick={() => { setEditScope('all'); highlightSharedElements(sharedInfo, element) }}
-              onMouseEnter={() => { if (editScope !== 'all') highlightSharedElements(sharedInfo, element) }}
+              // Hover previews unconditionally. It used to gate on
+              // `editScope !== 'all'` on the assumption that scope=all is only
+              // ever reached by CLICKING here, which also highlights — so the
+              // siblings were already lit and hovering had nothing to add.
+              // COR-12 made 'all' the DEFAULT, so that assumption broke: a user
+              // on the default path has never clicked, nothing is lit, and the
+              // gate made hovering the active option show nothing. The blast
+              // radius became reachable only by clicking an already-selected
+              // radio. Ungated, the handler is idempotent when the highlight is
+              // already up, and it restores the invariant "scope=all ⇒ the
+              // affected siblings are visible" on the no-click path.
+              onMouseEnter={() => highlightSharedElements(sharedInfo, element)}
               onMouseLeave={() => { if (editScope !== 'all') clearHighlights() }}
             >
               All
             </button>
           </div>
+          {/* COR-12: the toggle governs STYLE edits, which the server satisfies
+              at scope=all by rewriting the shared CSS rule once. A typography
+              link/unlink is a different operation — it adds or removes a class
+              token on ONE className attribute — and has no fan-out. Saying so
+              beside the control is the same discipline as the shared-source
+              banner: a scope that cannot be honoured is named, not implied. */}
+          {editScope === 'all' && showTypography && (
+            <span class="cortex-panel__scope-note">
+              Typography links apply to this element only
+            </span>
+          )}
         </div>
       )}
-      {sharedSourceInfo && !sharedInfo && (
+      {sharedSourceInfo && (
         <div
           class="cortex-panel__scope cortex-panel__scope--source-only"
           onMouseEnter={() => highlightSharedElements(sharedSourceInfo, element)}

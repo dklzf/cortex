@@ -600,9 +600,23 @@
   background: var(--cx-btn-hover);
 }
 
+/* Scope note: a limitation of the ACTIVE scope, stated next to the control that
+   would otherwise imply it (COR-12). Secondary ink and xs type keep it
+   subordinate to the scope label, which is the warning-coloured primary signal —
+   this is a clarification, not a second alarm. Wraps to its own line via the
+   flex basis so a long note never squeezes the toggle. */
+.cortex-panel__scope-note {
+  flex-basis: 100%;
+  color: var(--cx-ink-secondary);
+  font-size: var(--cx-text-xs);
+}
+
 /* Source-only variant: inherits base scope banner styles; no toggle buttons.
-   Gated on {sharedSourceInfo && !sharedInfo} so CSS-class banner wins precedence
-   and this modifier never co-renders with the full scope banner (ZF0-1583).
+   Gated on {sharedSourceInfo} ALONE — COR-12 gave shared SOURCE precedence over
+   shared CLASS, reversing ZF0-1583. Sharing a class is a soft grouping (distinct
+   call sites, so per-instance is possible); sharing a source is a hard constraint
+   (one JSX location renders all N). When both hold the hard constraint decides,
+   so this modifier now REPLACES the toggle banner instead of yielding to it.
    Tighter block padding compensates for the absent toggle child's visual mass. */
 .cortex-panel__scope--source-only {
   padding-block: var(--cx-sp-2);
