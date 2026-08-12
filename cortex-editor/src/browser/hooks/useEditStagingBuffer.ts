@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'preact/hooks'
-import { isStructuralEdit } from '../../schemas/pending-edit.js'
+import { isStructuralEdit, isClassEdit, isStyleEdit, describeClassOp } from '../../schemas/pending-edit.js'
 import { compositeKey } from '../../shared/composite-key.js'
 import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../../shared/preview-source.js'
 import { PREVIEW_SOURCE_ATTR } from '../preview-source.js'
@@ -184,7 +184,9 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         console.warn(
           '[cortex] Staging buffer evicted oldest intent (max 500):',
           evicted.source,
-          isStructuralEdit(evicted) ? `${evicted.structural.op} ${evicted.structural.parentSource}` : evicted.property,
+          isStructuralEdit(evicted) ? `${evicted.structural.op} ${evicted.structural.parentSource}`
+          : isClassEdit(evicted) ? describeClassOp(evicted.classOp)
+          : evicted.property,
         )
       }
     }
@@ -363,6 +365,13 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         if (drifted) divergent.push(edit)
         continue
       }
+
+      // Only a style intent states a property whose current value can be read
+      // back and compared. A class intent describes a className mutation with no
+      // `previousValue` to diff against, so there is nothing to answer here —
+      // same conservative direction as the structural branch above: leave it for
+      // the user to discard rather than invent a divergence verdict.
+      if (!isStyleEdit(edit)) continue
 
       const pseudo = edit.pseudo ?? null
       const currentValue = readSourceValue(el, edit.property, pseudo).trim()

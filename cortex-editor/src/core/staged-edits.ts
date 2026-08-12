@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { PendingEdit } from '../adapters/types.js'
-import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
+import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit, isClassEdit, describeClassOp } from '../schemas/pending-edit.js'
 import { compositeKey } from '../shared/composite-key.js'
 import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../shared/preview-source.js'
 import { stripFenceMarkers } from '../shared/untrusted-fence.js'
+import { validateClassOpToken } from './class-op-validator.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
 // MAX_FULL_SYNC_SIZE — single source of truth lives in schemas/pending-edit.ts
@@ -313,6 +314,71 @@ async function applyOne(
         `positioning. Those change visual order only; the accessibility tree and tab order ` +
         `keep following the original DOM sequence, which is a real regression that looks ` +
         `correct in a screenshot.`,
+    }
+  }
+
+  // A class intent reaches the buffer only when the gesture could NOT be applied
+  // deterministically — the element carried no build-time anchor, so there is no
+  // file position to rewrite (COR-25). Before this existed the gesture returned
+  // early in the Panel and evaporated with no error and no intent, which on a
+  // component-library app is the majority of the pointable surface.
+  //
+  // Same placement rationale as the structural branch above: ahead of the
+  // agent-resolve check, so TypeScript narrows the rest of this function to
+  // style intents and no property/value access below can see a class intent.
+  if (isClassEdit(intent)) {
+    // The staged path RETURNS before EditPipeline.handleEdit, which is where
+    // validateClassOpToken runs — so without this a staged intent instructs the
+    // agent to write a token the direct path explicitly blocks (Tailwind's
+    // arbitrary-value bracket syntax compiles `bg-[url(javascript:alert(1))]`
+    // into an executing CSS url()). Creating a second route to the same sink
+    // without carrying its guard is the whole bug; run the SAME validator rather
+    // than restating its rules here, so the two paths cannot drift.
+    const op = intent.classOp
+    const tokens = op.kind === 'swap' ? [op.remove, op.add] : op.kind === 'add' ? [op.add] : [op.remove]
+    for (const token of tokens) {
+      const verdict = validateClassOpToken(token)
+      if (!verdict.ok) {
+        return {
+          intentId,
+          status: 'failed' as const,
+          error: `Refusing to forward class token to the agent: ${verdict.reason}`,
+        }
+      }
+    }
+
+    const inlineNote =
+      (intent.inlineSets?.length ?? 0) + (intent.inlineRemoves?.length ?? 0) > 0
+        ? `\n\nThe same gesture also ` +
+          [
+            intent.inlineSets?.length
+              ? `SETS ${intent.inlineSets.map(s => `${s.property}: ${s.value}`).join(', ')}`
+              : '',
+            intent.inlineRemoves?.length
+              ? `REMOVES ${intent.inlineRemoves.map(r => r.property).join(', ')}`
+              : '',
+          ].filter(Boolean).join(' and ') +
+          `. Apply those together with the class change — they belong to one user action, and ` +
+          `landing one without the other leaves the element in a state the user never asked for.`
+        : ''
+    // Strip the ASSEMBLED reason, not just its inputs. `sanitizeHintsForAgent`
+    // covers `classOp` and the inline arrays, but `reason` is a generic string it
+    // never visits — and this builds a NEW string out of those same page-derived
+    // tokens. Sanitizing what you receive does not cover what you emit; the same
+    // lesson the guidance builder learned.
+    return {
+      intentId,
+      status: 'needs-source-edit' as const,
+      intent,
+      reason: stripFenceMarkers(
+        `Class change: ${describeClassOp(intent.classOp)}` +
+        `. This intent carries no file position — the element had no build-time anchor, so ` +
+        `locate the call site from its sourceResolutionHint and edit the className there.` +
+        inlineNote +
+        `\n\nEdit the className in SOURCE. Do not set the class via a style attribute or a ` +
+        `runtime classList call: the user is editing their component, and a change that only ` +
+        `exists at runtime disappears on the next render and cannot be reviewed in a diff.`,
+      ),
     }
   }
 

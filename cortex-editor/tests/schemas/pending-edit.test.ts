@@ -323,3 +323,37 @@ describe('pendingEditSchema — UTF-8 byte limits (F2)', () => {
     }
   })
 })
+
+describe('COR-25: class intents must be agent-resolve', () => {
+  const base = {
+    kind: 'class' as const,
+    intentId: 'c1',
+    source: 'cortex-preview:p1',
+    classOp: { kind: 'add' as const, add: 'text-lg' },
+    timestamp: 1,
+  }
+
+  it('REJECTS a forged direct-mode class intent', () => {
+    // The direct path writes className at a file position and never stages, so
+    // a `direct` class intent can only come from a forged `staged-edit-add`.
+    // Accepting it meant no hint was required, and serializeForAgent fences only
+    // payloads carrying a sourceResolutionHint — so an attacker-chosen `source`
+    // reached the agent UNFENCED.
+    const r = pendingEditSchema.safeParse({ ...base, applyMode: 'direct' })
+    expect(r.success).toBe(false)
+  })
+
+  it('REJECTS a class intent with no applyMode at all', () => {
+    const r = pendingEditSchema.safeParse(base)
+    expect(r.success).toBe(false)
+  })
+
+  it('accepts the agent-resolve shape with a hint', () => {
+    const r = pendingEditSchema.safeParse({
+      ...base,
+      applyMode: 'agent-resolve',
+      sourceResolutionHint: { tagName: 'div', textPreview: '', domSelector: 'div' },
+    })
+    expect(r.success).toBe(true)
+  })
+})

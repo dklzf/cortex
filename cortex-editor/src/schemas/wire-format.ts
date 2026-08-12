@@ -11,7 +11,7 @@
  * function signatures).
  */
 import { z } from 'zod'
-import { pendingEditSchema, intentIdSchema, MAX_FULL_SYNC_SIZE } from './pending-edit.js'
+import { pendingEditSchema, intentIdSchema, MAX_FULL_SYNC_SIZE, classOpSchema } from './pending-edit.js'
 
 // ---------------------------------------------------------------------------
 // Shared sub-schemas
@@ -29,11 +29,7 @@ export const spacingTokenSchema = z.object({
   source: z.enum(['tailwind-v3', 'tailwind-v4', 'css-variable']),
 })
 
-const classOpSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('add'), add: z.string() }),
-  z.object({ kind: z.literal('remove'), remove: z.string() }),
-  z.object({ kind: z.literal('swap'), remove: z.string(), add: z.string() }),
-])
+
 
 const elementContextSchema = z.object({
   tagName: z.string(),

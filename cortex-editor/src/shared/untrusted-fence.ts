@@ -82,6 +82,14 @@ const HINT_TEXT_FIELDS = ['tagName', 'className', 'id', 'textPreview', 'domSelec
  *  and only alters injected ones. */
 const PAGE_DERIVED_SOURCE_FIELDS = ['source', 'parentSource'] as const
 
+/** A staged CLASS intent's payload is page-craftable too. `staged-edit-add`
+ *  accepts an intent straight from page JavaScript, and the class-op tokens and
+ *  inline property names/values are free strings — so they can carry a fence
+ *  marker exactly like a hint field can. They are not hints, so the
+ *  sourceResolutionHint branch never saw them. */
+const CLASS_OP_TEXT_FIELDS = ['add', 'remove'] as const
+const INLINE_TEXT_FIELDS = ['property', 'value'] as const
+
 /**
  * Deep-copy `value`, stripping fence markers from every page-derived string found
  * anywhere inside it: the text fields of a `sourceResolutionHint`, and the source
@@ -107,6 +115,27 @@ export function sanitizeHintsForAgent<T>(value: T): T {
       typeof v === 'string'
     ) {
       out[key] = stripFenceMarkers(v)
+    } else if (key === 'classOp' && v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      const op: Record<string, unknown> = { ...(v as Record<string, unknown>) }
+      for (const field of CLASS_OP_TEXT_FIELDS) {
+        if (typeof op[field] === 'string') op[field] = stripFenceMarkers(op[field] as string)
+      }
+      out[key] = op
+    } else if ((key === 'inlineSets' || key === 'inlineRemoves') && Array.isArray(v)) {
+      out[key] = v.map(entry => {
+        // A raw STRING entry is possible — `staged-edit-add` takes page-provided
+        // payloads — and the recursive fallback leaves primitives untouched,
+        // which would carry a marker straight through.
+        if (typeof entry === 'string') return stripFenceMarkers(entry)
+        if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+          return sanitizeHintsForAgent(entry)
+        }
+        const e: Record<string, unknown> = { ...(entry as Record<string, unknown>) }
+        for (const field of INLINE_TEXT_FIELDS) {
+          if (typeof e[field] === 'string') e[field] = stripFenceMarkers(e[field] as string)
+        }
+        return e
+      })
     } else if (key === 'instanceSources' && Array.isArray(v)) {
       out[key] = v.map(s => (typeof s === 'string' ? stripFenceMarkers(s) : sanitizeHintsForAgent(s)))
     } else {

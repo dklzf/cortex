@@ -221,6 +221,65 @@ export const structuralEditSchema = z.object({
   structural: structuralIntentSchema,
 })
 
+/** The class mutation shape. Defined HERE rather than in wire-format.ts, which
+ *  held a byte-identical private copy — the same drift class composite-key.ts
+ *  exists to prevent. wire-format imports this one. */
+/** A class op names exactly ONE token. Whitespace is rejected rather than
+ *  trimmed or split: `classList.contains` throws `InvalidCharacterError` on a
+ *  value containing whitespace, so `add: "foo bar"` is not a slightly-wrong
+ *  intent, it is one that crashes the reconnect convergence check. Refusing it
+ *  at the envelope keeps that unreachable. */
+const classToken = z
+  .string()
+  .min(1)
+  .refine(v => !/\s/.test(v), { message: 'class token must not contain whitespace' })
+
+export const classOpSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('add'), add: classToken }),
+  z.object({ kind: z.literal('remove'), remove: classToken }),
+  z.object({ kind: z.literal('swap'), remove: classToken, add: classToken }),
+])
+
+/**
+ * A class intent — a className mutation at one locus, optionally with inline
+ * property writes that belong to the same gesture.
+ *
+ * Exists because class ops previously had NO staged representation: they were
+ * dispatched straight down the direct-write wire path, which needs a file
+ * position. On an element with no `data-cortex-source` the gesture hit
+ * `if (!source) return` and silently evaporated (COR-25) — and on a
+ * component-library app that is the majority of the pointable surface.
+ *
+ * With a staged form, an unannotated class op becomes an `agent-resolve` intent
+ * carrying the DOM hint, exactly like a style edit on the same element, and the
+ * agent locates the call site. Two consequences, and the second is the one that
+ * mattered: the gesture works, and it becomes VISIBLE to the identity hit-rate
+ * gate, which scores intents that reached the agent. Gestures that never became
+ * intents were invisible to it, so the gate over-reported.
+ *
+ * `inlineSets`/`inlineRemoves` mirror the compound wire message: a Tailwind swap
+ * often clears the longhand properties it supersedes, and splitting that across
+ * two intents would let one land without the other.
+ */
+export const classEditSchema = z.object({
+  ...intentBase,
+  kind: z.literal('class'),
+  classOp: classOpSchema,
+  // NO `pseudo`. A class attaches to the OWNING element — there is no way to put
+  // one on a ::before box — so carrying the panel's active pseudo tab here would
+  // tell the agent to make a change at a target that does not exist, and the
+  // reason string would read "on the ::before pseudo-element" for an edit that
+  // must land on the element itself.
+  inlineSets: z
+    .array(z.object({ property: z.string().min(1), value: z.string() }))
+    .max(MAX_INTENT_INSTANCE_SOURCES)
+    .optional(),
+  inlineRemoves: z
+    .array(z.object({ property: z.string().min(1) }))
+    .max(MAX_INTENT_INSTANCE_SOURCES)
+    .optional(),
+})
+
 /**
  * `kind` is optional on the wire for back-compat, but a discriminated union
  * needs it PRESENT to select a branch. Normalising it here — rather than using
@@ -257,7 +316,7 @@ const withDefaultKind = (value: unknown): unknown => {
 
 export const pendingEditSchema = z.preprocess(
   withDefaultKind,
-  z.discriminatedUnion('kind', [structuralEditSchema, styleEditSchema]),
+  z.discriminatedUnion('kind', [structuralEditSchema, classEditSchema, styleEditSchema]),
 ).superRefine((edit, ctx) => {
   if ((edit.applyMode === 'agent-resolve' || isPreviewSource(edit.source)) && !edit.sourceResolutionHint) {
     ctx.addIssue({
@@ -270,6 +329,20 @@ export const pendingEditSchema = z.preprocess(
   // one silently — `set_inline_style` writing `style={{order}}` is the exact
   // a11y regression this type exists to prevent. Enforced at the envelope so
   // no producer can route a move to the direct path.
+  // A class intent is only ever PRODUCED on the agent-resolve path — the direct
+  // path writes className at a file position and never stages. Accepting a
+  // forged `direct` (or omitted) mode with an attacker-chosen `source` let a
+  // page reach the agent through `staged-edit-add` with NO hint, and
+  // `serializeForAgent` fences only payloads that carry a sourceResolutionHint —
+  // so the forged source arrived unfenced. Requiring the mode makes the hint
+  // mandatory via the check above, which closes both halves at once.
+  if (edit.kind === 'class' && edit.applyMode !== 'agent-resolve') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['applyMode'],
+      message: "class intents must use applyMode 'agent-resolve' — the direct path writes className at a file position and never stages",
+    })
+  }
   if (edit.kind === 'structural' && edit.applyMode !== 'agent-resolve') {
     ctx.addIssue({
       code: 'custom',
@@ -311,6 +384,37 @@ export function isStructuralEdit(edit: PendingEditSchema): edit is StructuralEdi
   return edit.kind === 'structural'
 }
 
+/** True when the intent mutates className rather than a CSS property. */
+export function isClassEdit(edit: PendingEditSchema): edit is ClassEditSchema {
+  return edit.kind === 'class'
+}
+
+/** True when the intent carries `property`/`value` — the only kind that does.
+ *
+ *  Prefer this over `!isStructuralEdit(e)`, which was correct while there were
+ *  exactly two kinds and silently started admitting class intents when a third
+ *  arrived. A negative guard over an open union is a latent bug.
+ *
+ *  A MISSING `kind` counts as style, and that is not leniency — it mirrors the
+ *  wire contract exactly. `kind` is optional on the wire and `withDefaultKind`
+ *  normalises an absent one to 'style' before the union discriminates, so an
+ *  in-memory intent that never passed through the schema (the browser staging
+ *  buffer holds raw objects) legitimately has none. A bare `=== 'style'` test
+ *  silently skipped those, which is how this guard first broke reconcile. */
+export function isStyleEdit(edit: PendingEditSchema): edit is StyleEditSchema {
+  return edit.kind === 'style' || (edit as { kind?: unknown }).kind === undefined
+}
+
+/** Human-readable one-liner for a class mutation, for agent-facing summaries. */
+export function describeClassOp(op: ClassEditSchema['classOp']): string {
+  switch (op.kind) {
+    case 'add': return `add class "${op.add}"`
+    case 'remove': return `remove class "${op.remove}"`
+    case 'swap': return `swap class "${op.remove}" → "${op.add}"`
+  }
+}
+
 export type StyleEditSchema = z.infer<typeof styleEditSchema>
 export type StructuralEditSchema = z.infer<typeof structuralEditSchema>
+export type ClassEditSchema = z.infer<typeof classEditSchema>
 export type PendingEditSchema = z.infer<typeof pendingEditSchema>

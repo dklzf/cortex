@@ -11,7 +11,8 @@ import type { SelectionHandle } from '../selection.js'
 import { cortexAppReducer, initialCortexAppReducerState, applySelectionUpdate } from '../cortex-app-reducer.js'
 import { resolveSelectionTargets } from '../selection-source-expand.js'
 import type { SelectionTargetOptions } from '../selection-source-expand.js'
-import { isStructuralEdit } from '../../schemas/pending-edit.js'
+import { isStyleEdit, isClassEdit } from '../../schemas/pending-edit.js'
+import { PREVIEW_SOURCE_ATTR, PREVIEW_SOURCE_PREFIX } from '../preview-source.js'
 import type { CortexAppReducerState, CortexAppAction, CortexAppEffect, EditDispatchEntry } from '../cortex-app-reducer.js'
 // @ts-ignore — tinykeys has types but exports field doesn't include a "types" condition (TODO: add declare module shim when tinykeys updates)
 import { tinykeys } from 'tinykeys'
@@ -750,6 +751,17 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         const src = el.getAttribute('data-cortex-source')
         if (src !== null && !elBySource.has(src)) elBySource.set(src, el)
       }
+      // Preview-sourced elements too. Class intents are agent-resolve by
+      // construction, so without this they can never be resolved here and a
+      // phantom left by an agent that wrote the source but crashed before
+      // acknowledging could never be cleared. Empty attribute counts as missing,
+      // matching ensurePreviewId.
+      for (const el of deepQueryAllElements(`[${PREVIEW_SOURCE_ATTR}]`)) {
+        const id = el.getAttribute(PREVIEW_SOURCE_ATTR)
+        if (!id) continue
+        const src = `${PREVIEW_SOURCE_PREFIX}${id}`
+        if (!elBySource.has(src)) elBySource.set(src, el)
+      }
 
       const convergedIds: string[] = []
       for (const edit of buffer.list()) {
@@ -762,7 +774,37 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // ill-formed for it and answering it against a property it lacks would
         // be worse than not answering. Left for the user to discard, which is
         // the same conservative direction the exact-match below is chosen for.
-        if (isStructuralEdit(edit)) continue
+        // Positive guard: only a style intent states a property/value pair that
+        // can be compared against the live source. `!isStructuralEdit` was correct
+        // while there were two kinds and silently admitted class intents when a
+        // third arrived.
+        // A class intent's convergence question IS answerable, unlike a
+        // structural one's: "does the element now carry the class the user
+        // asked for". Answer it, so an agent that wrote the source and crashed
+        // before acknowledging does not leave a phantom the safety net cannot
+        // clear. Same conservative direction as below — only an exact,
+        // unambiguous match converges.
+        if (isClassEdit(edit)) {
+          // A COMPOUND class intent also carries inline property work, and the
+          // class half landing says nothing about the other half. Clearing on
+          // classList alone would drop the intent while the inline edits are
+          // still missing from source — losing a real edit permanently, which is
+          // strictly worse than the stale badge this net exists to clean up.
+          // Only the pure class-op case is answerable here; leave the rest for
+          // the user, the same conservative direction as everything below.
+          if (edit.inlineSets?.length || edit.inlineRemoves?.length) continue
+
+          const op = edit.classOp
+          const has = (c: string): boolean => el.classList.contains(c)
+          const converged =
+            op.kind === 'add' ? has(op.add)
+            : op.kind === 'remove' ? !has(op.remove)
+            : has(op.add) && !has(op.remove)
+          if (converged) convergedIds.push(edit.intentId)
+          continue
+        }
+
+        if (!isStyleEdit(edit)) continue
 
         const pseudo = edit.pseudo ?? null
         const liveValue = override.readSourceValue(el, edit.property, pseudo).trim()

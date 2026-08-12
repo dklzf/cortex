@@ -5,6 +5,7 @@ import { CommandStack } from '../../src/browser/command-stack.js'
 import { CompoundEditCommand } from '../../src/browser/edit-command.js'
 import { CSSOverrideManager } from '../../src/browser/override.js'
 import { makeFakeBuffer } from './helpers.js'
+import type { StagingBufferHandle } from '../../src/browser/hooks/useEditStagingBuffer.js'
 import type { CortexChannel } from '../../src/adapters/types.js'
 import type { TextComponent } from '../../src/core/text-components.js'
 import type { ColorChip } from '../../src/browser/token-detector.js'
@@ -66,13 +67,19 @@ async function mountPanelWithLinkedHeading(
   commandStack: CommandStack,
   channel: CortexChannel,
   overrideManager: CSSOverrideManager,
+  opts: { annotated?: boolean; buffer?: StagingBufferHandle } = {},
 ): Promise<void> {
   container = document.createElement('div')
   document.body.appendChild(container)
 
   targetElement = document.createElement('h1')
   targetElement.className = 'text-heading-1'
-  targetElement.setAttribute('data-cortex-source', 'Hero.tsx:5:3')
+  // COR-25: `annotated: false` mounts an element with NO data-cortex-source —
+  // the majority of the pointable surface on a component-library app, since
+  // source-transform skips node_modules by design.
+  if (opts.annotated !== false) {
+    targetElement.setAttribute('data-cortex-source', 'Hero.tsx:5:3')
+  }
   targetElement.textContent = 'Hero title'
   document.body.appendChild(targetElement)
 
@@ -96,7 +103,7 @@ async function mountPanelWithLinkedHeading(
       panelPointerCancel={vi.fn()}
       agentConnected={true}
       onEditDispatch={vi.fn()}
-      buffer={makeFakeBuffer()}
+      buffer={opts.buffer ?? makeFakeBuffer()}
     />,
     container,
   )
@@ -150,6 +157,88 @@ describe('Panel.applyClassChange records on commandStack (C-R2-1 regression)', (
     const cmd = commandStack.peekUndo()
     expect(cmd, 'peekUndo must return the recorded command').not.toBeNull()
     expect(cmd).toBeInstanceOf(CompoundEditCommand)
+  })
+
+  // ── COR-25 ────────────────────────────────────────────────────────────────
+  //
+  // The gesture used to read `data-cortex-source` directly and `return` when it
+  // was absent: no error, no warning, no intent. The user clicked and nothing
+  // happened, indistinguishable from a UI that ignored them.
+  //
+  // Two consequences, and the second is the one that mattered: the gesture is
+  // dead on the majority of a component-library app, AND it is invisible to the
+  // identity hit-rate gate, which scores intents that reached the agent. A
+  // gesture that never became an intent cannot be scored, so the gate
+  // over-reported.
+
+  it('COR-25: a class op on an UNANNOTATED element stages an agent-resolve intent', async () => {
+    const buffer = makeFakeBuffer()
+    await mountPanelWithLinkedHeading(commandStack, channel, overrideManager, {
+      annotated: false,
+      buffer,
+    })
+
+    const unlinkButton = container.querySelector('button[aria-label="Detach token"]') as HTMLElement | null
+    expect(unlinkButton, 'Detach token renders from the class, not from the anchor').not.toBeNull()
+
+    unlinkButton!.click()
+    await vi.waitFor(() => {
+      expect((buffer.append as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0)
+    }, { timeout: 500 })
+
+    const staged = (buffer.append as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>
+    expect(staged.kind).toBe('class')
+    expect(staged.applyMode).toBe('agent-resolve')
+    // The hint is what lets the agent find the call site with no file position;
+    // the schema REQUIRES it for a preview source, so its absence is not a
+    // degraded intent — it is an invalid one.
+    expect(staged.sourceResolutionHint).toBeTruthy()
+    expect(String(staged.source).startsWith('cortex-preview:')).toBe(true)
+    expect(staged.classOp).toBeTruthy()
+  })
+
+  it('COR-25: the unannotated gesture does NOT take the direct-write wire path', async () => {
+    // The direct path writes source at a file position. Sending a preview source
+    // down it would ask the server to rewrite a file it cannot locate — the
+    // staged intent is the whole point, so the wire must stay quiet.
+    const buffer = makeFakeBuffer()
+    await mountPanelWithLinkedHeading(commandStack, channel, overrideManager, {
+      annotated: false,
+      buffer,
+    })
+
+    const unlinkButton = container.querySelector('button[aria-label="Detach token"]') as HTMLElement | null
+    unlinkButton!.click()
+    await vi.waitFor(() => {
+      expect((buffer.append as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0)
+    }, { timeout: 500 })
+
+    const classOpEdits = channel.sent.filter(
+      (m) => (m as { type?: string; classOp?: unknown }).type === 'edit'
+        && (m as { classOp?: unknown }).classOp !== undefined,
+    )
+    expect(classOpEdits).toHaveLength(0)
+  })
+
+  it('COR-25: an ANNOTATED element still takes the direct path, unchanged', async () => {
+    // The fix must not reroute the case that already worked. This is the control:
+    // with an anchor present, the wire message still carries the classOp and
+    // nothing is staged.
+    const buffer = makeFakeBuffer()
+    await mountPanelWithLinkedHeading(commandStack, channel, overrideManager, { buffer })
+
+    const unlinkButton = container.querySelector('button[aria-label="Detach token"]') as HTMLElement | null
+    unlinkButton!.click()
+    await vi.waitFor(() => {
+      expect(commandStack.undoCount).toBe(1)
+    }, { timeout: 500 })
+
+    const classOpEdits = channel.sent.filter(
+      (m) => (m as { type?: string; classOp?: unknown }).type === 'edit'
+        && (m as { classOp?: unknown }).classOp !== undefined,
+    )
+    expect(classOpEdits.length).toBeGreaterThan(0)
+    expect((buffer.append as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0)
   })
 
   it('the recorded CompoundEditCommand carries editId that matches the compound edit message', async () => {
