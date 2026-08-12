@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'preact/hooks'
 import { isStructuralEdit } from '../../schemas/pending-edit.js'
 import { compositeKey } from '../../shared/composite-key.js'
+import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../../shared/preview-source.js'
+import { PREVIEW_SOURCE_ATTR } from '../preview-source.js'
 import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
 
@@ -263,7 +265,27 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
       const watched = isStructuralEdit(edit)
         ? [edit.source, edit.structural.parentSource]
         : [edit.source]
-      if (!watched.some(src => changedSet.has(stripLineCol(src)))) continue
+
+      // COR-26: `stripLineCol` strips a trailing `:line:col`, so it only yields a
+      // file path for a `file:line:col` source. A preview source is
+      // `cortex-preview:<id>` — a DOM handle stamped at click time, naming no
+      // file — so it passed through unchanged and could never be in `changedSet`,
+      // which holds file paths. This `continue` therefore fired EVERY time.
+      //
+      // Not an edge case: `pending-edit.ts` forces every structural intent onto
+      // agent-resolve, so every structural intent carries a preview source. The
+      // guard the comment above describes has never once run for the population
+      // it was written to protect.
+      //
+      // A preview source has no file BY CONSTRUCTION — that is what agent-resolve
+      // means — so there is nothing to look up. The honest reading is "cannot be
+      // tied to a file" = "cannot be ruled out": let it through to the baseline
+      // comparison below, which is the actual staleness detector. It compares the
+      // container's captured children against the live ones, so a drifted intent
+      // is caught there regardless of which file changed. Cost is one O(children)
+      // comparison per structural intent per HMR event.
+      const unfileable = watched.some(isPreviewSource)
+      if (!unfileable && !watched.some(src => changedSet.has(stripLineCol(src)))) continue
 
       if (elBySource === null) {
         elBySource = new Map()
@@ -289,6 +311,21 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
           const s = el.getAttribute('data-cortex-source')
           if (s !== null && !elBySource.has(s)) elBySource.set(s, el)
         }
+        // COR-26: preview-sourced elements too. Without this the index cannot
+        // resolve `cortex-preview:<id>`, so once the guard above stops skipping
+        // them every structural intent lands in the `!el` branch and is reported
+        // as "element deleted" on EVERY HMR event — turning a silent no-op into
+        // a false-positive storm, which is worse. Same first-seen-wins rule.
+        for (const el of deepQueryAllElements(`[${PREVIEW_SOURCE_ATTR}]`)) {
+          const id = el.getAttribute(PREVIEW_SOURCE_ATTR)
+          // Falsy, not `=== null`: the attribute can be PRESENT but empty, and
+          // `ensurePreviewId` already treats empty as missing. Indexing '' would
+          // key an element under the bare prefix `cortex-preview:` and collide
+          // with any other empty-id element, resolving intents to the wrong node.
+          if (!id) continue
+          const s = `${PREVIEW_SOURCE_PREFIX}${id}`
+          if (!elBySource.has(s)) elBySource.set(s, el)
+        }
       }
 
       const el = elBySource.get(edit.source)
@@ -307,8 +344,18 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
       // and moves the WRONG element.
       if (isStructuralEdit(edit)) {
         const parent = el.parentElement
+        // Read BOTH source formats, and read them without stamping: a child that
+        // was never clicked has no preview id, and minting one here would mutate
+        // the DOM during a read-only reconcile. Mapping every unannotated child
+        // to '' would also make them indistinguishable from each other, so a
+        // reorder among them could never be detected as drifted.
         const live = parent
-          ? Array.from(parent.children).map(c => c.getAttribute('data-cortex-source') ?? '')
+          ? Array.from(parent.children).map(c => {
+              const s = c.getAttribute('data-cortex-source')
+              if (s) return s
+              const p = c.getAttribute(PREVIEW_SOURCE_ATTR)
+              return p ? `${PREVIEW_SOURCE_PREFIX}${p}` : ''
+            })
           : []
         const { baseline } = edit.structural
         const drifted = live.length !== baseline.length
