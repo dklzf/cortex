@@ -42,7 +42,7 @@ import type { CortexChannel, ConnectionDisplay } from '../../adapters/types.js'
 import { computePanelStyleSnapshot } from './panel-style-snapshot.js'
 import { ALL_DIMMING_PROPERTIES } from './sections/spacing-utils.js'
 import type { PendingEdit, StagingBufferHandle } from '../hooks/useEditStagingBuffer.js'
-import { isStructuralEdit } from '../../schemas/pending-edit.js'
+import { isStyleEdit } from '../../schemas/pending-edit.js'
 import type { StyleEditSchema } from '../../schemas/pending-edit.js'
 import { generateId } from '../uuid.js'
 import { StagingDriftBanner } from './StagingDriftBanner.js'
@@ -927,7 +927,9 @@ export function Panel({
       // card is keyed source+property, and a structural intent has no property
       // to key on — if a future caller routes one through here, skipping is
       // correct and a crash is not.
-      if (isStructuralEdit(edit)) continue
+      // Positive guard — the divergence card is keyed source+property, which
+      // only a style intent has. Structural and class intents both lack one.
+      if (!isStyleEdit(edit)) continue
       onDismissError?.(`${edit.source}${SEP}${edit.property}`)
     }
 
@@ -1203,9 +1205,48 @@ export function Panel({
       inlineRemoves?: ReadonlyArray<{ property: string }>
     }) => {
       if (!element || !channel) return
-      const source = element.getAttribute('data-cortex-source')
-      if (!source) return
       if (!opts.remove && !opts.add) return  // classOp required for compound path
+
+      // COR-25: this used to read `data-cortex-source` directly and `return` when
+      // absent, so every class gesture on an unannotated element evaporated —
+      // no error, no warning, no intent. On a component-library app that is the
+      // majority of the pointable surface (67.8% aggregate `none` on
+      // zerofog-web), because source-transform skips node_modules by design.
+      //
+      // The direct path below writes source at a file position, so it genuinely
+      // cannot serve an element that has none. The answer is not to widen it but
+      // to route to the other path that already exists for exactly this case:
+      // stage an agent-resolve intent carrying the DOM hint, as style edits on
+      // the same element already do, and let the agent locate the call site.
+      const target = getElementEditTarget(element)
+      const classOp =
+        opts.remove && opts.add ? { kind: 'swap' as const, remove: opts.remove, add: opts.add }
+        : opts.add ? { kind: 'add' as const, add: opts.add }
+        : { kind: 'remove' as const, remove: opts.remove! }
+
+      if (target.applyMode === 'agent-resolve') {
+        const pseudoForIntent = activePseudo !== 'element' ? activePseudo : undefined
+        const staged: PendingEdit = {
+          kind: 'class' as const,
+          intentId: generateId(),
+          source: target.source,
+          classOp,
+          ...(pseudoForIntent ? { pseudo: pseudoForIntent } : {}),
+          ...(opts.inlineSets?.length ? { inlineSets: [...opts.inlineSets] } : {}),
+          ...(opts.inlineRemoves?.length ? { inlineRemoves: [...opts.inlineRemoves] } : {}),
+          scope: editScope,
+          ...pendingEditTargetFields(target),
+          timestamp: Date.now(),
+        }
+        buffer.append(staged)
+        // Same activity-log sentinel as the direct path, so a staged class op
+        // renders as one row rather than disappearing from the user's view of
+        // what they just did.
+        onEditDispatch?.(staged.intentId, target.source, '__class__', formatCompoundDescription(opts))
+        return
+      }
+
+      const source = target.source
 
       // Drain any pending property-commit microtask BEFORE issuing the
       // compound edit. Otherwise a classOp could land in the server's
@@ -1284,16 +1325,12 @@ export function Panel({
         property: '',
         value: '',
         elementSelector: element.tagName.toLowerCase(),
-        classOp:
-          opts.remove && opts.add ? { kind: 'swap' as const, remove: opts.remove, add: opts.add }
-          : opts.add ? { kind: 'add' as const, add: opts.add }
-          : opts.remove ? { kind: 'remove' as const, remove: opts.remove }
-          : undefined,
+        classOp,
         ...(opts.inlineSets && opts.inlineSets.length > 0 ? { inlineSets: opts.inlineSets } : {}),
         ...(opts.inlineRemoves && opts.inlineRemoves.length > 0 ? { inlineRemoves: opts.inlineRemoves } : {}),
       })
     },
-    [element, channel, onEditDispatch, overrideManager, activePseudo, commandStack],
+    [element, channel, onEditDispatch, overrideManager, activePseudo, commandStack, buffer, editScope],
   )
 
   /**
@@ -1323,8 +1360,13 @@ export function Panel({
       // the compound-edit message introduced in C2 (inlineRemoves).
       const clearLinkedOverrides = (properties: ReadonlyArray<string>): void => {
         if (!element) return
-        const source = element.getAttribute('data-cortex-source')
-        if (!source) return
+        // COR-25, second site. This one loses no INTENT — the edit itself goes
+        // through applyClassChange — but bailing on an unannotated element meant
+        // the local override was never cleared, so the user kept seeing stale
+        // inline values until the agent's write landed. The override manager is
+        // keyed by source string and preview sources are valid keys (style edits
+        // on the same element already use them), so the seam is the same one.
+        const source = getElementEditTarget(element).source
         const pseudo = activePseudo !== 'element' ? activePseudo : undefined
         for (const property of properties) {
           overrideManager.remove(source, property, pseudo)

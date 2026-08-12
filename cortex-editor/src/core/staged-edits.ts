@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { PendingEdit } from '../adapters/types.js'
-import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit } from '../schemas/pending-edit.js'
+import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit, isClassEdit, describeClassOp } from '../schemas/pending-edit.js'
 import { compositeKey } from '../shared/composite-key.js'
 import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../shared/preview-source.js'
 import { stripFenceMarkers } from '../shared/untrusted-fence.js'
@@ -313,6 +313,46 @@ async function applyOne(
         `positioning. Those change visual order only; the accessibility tree and tab order ` +
         `keep following the original DOM sequence, which is a real regression that looks ` +
         `correct in a screenshot.`,
+    }
+  }
+
+  // A class intent reaches the buffer only when the gesture could NOT be applied
+  // deterministically — the element carried no build-time anchor, so there is no
+  // file position to rewrite (COR-25). Before this existed the gesture returned
+  // early in the Panel and evaporated with no error and no intent, which on a
+  // component-library app is the majority of the pointable surface.
+  //
+  // Same placement rationale as the structural branch above: ahead of the
+  // agent-resolve check, so TypeScript narrows the rest of this function to
+  // style intents and no property/value access below can see a class intent.
+  if (isClassEdit(intent)) {
+    const inlineNote =
+      (intent.inlineSets?.length ?? 0) + (intent.inlineRemoves?.length ?? 0) > 0
+        ? `\n\nThe same gesture also ` +
+          [
+            intent.inlineSets?.length
+              ? `SETS ${intent.inlineSets.map(s => `${s.property}: ${s.value}`).join(', ')}`
+              : '',
+            intent.inlineRemoves?.length
+              ? `REMOVES ${intent.inlineRemoves.map(r => r.property).join(', ')}`
+              : '',
+          ].filter(Boolean).join(' and ') +
+          `. Apply those together with the class change — they belong to one user action, and ` +
+          `landing one without the other leaves the element in a state the user never asked for.`
+        : ''
+    return {
+      intentId,
+      status: 'needs-source-edit' as const,
+      intent,
+      reason:
+        `Class change: ${describeClassOp(intent.classOp)}` +
+        (intent.pseudo ? ` on the ${intent.pseudo} pseudo-element` : '') +
+        `. This intent carries no file position — the element had no build-time anchor, so ` +
+        `locate the call site from its sourceResolutionHint and edit the className there.` +
+        inlineNote +
+        `\n\nEdit the className in SOURCE. Do not set the class via a style attribute or a ` +
+        `runtime classList call: the user is editing their component, and a change that only ` +
+        `exists at runtime disappears on the next render and cannot be reviewed in a diff.`,
     }
   }
 

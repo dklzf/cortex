@@ -9,7 +9,7 @@
  * bans this drift class explicitly (CLAUDE.md, "Post-Fix Discipline").
  */
 import type { PendingEditSchema } from './../schemas/pending-edit.js'
-import { isStructuralEdit } from './../schemas/pending-edit.js'
+import { isStructuralEdit, isClassEdit } from './../schemas/pending-edit.js'
 
 /**
  * Last-write-wins, for both kinds — but keyed on different things.
@@ -30,11 +30,27 @@ import { isStructuralEdit } from './../schemas/pending-edit.js'
  * intents removed the need for the log, and with it that whole failure class —
  * including the unbounded growth that unique-per-drag keys caused.
  *
- * The `structural\0` prefix keeps the namespaces disjoint.
+ * A class intent collapses per (source, pseudo, OPERATION) — deliberately not
+ * per (source, pseudo). Style edits collapse per property because a scrub emits
+ * hundreds of intermediate values and only the last matters. Class ops are
+ * discrete clicks, and `add text-lg` followed by `add font-bold` are INDEPENDENT
+ * mutations; last-write-wins there would silently drop one. Including the
+ * operation in the key still collapses a genuine repeat (clicking the same
+ * button twice) while keeping distinct mutations distinct.
+ *
+ * The `structural\0` / `class\0` prefixes keep the namespaces disjoint.
  */
 export function compositeKey(edit: PendingEditSchema): string {
   if (isStructuralEdit(edit)) {
     return `structural\0${edit.structural.parentSource}\0${edit.structural.parentKey}`
+  }
+  if (isClassEdit(edit)) {
+    const op = edit.classOp
+    const sig =
+      op.kind === 'swap' ? `swap\0${op.remove}\0${op.add}`
+      : op.kind === 'add' ? `add\0${op.add}`
+      : `remove\0${op.remove}`
+    return `class\0${edit.source}\0${edit.pseudo ?? ''}\0${sig}`
   }
   return `${edit.source}\0${edit.property}\0${edit.pseudo ?? ''}`
 }
