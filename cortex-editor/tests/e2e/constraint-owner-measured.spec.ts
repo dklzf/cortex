@@ -144,6 +144,29 @@ const FIXTURE = `<!doctype html><body style="margin:0">
     <div id="manyChild" style="width:10px;height:20px"></div>
     <div style="width:10px;height:20px"></div></div>
 
+  <!-- content-box with padding+border: computed width EXCLUDES them, the rect
+       INCLUDES them. Deriving the scale from their ratio invents a >1 scale
+       with no transform present. -->
+  <div id="boxWrap" style="width:600px">
+    <div id="boxChild" style="width:200px;height:40px;padding:20px;border:5px solid;box-sizing:content-box"></div></div>
+
+  <!-- flex: 0 0 100px — the BASIS supplies the size, so flex-grow is a dead end. -->
+  <div id="basisWrap" style="display:flex;width:600px">
+    <div id="basisChild" style="flex:0 0 100px;min-width:0;height:40px"></div>
+    <div style="flex:1;height:40px"></div></div>
+
+  <!-- A non-replaced inline box: width does not apply at all. -->
+  <div id="inlineWrap" style="width:600px">
+    <span id="inlineChild">some text</span></div>
+
+  <!-- An item placed in an IMPLICIT column (template declares one track). -->
+  <!-- No explicit template at all, so BOTH columns are implicit 1fr tracks and
+       growing one steals from the other — the track reallocation that makes the
+       naming reachable in the first place. -->
+  <div id="implicitWrap" style="display:grid;grid-auto-columns:1fr;grid-auto-flow:column;width:600px">
+    <div id="implicitChild" style="height:40px"></div>
+    <div style="height:40px"></div></div>
+
   <!-- A wrapping flex line the probe would tip over: two centred items totalling
        290px in a 300px container become two lines at +16px. -->
   <div id="wrapWrap" style="display:flex;flex-wrap:wrap;justify-content:center;width:300px">
@@ -395,5 +418,79 @@ test.describe('round-1 review: the probe must not be fooled by the page', () => 
         .CO.probeConstraint(el, 'right')
     })
     expect(probe).toBeNull()
+  })
+})
+
+test.describe('round-2 review: box models, bases, and axes', () => {
+  test('padding and borders do not fake a transform scale', async ({ page }) => {
+    // computed width EXCLUDES padding/border under content-box; the rect
+    // INCLUDES them. Deriving the scale from their ratio produced >1 with no
+    // transform, inflating `requested` so a fully honoured write read as
+    // partial. offsetWidth and the rect are both border-box, so their ratio is
+    // the pure transform scale.
+    const probe = await page.evaluate(() => {
+      const el = document.getElementById('boxChild')!
+      return (window as unknown as {
+        CO: { probeConstraint: (n: Element, e: string) => { scale: number; requested: number } | null }
+      }).CO.probeConstraint(el, 'right')
+    })
+    expect(probe!.scale).toBeCloseTo(1, 2)
+    expect(probe!.requested).toBeCloseTo(16, 1)
+  })
+
+  test('a basis-driven flex item names flex-basis, not flex-grow', async ({ page }) => {
+    // `flex: 0 0 100px` has no positive free space to grow into, so changing
+    // flex-grow does nothing. Naming it is the same dead end as naming a grid
+    // template for an implicit track.
+    const o = await own(page, 'basisChild', 'right')
+    expect(o.target).toBe('flex-allocation')
+    expect(o.property).toBe('flex-basis')
+  })
+
+  test('a non-replaced inline box is refused, not answered', async ({ page }) => {
+    // `width` does not apply to a <span>, and its computed width stays `auto`.
+    // The prediction fallback would report element-owned width at 1:1 — a
+    // confident answer about a property that cannot move this edge.
+    const probe = await page.evaluate(() => {
+      const el = document.getElementById('inlineChild')!
+      return (window as unknown as { CO: { probeConstraint: (n: Element, e: string) => unknown } })
+        .CO.probeConstraint(el, 'right')
+    })
+    expect(probe).toBeNull()
+  })
+
+  test('an implicit grid track is NOT distinguishable, and the code says so', async ({ page }) => {
+    // Documents a real limitation rather than asserting a fix. Chromium reports
+    // the RESOLVED used tracks for grid-template-columns — '300px 300px' whether
+    // the tracks were declared or auto-generated — and grid-column-start stays
+    // 'auto' for an auto-placed item. So an implicit track cannot be told apart
+    // from an explicit one using computed styles, and naming grid-auto-columns
+    // would be a guess. This test pins the browser behaviour that makes it
+    // impossible, so if a future engine DOES expose the difference, it fails and
+    // the limitation can be lifted.
+    const observed = await page.evaluate(() => ({
+      implicit: getComputedStyle(document.getElementById('implicitWrap')!).gridTemplateColumns,
+      start: getComputedStyle(document.getElementById('implicitChild')!).gridColumnStart,
+    }))
+    expect(observed.implicit).toMatch(/^\d/)   // resolved px, not 'none'
+    expect(observed.start).toBe('auto')        // no resolved line number to compare
+  })
+
+  test('pointerDeltaToSizeDelta divides by the transform scale', async ({ page }) => {
+    // edgeResponse is a ratio of two screen-space measurements, so it is
+    // scale-INVARIANT and looks correct under a transform. The drag handler is
+    // not: it reads screen pixels and writes a CSS length, so a 20px drag on a
+    // 2x element must become a 10px width change.
+    const cssDelta = await page.evaluate(() => {
+      const el = document.getElementById('sclChild')!
+      const CO = (window as unknown as {
+        CO: {
+          measureConstraintOwner: (n: Element, e: string) => unknown
+          pointerDeltaToSizeDelta: (o: unknown, e: string, d: number) => number | null
+        }
+      }).CO
+      return CO.pointerDeltaToSizeDelta(CO.measureConstraintOwner(el, 'right'), 'right', 20)
+    })
+    expect(cssDelta).toBeCloseTo(10, 1)
   })
 })
