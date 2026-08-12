@@ -206,9 +206,11 @@ describe('Panel — canonical section ordering', () => {
     ).toBe('true')
     expect(root.querySelector('[data-group="position"]')).toBeNull()
 
-    // Scope now defaults to 'all' (COR-12), which already hides Position. Narrow
-    // to 'This element' first so the transition under test — all => Position
-    // hidden — is actually exercised rather than asserted about the mount state.
+    // Scope now defaults to 'all' (COR-12), which already hides Position — so
+    // the original "click All, expect Position hidden" would pass on the mount
+    // state alone, whether or not the toggle works. Narrow to 'This element'
+    // first to restore a real transition: the assertion below then exercises
+    // instance => all, and fails if switching back to All stops hiding Position.
     const instanceButton = root.querySelector<HTMLButtonElement>(
       '.cortex-panel__scope-btn:first-child',
     )
