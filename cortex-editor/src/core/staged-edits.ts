@@ -340,11 +340,16 @@ async function applyOne(
           `. Apply those together with the class change — they belong to one user action, and ` +
           `landing one without the other leaves the element in a state the user never asked for.`
         : ''
+    // Strip the ASSEMBLED reason, not just its inputs. `sanitizeHintsForAgent`
+    // covers `classOp` and the inline arrays, but `reason` is a generic string it
+    // never visits — and this builds a NEW string out of those same page-derived
+    // tokens. Sanitizing what you receive does not cover what you emit; the same
+    // lesson the guidance builder learned.
     return {
       intentId,
       status: 'needs-source-edit' as const,
       intent,
-      reason:
+      reason: stripFenceMarkers(
         `Class change: ${describeClassOp(intent.classOp)}` +
         `. This intent carries no file position — the element had no build-time anchor, so ` +
         `locate the call site from its sourceResolutionHint and edit the className there.` +
@@ -352,6 +357,7 @@ async function applyOne(
         `\n\nEdit the className in SOURCE. Do not set the class via a style attribute or a ` +
         `runtime classList call: the user is editing their component, and a change that only ` +
         `exists at runtime disappears on the next render and cannot be reviewed in a diff.`,
+      ),
     }
   }
 

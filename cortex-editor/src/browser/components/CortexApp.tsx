@@ -785,6 +785,15 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // clear. Same conservative direction as below — only an exact,
         // unambiguous match converges.
         if (isClassEdit(edit)) {
+          // A COMPOUND class intent also carries inline property work, and the
+          // class half landing says nothing about the other half. Clearing on
+          // classList alone would drop the intent while the inline edits are
+          // still missing from source — losing a real edit permanently, which is
+          // strictly worse than the stale badge this net exists to clean up.
+          // Only the pure class-op case is answerable here; leave the rest for
+          // the user, the same conservative direction as everything below.
+          if (edit.inlineSets?.length || edit.inlineRemoves?.length) continue
+
           const op = edit.classOp
           const has = (c: string): boolean => el.classList.contains(c)
           const converged =

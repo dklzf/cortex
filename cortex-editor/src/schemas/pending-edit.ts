@@ -224,10 +224,20 @@ export const structuralEditSchema = z.object({
 /** The class mutation shape. Defined HERE rather than in wire-format.ts, which
  *  held a byte-identical private copy — the same drift class composite-key.ts
  *  exists to prevent. wire-format imports this one. */
+/** A class op names exactly ONE token. Whitespace is rejected rather than
+ *  trimmed or split: `classList.contains` throws `InvalidCharacterError` on a
+ *  value containing whitespace, so `add: "foo bar"` is not a slightly-wrong
+ *  intent, it is one that crashes the reconnect convergence check. Refusing it
+ *  at the envelope keeps that unreachable. */
+const classToken = z
+  .string()
+  .min(1)
+  .refine(v => !/\s/.test(v), { message: 'class token must not contain whitespace' })
+
 export const classOpSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('add'), add: z.string().min(1) }),
-  z.object({ kind: z.literal('remove'), remove: z.string().min(1) }),
-  z.object({ kind: z.literal('swap'), remove: z.string().min(1), add: z.string().min(1) }),
+  z.object({ kind: z.literal('add'), add: classToken }),
+  z.object({ kind: z.literal('remove'), remove: classToken }),
+  z.object({ kind: z.literal('swap'), remove: classToken, add: classToken }),
 ])
 
 /**

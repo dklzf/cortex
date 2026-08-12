@@ -810,4 +810,12 @@ describe('COR-25: classOp validation is shared with pending-edit', () => {
     })
     expect(r.success).toBe(false)
   })
+
+  it('REJECTS a whitespace-containing class token', () => {
+    // `classList.contains` throws InvalidCharacterError on whitespace, so
+    // `add: "foo bar"` is not a slightly-wrong intent — it crashes the reconnect
+    // convergence check. Refused at the envelope so that stays unreachable.
+    const r = browserToServerSchema.safeParse({ ...base, classOp: { kind: 'add', add: 'foo bar' } })
+    expect(r.success).toBe(false)
+  })
 })

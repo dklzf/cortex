@@ -123,6 +123,10 @@ export function sanitizeHintsForAgent<T>(value: T): T {
       out[key] = op
     } else if ((key === 'inlineSets' || key === 'inlineRemoves') && Array.isArray(v)) {
       out[key] = v.map(entry => {
+        // A raw STRING entry is possible — `staged-edit-add` takes page-provided
+        // payloads — and the recursive fallback leaves primitives untouched,
+        // which would carry a marker straight through.
+        if (typeof entry === 'string') return stripFenceMarkers(entry)
         if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
           return sanitizeHintsForAgent(entry)
         }
