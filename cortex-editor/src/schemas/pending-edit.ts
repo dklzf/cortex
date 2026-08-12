@@ -329,6 +329,20 @@ export const pendingEditSchema = z.preprocess(
   // one silently — `set_inline_style` writing `style={{order}}` is the exact
   // a11y regression this type exists to prevent. Enforced at the envelope so
   // no producer can route a move to the direct path.
+  // A class intent is only ever PRODUCED on the agent-resolve path — the direct
+  // path writes className at a file position and never stages. Accepting a
+  // forged `direct` (or omitted) mode with an attacker-chosen `source` let a
+  // page reach the agent through `staged-edit-add` with NO hint, and
+  // `serializeForAgent` fences only payloads that carry a sourceResolutionHint —
+  // so the forged source arrived unfenced. Requiring the mode makes the hint
+  // mandatory via the check above, which closes both halves at once.
+  if (edit.kind === 'class' && edit.applyMode !== 'agent-resolve') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['applyMode'],
+      message: "class intents must use applyMode 'agent-resolve' — the direct path writes className at a file position and never stages",
+    })
+  }
   if (edit.kind === 'structural' && edit.applyMode !== 'agent-resolve') {
     ctx.addIssue({
       code: 'custom',

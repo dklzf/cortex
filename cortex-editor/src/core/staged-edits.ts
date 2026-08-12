@@ -4,6 +4,7 @@ import { pendingEditSchema, MAX_FULL_SYNC_SIZE, isStructuralEdit, isClassEdit, d
 import { compositeKey } from '../shared/composite-key.js'
 import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../shared/preview-source.js'
 import { stripFenceMarkers } from '../shared/untrusted-fence.js'
+import { validateClassOpToken } from './class-op-validator.js'
 import type { EditPipeline } from './edit-pipeline.js'
 
 // MAX_FULL_SYNC_SIZE — single source of truth lives in schemas/pending-edit.ts
@@ -326,6 +327,26 @@ async function applyOne(
   // agent-resolve check, so TypeScript narrows the rest of this function to
   // style intents and no property/value access below can see a class intent.
   if (isClassEdit(intent)) {
+    // The staged path RETURNS before EditPipeline.handleEdit, which is where
+    // validateClassOpToken runs — so without this a staged intent instructs the
+    // agent to write a token the direct path explicitly blocks (Tailwind's
+    // arbitrary-value bracket syntax compiles `bg-[url(javascript:alert(1))]`
+    // into an executing CSS url()). Creating a second route to the same sink
+    // without carrying its guard is the whole bug; run the SAME validator rather
+    // than restating its rules here, so the two paths cannot drift.
+    const op = intent.classOp
+    const tokens = op.kind === 'swap' ? [op.remove, op.add] : op.kind === 'add' ? [op.add] : [op.remove]
+    for (const token of tokens) {
+      const verdict = validateClassOpToken(token)
+      if (!verdict.ok) {
+        return {
+          intentId,
+          status: 'failed' as const,
+          error: `Refusing to forward class token to the agent: ${verdict.reason}`,
+        }
+      }
+    }
+
     const inlineNote =
       (intent.inlineSets?.length ?? 0) + (intent.inlineRemoves?.length ?? 0) > 0
         ? `\n\nThe same gesture also ` +
