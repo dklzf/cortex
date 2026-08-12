@@ -504,6 +504,32 @@ export function Panel({
   // Shared source detection for warning-only banner (ZF0-1583)
   const [sharedSourceInfo, setSharedSourceInfo] = useState<SharedSourceInfo | null>(null)
 
+  /**
+   * What a scope=all edit ACTUALLY reaches when a repeated call site's class is
+   * also used elsewhere (COR-12 review).
+   *
+   * `sharedSourceInfo` counts only the nodes rendered from the one JSX location.
+   * `sharedInfo` counts every user of the CSS selector, which can be a strictly
+   * larger set. A style edit at scope=all is satisfied by rewriting that shared
+   * CSS RULE — so it changes the larger set, and a banner reporting only the
+   * same-source subset tells the user 3 elements will change when 13 will.
+   *
+   * Reporting the union keeps the banner's number equal to the blast radius it
+   * previews, which is the whole point of the banner. Source precedence still
+   * holds for the CONTROL — per-instance stays unavailable — this only widens
+   * what gets counted and highlighted.
+   */
+  const sourceBlastRadius = useMemo(() => {
+    if (!sharedSourceInfo) return null
+    if (!sharedInfo) return { info: sharedSourceInfo, sourceCount: sharedSourceInfo.count }
+    const union = new Set<Element>(sharedSourceInfo.elements)
+    for (const el of sharedInfo.elements) union.add(el)
+    return {
+      info: { ...sharedSourceInfo, elements: [...union], count: union.size },
+      sourceCount: sharedSourceInfo.count,
+    }
+  }, [sharedSourceInfo, sharedInfo])
+
   // Typography section dual-mode toggle: auto picks from detected token classes
 
   // Elements section (LayerTree) height — owned by Panel so the resize handle
@@ -1792,26 +1818,41 @@ export function Panel({
             </button>
           </div>
           {/* COR-12: the toggle governs STYLE edits, which the server satisfies
-              at scope=all by rewriting the shared CSS rule once. A typography
+              at scope=all by rewriting the shared CSS rule once. A token
               link/unlink is a different operation — it adds or removes a class
               token on ONE className attribute — and has no fan-out. Saying so
               beside the control is the same discipline as the shared-source
-              banner: a scope that cannot be honoured is named, not implied. */}
-          {editScope === 'all' && showTypography && (
+              banner: a scope that cannot be honoured is named, not implied.
+              (COR-32 is the fan-out itself.)
+
+              Deliberately NOT gated on `showTypography`, and worded for tokens
+              generally. The first version said "Typography links" and rendered
+              only for text elements, which review caught as a disclosure that
+              enumerated its call sites: handleBackgroundChange and
+              handleBorderChange reach the same applyClassChange path, so a
+              non-text container got an All control with the identical silent
+              limitation and no note at all. The limitation belongs to the PATH,
+              so the note is tied to the scope, not to one section. */}
+          {editScope === 'all' && (
             <span class="cortex-panel__scope-note">
-              Typography links apply to this element only
+              Token links (typography, background, border) apply to this element only
             </span>
           )}
         </div>
       )}
-      {sharedSourceInfo && (
+      {sourceBlastRadius && (
         <div
           class="cortex-panel__scope cortex-panel__scope--source-only"
-          onMouseEnter={() => highlightSharedElements(sharedSourceInfo, element)}
+          onMouseEnter={() => highlightSharedElements(sourceBlastRadius.info, element)}
           onMouseLeave={() => clearHighlights()}
         >
           <span class="cortex-panel__scope-label">
-            Editing all {sharedSourceInfo.count} — they share one source location
+            {sourceBlastRadius.info.count === sourceBlastRadius.sourceCount
+              ? `Editing all ${sourceBlastRadius.info.count} — they share one source location`
+              // The two groups change for DIFFERENT reasons, so collapsing them
+              // into one number would be accurate but unexplained. Naming both
+              // keeps the count honest and says why the extra elements are in it.
+              : `Editing all ${sourceBlastRadius.info.count} — ${sourceBlastRadius.sourceCount} share one source location, the rest share its style rule`}
           </span>
         </div>
       )}

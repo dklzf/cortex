@@ -541,6 +541,13 @@
 
 .cortex-panel__scope {
   display: flex;
+  /* Required for the `flex-basis: 100%` on __scope-note to actually start a new
+     row. Without it the container stays one line (flex-wrap defaults to nowrap),
+     the basis is just a shrink hint, and label + toggle + note compress together
+     — ellipsizing the label and squeezing the toggle, the exact opposite of what
+     the note's own comment claimed it did. Caught in review; the comment was
+     describing an intent the CSS did not implement. */
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   padding: var(--cx-sp-3) var(--cx-sp-5);

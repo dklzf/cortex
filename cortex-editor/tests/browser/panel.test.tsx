@@ -2615,6 +2615,125 @@ describe('Panel — source-only blast-radius banner (ZF0-1583)', () => {
     expect(sourceBanner.querySelector('.cortex-panel__scope-btn')).toBeNull()
   })
 
+  it('the scope note renders for a NON-TEXT element too — the limit is the path, not the section', async () => {
+    // COR-12 review (codex). The note first read "Typography links..." and was
+    // gated on showTypography, which made the disclosure enumerate its call
+    // sites: handleBackgroundChange and handleBorderChange reach the SAME
+    // applyClassChange path, so a non-text container got an All control with the
+    // identical silent limitation and no note. Controls enumerated by call site
+    // lose coverage silently — the limitation belongs to the path, so the note
+    // is tied to the scope instead.
+    const sharedCss = 'Box.module.css:.box'
+    const els = ['src/A.tsx:1:1', 'src/B.tsx:2:2'].map(src => {
+      const el = document.createElement('div')   // no text content => showTypography false
+      el.setAttribute('data-cortex-source', src)
+      el.setAttribute('data-cortex-css', sharedCss)
+      document.body.appendChild(el)
+      return el
+    })
+
+    const overrideManager = createStubOverrideManager()
+    const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
+    render(
+      <Panel
+        selectedElements={[els[0]!]}
+        overrideManager={overrideManager as any}
+        onClose={() => {}}
+        onSelectElement={() => {}}
+        buffer={makeFakeBuffer()}
+        {...panelPositionProps}
+      />,
+      shadowRoot,
+    )
+    cleanup = () => {
+      render(null, shadowRoot)
+      removeHost()
+      els.forEach(el => el.remove())
+      void shadow
+    }
+
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('.cortex-panel__scope-toggle')).not.toBeNull()
+    }, { timeout: 500 })
+
+    // Precondition: this element really has NO typography section, so the note
+    // being present proves it is not riding on the showTypography gate.
+    expect(shadowRoot.querySelector('[data-group="typography"]')).toBeNull()
+    const note = shadowRoot.querySelector('.cortex-panel__scope-note')
+    expect(note).not.toBeNull()
+    // Copy names the affected controls generically, background and border included.
+    expect(note!.textContent).toContain('background')
+    expect(note!.textContent).toContain('border')
+  })
+
+  it('the source banner counts the UNION when the class reaches past the call site', async () => {
+    // COR-12 review (codex). sharedSourceInfo counts only nodes from the one JSX
+    // location; sharedInfo counts every user of the CSS selector, which can be a
+    // strictly larger set. A style edit at scope=all is satisfied by rewriting
+    // that shared CSS RULE, so it changes the larger set — and a banner
+    // reporting only the same-source subset told the user 2 would change when 4
+    // will. Under-reporting a blast radius is the same defect class this ticket
+    // exists to remove, so the count must equal what the preview highlights.
+    const source = 'src/Row.tsx:7:3'
+    const sharedCss = 'Row.module.css:.row'
+
+    // Two rendered from ONE call site (shared source AND the class)...
+    const fromMap = [0, 1].map(() => {
+      const el = document.createElement('div')
+      el.setAttribute('data-cortex-source', source)
+      el.setAttribute('data-cortex-css', sharedCss)
+      document.body.appendChild(el)
+      return el
+    })
+    // ...plus two elsewhere that only share the CLASS.
+    const classOnly = ['src/Other.tsx:1:1', 'src/Third.tsx:2:2'].map(src => {
+      const el = document.createElement('div')
+      el.setAttribute('data-cortex-source', src)
+      el.setAttribute('data-cortex-css', sharedCss)
+      document.body.appendChild(el)
+      return el
+    })
+
+    const overrideManager = createStubOverrideManager()
+    const { shadow, root: shadowRoot, cleanup: removeHost } = createShadowHost()
+    render(
+      <Panel
+        selectedElements={[fromMap[0]!]}
+        overrideManager={overrideManager as any}
+        onClose={() => {}}
+        onSelectElement={() => {}}
+        buffer={makeFakeBuffer()}
+        {...panelPositionProps}
+      />,
+      shadowRoot,
+    )
+    cleanup = () => {
+      render(null, shadowRoot)
+      removeHost()
+      ;[...fromMap, ...classOnly].forEach(el => el.remove())
+      void shadow
+    }
+
+    await vi.waitFor(() => {
+      expect(shadowRoot.querySelector('.cortex-panel__scope--source-only')).not.toBeNull()
+    }, { timeout: 500 })
+
+    const banner = shadowRoot.querySelector('.cortex-panel__scope--source-only')!
+    // 4, not 2 — and it says WHY the other two are included, since the two
+    // groups change for different reasons.
+    expect(banner.textContent).toContain('Editing all 4')
+    expect(banner.textContent).toContain('2 share one source location')
+    expect(banner.textContent).toContain('share its style rule')
+
+    // The preview must match the number: all three non-selected elements light up.
+    await act(async () => {
+      banner.dispatchEvent(new MouseEvent('mouseenter'))
+      await new Promise(r => requestAnimationFrame(() => r(null)))
+    })
+    expect(document.querySelectorAll('[data-cortex-blast-radius]').length).toBe(3)
+    expect(fromMap[0]!.hasAttribute('data-cortex-blast-radius')).toBe(false)
+  })
+
   it('hovering the ALREADY-ACTIVE All option still previews the blast radius', async () => {
     // COR-12 regression, found by codex. The handler used to gate on
     // `editScope !== 'all'`, which was safe only while 'all' was reached
