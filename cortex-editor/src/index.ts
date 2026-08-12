@@ -26,6 +26,20 @@ export { InlineStyleRewriter } from './core/rewriter/inline-style.js'
 export type { InlineStyleRewriteRequest } from './core/rewriter/inline-style.js'
 export type { RewriteRequest, RewriteResult } from './core/rewriter/types.js'
 export { cssPropertyToCamelCase } from './core/rewriter/jsx-utils.js'
+// Anchor CORRECTNESS verification (COR-29). Exported because the coverage
+// harness is a plain .mjs script that cannot import TypeScript sources, and the
+// alternative — reimplementing the position walk in the script — would be a
+// shadow copy that agrees with itself and proves nothing about what apply does.
+export {
+  verifyAnchor,
+  summarizeAnchors,
+  parseAnchorSource,
+  tagAtPosition,
+  type AnchorSample,
+  type AnchorVerdict,
+  type AnchorVerifyResult,
+  type AnchorVerifySummary,
+} from './core/anchor-verify.js'
 export { HMRVerifier } from './core/hmr-verifier.js'
 export type { PendingEdit } from './core/hmr-verifier.js'
 

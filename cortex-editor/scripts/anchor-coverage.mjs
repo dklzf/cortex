@@ -18,6 +18,12 @@
  *   node scripts/anchor-coverage.mjs --base http://localhost:3000 --routes / /about
  *   node scripts/anchor-coverage.mjs --base http://localhost:3000 --routes-file routes.txt
  *
+ * With --verify-root <project dir> it also reports CORRECTNESS (COR-29): whether
+ * each anchor's recorded position resolves to the element it claims. Uniqueness
+ * cannot answer that — adding a constant to every line number is a one-to-one
+ * mapping, so COR-28's 19-line offset left every label exactly as unique as
+ * before while pointing all of them at the wrong element.
+ *
  * Output: per-route and aggregate buckets, plus a shared-source histogram, and
  * a second table restricted to the REORDERABLE-SIBLING population (nodes with
  * >= 2 element siblings inside a flex/grid layout parent) — the only nodes a
@@ -27,13 +33,15 @@
  */
 import { chromium } from '@playwright/test'
 import fs from 'node:fs'
+import path from 'node:path'
 
 function parseArgs(argv) {
-  const out = { base: null, routes: [], viewport: { width: 1440, height: 900 }, settleMs: 1500 }
+  const out = { base: null, routes: [], viewport: { width: 1440, height: 900 }, settleMs: 1500, verifyRoot: null }
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--base') out.base = argv[++i]
     else if (a === '--settle') out.settleMs = Number(argv[++i])
+    else if (a === '--verify-root') out.verifyRoot = argv[++i]
     else if (a === '--routes-file') {
       out.routes.push(...fs.readFileSync(argv[++i], 'utf8').split('\n').map(s => s.trim()).filter(Boolean))
     } else if (a === '--routes') {
@@ -68,6 +76,11 @@ const PROBE = () => {
   const buckets = { unique: 0, shared: 0, unannotated: 0 }
   const sharedSizes = []
   const unannotatedSample = []
+  // COR-29: every (source, localName) pair, for CORRECTNESS verification back in
+  // Node. localName, not tagName — it lower-cases HTML while preserving SVG
+  // casing, and an SVG anchor compared against an upper-cased tagName would read
+  // as a mismatch that is really a casing artifact.
+  const anchorSamples = []
 
   for (const el of document.querySelectorAll('*')) {
     const tag = el.tagName.toLowerCase()
@@ -91,6 +104,7 @@ const PROBE = () => {
     const n = sourceCounts.get(src) ?? 1
     if (n === 1) buckets.unique++
     else { buckets.shared++; sharedSizes.push(n) }
+    anchorSamples.push({ source: src, domTag: el.localName })
   }
 
   // ── Second, stricter population: what a designer can actually POINT AT. ──
@@ -210,6 +224,7 @@ const PROBE = () => {
 
   return {
     buckets,
+    anchorSamples,
     hit,
     hitTotal: hit.unique + hit.shared + hit.unannotated,
     total: buckets.unique + buckets.shared + buckets.unannotated,
@@ -231,7 +246,7 @@ const PROBE = () => {
 const pct = (n, d) => (d === 0 ? '  n/a' : `${((n / d) * 100).toFixed(1).padStart(5)}%`)
 
 async function main() {
-  const { base, routes, viewport, settleMs } = parseArgs(process.argv)
+  const { base, routes, viewport, settleMs, verifyRoot } = parseArgs(process.argv)
   const browser = await chromium.launch()
   const page = await browser.newPage({ viewport })
 
@@ -240,6 +255,7 @@ async function main() {
   const aggRP = { unique: 0, shared: 0, unannotated: 0, total: 0 }
   const aggRPairs = { unique: 0, shared: 0, unannotated: 0, total: 0 }
   const allShared = []
+  const allAnchorSamples = []
   const allReorderShared = []
   const rows = []
 
@@ -270,6 +286,7 @@ async function main() {
     aggRP.total += r.reorderPointableTotal
     aggRPairs.total += r.reorderPairsTotal
     allShared.push(...r.sharedGroupSizes)
+    allAnchorSamples.push(...(r.anchorSamples ?? []))
     allReorderShared.push(...r.reorderSharedSizes)
     rows.push({ route, ...r })
   }
@@ -349,6 +366,52 @@ async function main() {
     console.log('  >=1 sibling  = same filter with the threshold relaxed to a 2-item row, as a sensitivity check.')
   } else {
     console.log('\nNo pages measured. Every route errored — see above.')
+  }
+
+  // ── COR-29: CORRECTNESS, which uniqueness cannot see ──────────────────────
+  //
+  // Adding a constant to every line number is a one-to-one mapping, so every
+  // label stays exactly as unique as it was. COR-28's 19-line offset — where
+  // 100% of Vite anchors pointed at the wrong element — would have scored
+  // identically above. These four numbers are kept SEPARATE on purpose: one
+  // blended "accuracy" figure scores a tool that refuses 40% of the time and is
+  // never wrong the same as one that answers always and is wrong 10% of the
+  // time, and those are not the same tool.
+  if (verifyRoot && allAnchorSamples.length) {
+    let summarize
+    try {
+      ;({ summarizeAnchors: summarize } = await import('../dist/index.js'))
+    } catch {
+      console.log('\nCORRECTNESS: skipped — run `npm run build` first (the verifier ships from dist).')
+      console.log('')
+      return
+    }
+    const fileCache = new Map()
+    const readFile = (rel) => {
+      if (fileCache.has(rel)) return fileCache.get(rel)
+      let text = null
+      try { text = fs.readFileSync(path.resolve(verifyRoot, rel), 'utf8') } catch { text = null }
+      fileCache.set(rel, text)
+      return text
+    }
+    const sum = summarize(allAnchorSamples, readFile)
+    console.log('\nCORRECTNESS — does each anchor resolve to the element it claims?')
+    console.log(`corpus: ${verifyRoot}  (always name the corpus — the same harness scored dev-app 91.7% and real routes 7.0%)`)
+    console.log('='.repeat(78))
+    console.log(`  COVERAGE        ${pct(agg.unique + agg.shared, agg.total)}  of pointable elements carry a label`)
+    console.log(`  VERIFIED        ${pct(sum.verified, sum.total)}  position resolves to a matching tag`)
+    console.log(`  UNIQUE          ${pct(agg.unique, agg.total)}  identifies exactly one element (NOT a correctness claim)`)
+    console.log(`  SILENTLY-WRONG  ${pct(sum.silentlyWrong, sum.total)}  resolves to a DIFFERENT element — must be 0`)
+    console.log(`  (unresolvable   ${pct(sum.unresolvable, sum.total)}  refused, not wrong: component anchors, unreadable files)`)
+    if (sum.mismatches.length) {
+      console.log('\n  mismatches (first 10) — named, because a bare count is not actionable:')
+      for (const m of sum.mismatches.slice(0, 10)) {
+        console.log(`    ${m.source}  DOM <${m.domTag}>  but source has <${m.sourceTag}>`)
+      }
+    }
+  } else if (!verifyRoot) {
+    console.log('\nCORRECTNESS: not measured. Pass --verify-root <project dir> to check whether')
+    console.log('anchors point at the elements they claim. Uniqueness above CANNOT answer that.')
   }
   console.log('')
 }
