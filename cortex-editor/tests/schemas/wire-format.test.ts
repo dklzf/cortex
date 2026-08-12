@@ -766,3 +766,48 @@ describe('cortex/inactive-tab wire shape', () => {
     expect(result.success).toBe(true)
   })
 })
+
+// ── COR-25 follow-up: one classOpSchema, not two ────────────────────────────
+//
+// wire-format.ts held a byte-identical private copy of classOpSchema. Adding the
+// `class` intent kind introduced a second definition in pending-edit.ts, and the
+// two immediately drifted — the new one enforced `.min(1)` while the wire copy
+// still accepted empty strings. Flagged in review on the very commit whose
+// comment claimed "wire-format imports this one" while it did not.
+//
+// This is the drift class composite-key.ts exists to prevent, and its header
+// says why a comment cannot prevent it. wire-format now imports the canonical
+// schema; these tests pin the resulting contract so the duplicate cannot
+// silently return.
+describe('COR-25: classOp validation is shared with pending-edit', () => {
+  const base = {
+    type: 'edit' as const,
+    editId: 'e1',
+    property: '',
+    value: '',
+    source: 'src/App.tsx:1:1',
+    elementSelector: 'div',
+  }
+
+  it('accepts a well-formed class op', () => {
+    const r = browserToServerSchema.safeParse({ ...base, classOp: { kind: 'add', add: 'text-lg' } })
+    expect(r.success).toBe(true)
+  })
+
+  it('REJECTS an empty class token — it names no class to add', () => {
+    // Previously accepted by the wire copy. An empty token is not a smaller
+    // edit, it is an edit that cannot mean anything, and letting it through
+    // reaches the apply path as a no-op the user cannot distinguish from a
+    // failure.
+    const r = browserToServerSchema.safeParse({ ...base, classOp: { kind: 'add', add: '' } })
+    expect(r.success).toBe(false)
+  })
+
+  it('REJECTS an empty token on the swap arm too', () => {
+    const r = browserToServerSchema.safeParse({
+      ...base,
+      classOp: { kind: 'swap', remove: 'text-sm', add: '' },
+    })
+    expect(r.success).toBe(false)
+  })
+})
