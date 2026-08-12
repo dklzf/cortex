@@ -1,0 +1,27 @@
+cortex-editor/src/browser/constraint-owner.ts
+  s_515b894c608172::t_6fc1e88ef2db3c 511-533
+  s_515b894c608172::t_ae0312499f4086 620-627,634-636
+  s_515b894c608172::t_7a6283d31d10e9 329-332,335-337,340-346,348-349,353-365,371-423,432-442,451-452,455-466,470-482,485-510,534,536-540,545-546,555-557,565-567,570-571,573,578,583,586-589,607-608,612-619,632,641-645,648,652-653,657,670-672,679,682-683
+cortex-editor/tests/e2e/constraint-owner-measured.spec.ts
+  s_515b894c608172::t_eae66d43e3ec70 120,139-146,329-334,357-366
+  s_515b894c608172::t_ae0312499f4086 233
+  s_515b894c608172::t_23ab2bc7b9ce54 288-328,335-337,367-399
+  s_515b894c608172::t_20182dc6453131 92-119,121-132,147-151
+  s_515b894c608172::t_ca03a42c75d56e 133-138,338-356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5d7f4aa05d2e2580925218de6ce4b2fda9d09ebd",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
