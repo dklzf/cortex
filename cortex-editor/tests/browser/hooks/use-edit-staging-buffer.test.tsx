@@ -900,3 +900,94 @@ describe('createPanelSyncEmitter — channel.send wiring', () => {
   })
 
 })
+
+// ── COR-26 ──────────────────────────────────────────────────────────────────
+//
+// `stripLineCol` strips a trailing `:line:col`, so it only yields a file path
+// for a `file:line:col` source. A preview source is `cortex-preview:<id>` and
+// names no file, so it passed through unchanged and could never be in the
+// changed-file set — the `continue` fired every time.
+//
+// Not an edge case: pending-edit.ts forces EVERY structural intent onto
+// agent-resolve, so every structural intent carries a preview source. The guard
+// had never run once for the population it was written to protect, which is
+// also why no test covered it.
+describe('COR-26: structural intents with a preview source revalidate', () => {
+  function makeRow(previewId: string): HTMLElement {
+    const el = document.createElement('li')
+    el.setAttribute('data-cortex-preview-id', previewId)
+    return el
+  }
+
+  let parent: HTMLElement
+  afterEach(() => { parent?.remove() })
+
+  function mountRows(ids: string[]): void {
+    parent = document.createElement('ul')
+    for (const id of ids) parent.appendChild(makeRow(id))
+    document.body.appendChild(parent)
+  }
+
+  const structuralIntent = (baseline: string[]) => ({
+    kind: 'structural' as const,
+    intentId: 'struct-1',
+    source: baseline[0]!,
+    structural: {
+      op: 'reorder' as const,
+      parentSource: 'cortex-preview:parent-1',
+      parentKey: 'k1',
+      baseline,
+      order: [1, 0],
+    },
+    applyMode: 'agent-resolve' as const,
+    sourceResolutionHint: {
+      tagName: 'li', textPreview: 'row', domSelector: 'li',
+    },
+    timestamp: 1000,
+  }) as unknown as PendingEdit
+
+  it('is NOT skipped just because its source names no file', () => {
+    // The drift: a sibling was inserted, so the captured baseline no longer
+    // describes the live tree. Before the fix this intent was skipped outright
+    // and reported clean, and applying it would have reordered whatever was
+    // there now.
+    mountRows(['a', 'b', 'c'])
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => {
+      result.current.append(structuralIntent(['cortex-preview:a', 'cortex-preview:b']))
+    })
+
+    const { divergent } = result.current.reconcile(['src/List.tsx'])
+    expect(divergent).toHaveLength(1)
+    expect(divergent[0]!.intentId).toBe('struct-1')
+  })
+
+  it('does NOT false-positive when the tree still matches', () => {
+    // The other half of the fix: the source index is built only from
+    // [data-cortex-source], so once the guard stops skipping, a preview source
+    // resolves to nothing and every structural intent would be reported as
+    // "element deleted" on every HMR event — a noisy failure replacing a silent
+    // one. Indexing preview ids too is what keeps this clean.
+    mountRows(['a', 'b'])
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => {
+      result.current.append(structuralIntent(['cortex-preview:a', 'cortex-preview:b']))
+    })
+
+    const { divergent } = result.current.reconcile(['src/List.tsx'])
+    expect(divergent).toHaveLength(0)
+  })
+
+  it('still skips a file-sourced intent whose file did not change', () => {
+    // Control: the fix must not make everything unconditionally revalidate.
+    const el = document.createElement('div')
+    el.setAttribute('data-cortex-source', 'src/Hero.tsx:5:3')
+    document.body.appendChild(el)
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => { result.current.append(makeEdit({ intentId: 'style-1' })) })
+
+    const { divergent } = result.current.reconcile(['src/Unrelated.tsx'])
+    expect(divergent).toHaveLength(0)
+    el.remove()
+  })
+})
