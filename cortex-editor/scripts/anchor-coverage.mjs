@@ -39,12 +39,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 function parseArgs(argv) {
-  const out = { base: null, routes: [], viewport: { width: 1440, height: 900 }, settleMs: 1500, verifyRoot: null }
+  const out = { base: null, routes: [], viewport: { width: 1440, height: 900 }, settleMs: 1500, verifyRoot: null, harvest: false }
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--base') out.base = argv[++i]
     else if (a === '--settle') out.settleMs = Number(argv[++i])
     else if (a === '--verify-root') out.verifyRoot = path.resolve(argv[++i])
+    else if (a === '--harvest') out.harvest = true
     else if (a === '--routes-file') {
       out.routes.push(...fs.readFileSync(argv[++i], 'utf8').split('\n').map(s => s.trim()).filter(Boolean))
     } else if (a === '--routes') {
@@ -204,6 +205,166 @@ const PROBE = () => {
   }
   window.scrollTo(0, 0)
 
+  // ── HARVEST (COR plan 2026-08-13) ────────────────────────────────────────
+  // What does REACT already know that cortex did not stamp?
+  //
+  // Three numbers, deliberately separate because they decide different things:
+  //   N1  of nodes with NO cortex stamp, how many get a user-code source
+  //       location from React's own `_debugStack`?           → addressability
+  //   N2  of `.map()` children, how many carry a USABLE key?  → per-instance
+  //   N3  of plausible containers, how many are unique?       → can move ship
+  //
+  // All of this is DEV-ONLY and reads private React fields. That is acceptable
+  // for a measurement; it is not a shipping decision. See the plan's §7.
+  const fiberOf = (el) => {
+    for (const k in el) if (k.charCodeAt(0) === 95 && k.startsWith('__reactFiber$')) return el[k]
+    return null
+  }
+
+  // A user-code source location out of ONE fiber's own creation stack.
+  const stackSrc = (fiber) => {
+    const raw = fiber?._debugStack
+    if (!raw) return null
+    const stack = String(raw.stack ?? raw)
+    for (const line of stack.split('\n')) {
+      const m = /\((https?:\/\/[^)]+)\)/.exec(line) ?? /at\s+(https?:\/\/\S+)/.exec(line)
+      const url = m?.[1]
+      if (!url || !/\.[jt]sx?:\d+:\d+/.test(url)) continue
+      if (url.includes('/node_modules/')) continue
+      // Strip origin and Vite's ?v= cache-buster so this is comparable with a
+      // `data-cortex-source` value.
+      return url.replace(/^https?:\/\/[^/]+\//, '').replace(/\?[^:]*(?=:\d+:\d+$)/, '')
+    }
+    return null
+  }
+
+  // MEASURED CORRECTION (2026-08-13): `_debugStack` alone does NOT cross the
+  // library boundary. For a Radix-rendered <button> the whole stack is
+  //   at Primitive.button (@radix-ui_react-accordion.js:921:40)
+  //   at react_stack_bottom_frame (react-dom_client.js) …
+  // with NO user frame at all — because the stack records where THAT element
+  // was created, which is inside the library. So a stack-only harvest recovers
+  // nothing for exactly the population it was meant to reach (measured: 0 of 16).
+  //
+  // `_debugOwner` is the field that does cross it. On the same node the owner
+  // chain walks up through the library's wrappers and reaches `App`. So the
+  // route is: climb owners until one of them was itself created in user code,
+  // and take THAT owner's stack. The result is the user's call site — the
+  // element the designer would recognise as theirs.
+  const userSrcFrom = (fiber) => {
+    const own = stackSrc(fiber)
+    if (own) return { src: own, viaOwnerHops: 0 }
+    let owner = fiber?._debugOwner, hops = 0
+    while (owner && hops++ < 12) {
+      const s = stackSrc(owner)
+      if (s) return { src: s, viaOwnerHops: hops }
+      owner = owner._debugOwner
+    }
+    return null
+  }
+
+  const ownerName = (f) => f?.elementType?.name ?? f?.elementType?.displayName
+    ?? f?.type?.name ?? f?.type?.displayName
+    ?? f?.elementType?.render?.name ?? null
+
+  const harvest = {
+    // N1
+    unstamped: 0, unstampedWithReactSrc: 0,
+    // How many needed an OWNER-CHAIN climb rather than the node's own stack.
+    // This is the library-boundary population; a stack-only harvest reports 0.
+    viaOwnerChain: 0,
+    // N2 — one record per .map()-style GROUP (siblings sharing a parent+source)
+    keyGroups: [],
+    // N3
+    containers: 0, containersUniquelyAnchored: 0,
+    // evidence for the report
+    samples: [],
+  }
+
+  if (window.__CORTEX_HARVEST__) {
+    const seenGroup = new Set()
+    for (const el of document.querySelectorAll('*')) {
+      if (NON_VISUAL.has(el.tagName.toLowerCase())) continue
+      if (el.closest('[data-cortex-host]') || el.hasAttribute('data-cortex-root')) continue
+      const r = el.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0) continue
+
+      const stamp = el.getAttribute('data-cortex-source')
+      const f = fiberOf(el)
+
+      // ── N1 ──
+      if (!stamp) {
+        harvest.unstamped++
+        const found = userSrcFrom(f)
+        if (found) {
+          harvest.unstampedWithReactSrc++
+          if (found.viaOwnerHops > 0) harvest.viaOwnerChain++
+          if (harvest.samples.length < 25) {
+            harvest.samples.push({
+              tag: el.localName, reactSrc: found.src, hops: found.viaOwnerHops,
+              owner: ownerName(f?._debugOwner),
+            })
+          }
+        }
+      }
+
+      // ── N3: a plausible CONTAINER is a node with >= 2 element children ──
+      if (el.children.length >= 2) {
+        harvest.containers++
+        // "Uniquely anchored" = carries a stamp that no other element carries.
+        if (stamp && (sourceCounts.get(stamp) ?? 0) === 1) harvest.containersUniquelyAnchored++
+      }
+
+      // ── N2: keyed sibling groups ──
+      // A group is the keyed children of one parent. Recorded once per parent.
+      // The key does NOT necessarily live on the DOM node's own fiber. For
+      // `{rows.map(r => <Accordion.Item key={r}/>)}` the key is on the COMPONENT
+      // fiber, and the host <div> it renders has key null. Reading only the DOM
+      // node's fiber therefore missed every component-keyed list — which is the
+      // common shape in library code, and it under-counted N2 to 1 group on a
+      // fixture that has two. Climb to the nearest keyed fiber instead.
+      // MEASURED: 6 hops is too shallow. Radix stacks ~7 levels of its own
+      // internals (Primitive.div -> Provider -> AccordionItemContext -> …)
+      // between the host node and the keyed <Accordion.Item>, so a shallow
+      // climb reports "no keyed group" for a list that plainly has one.
+      // Raised to 20, and the siblings' keyed fibers must share a `return` —
+      // otherwise the climb has walked past this list into an unrelated
+      // ancestor whose key belongs to a different group entirely.
+      const keyedOf = (node) => {
+        let x = fiberOf(node), n = 0
+        while (x && n++ < 20) { if (x.key !== null) return x; x = x.return }
+        return null
+      }
+      const parent = el.parentElement
+      const selfKeyed = keyedOf(el)
+      if (parent && selfKeyed && !seenGroup.has(parent)) {
+        seenGroup.add(parent)
+        const kids = Array.from(parent.children)
+          .map(c => ({ el: c, f: keyedOf(c) }))
+          .filter(x => x.f && x.f.key !== null)
+        // One list, not several: every keyed fiber must have the same parent.
+        const sameList = kids.length >= 2 && kids.every(x => x.f.return === kids[0].f.return)
+        if (sameList) {
+          const keys = kids.map(x => String(x.f.key))
+          // `key={index}` is the degenerate case and it is NOT directly
+          // observable — at read time an index key is just a string. The
+          // heuristic: if every key equals its own position, the group is
+          // almost certainly index-keyed. Reported AS a heuristic, because it
+          // cannot distinguish index-keying from data that happens to be
+          // 0,1,2… — and that residual ambiguity is itself a finding.
+          const looksIndexed = keys.every((k, i) => k === String(i))
+          harvest.keyGroups.push({
+            size: kids.length,
+            looksIndexed,
+            allDistinct: new Set(keys).size === keys.length,
+            parentStamped: !!parent.getAttribute('data-cortex-source'),
+            sampleKeys: keys.slice(0, 5),
+          })
+        }
+      }
+    }
+  }
+
   // ── Third population: nodes that are actually REORDERABLE. ───────────────
   // The headline number above is a marginal over every pointable node, which
   // mixes in one-off chrome (headers, the single H1, a lone button) — elements
@@ -309,6 +470,7 @@ const PROBE = () => {
     reorderUnannotatedSample,
     anchorSamples,
     anchorSamplesDropped,
+    harvest,
     cortexPresent: !!document.querySelector('[data-cortex-source]'),
   }
 }
@@ -316,7 +478,7 @@ const PROBE = () => {
 const pct = (n, d) => (d === 0 ? '  n/a' : `${((n / d) * 100).toFixed(1).padStart(5)}%`)
 
 async function main() {
-  const { base, routes, viewport, settleMs, verifyRoot } = parseArgs(process.argv)
+  const { base, routes, viewport, settleMs, verifyRoot, harvest } = parseArgs(process.argv)
   const browser = await chromium.launch()
   const page = await browser.newPage({ viewport })
 
@@ -334,6 +496,7 @@ async function main() {
     try {
       const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 })
       if (resp && resp.status() >= 400) { rows.push({ route, error: `HTTP ${resp.status()}` }); continue }
+      await page.addScriptTag({ content: `window.__CORTEX_HARVEST__ = ${harvest ? 'true' : 'false'}` })
       await page.waitForTimeout(settleMs)
       r = await page.evaluate(PROBE)
     } catch (err) {
@@ -448,6 +611,61 @@ async function main() {
     if (rSample) console.log(`  unannotated sample: ${rSample.slice(0, 8).join(', ')}`)
     console.log('  ∩ pointable = reorderable nodes elementFromPoint also returned (the strict intersection).')
     console.log('  >=1 sibling  = same filter with the threshold relaxed to a 2-item row, as a sensitivity check.')
+
+    // ── HARVEST ──────────────────────────────────────────────────────────────
+    if (harvest) {
+      const H = rows.filter(r => !r.error).map(r => r.harvest).filter(Boolean)
+      const sum = (f) => H.reduce((n, h) => n + f(h), 0)
+      const groups = H.flatMap(h => h.keyGroups)
+      const unstamped = sum(h => h.unstamped)
+      const withSrc = sum(h => h.unstampedWithReactSrc)
+      const containers = sum(h => h.containers)
+      const uniqueContainers = sum(h => h.containersUniquelyAnchored)
+      const usable = groups.filter(g => !g.looksIndexed && g.allDistinct)
+      const indexed = groups.filter(g => g.looksIndexed)
+
+      console.log('\n' + '='.repeat(78))
+      console.log('HARVEST — what React already knows that cortex did not stamp')
+      console.log('='.repeat(78))
+      // Counts WITH denominators, always. A bare percentage over an unstated
+      // sample is how a measurement stops being checkable.
+      console.log(`  N1 addressability   ${withSrc} of ${unstamped} unstamped nodes carry a user-code`)
+      console.log(`                      source location from React   ${pct(withSrc, unstamped).trim()}`)
+      console.log(`                      of those, ${sum(h => h.viaOwnerChain)} needed an OWNER-CHAIN climb — the`)
+      console.log(`                      library-boundary population a stack-only read misses entirely`)
+      console.log(`  N2 per-instance     ${usable.length} of ${groups.length} keyed sibling groups have a USABLE key`)
+      console.log(`                      (distinct, and not index-shaped)          ${pct(usable.length, groups.length).trim()}`)
+      console.log(`                      ${indexed.length} look INDEX-KEYED — see the caveat below`)
+      console.log(`  N3 containers       ${uniqueContainers} of ${containers} multi-child containers are uniquely`)
+      console.log(`                      anchored                                  ${pct(uniqueContainers, containers).trim()}`)
+
+      console.log('\n  What each number decides:')
+      console.log('    N1 — how much of the app becomes addressable WITHOUT a build-time stamp.')
+      console.log('         React reports a call site even for library-rendered DOM, which the')
+      console.log('         transform skips by design. This is the 83.6%-no-anchor population.')
+      console.log('    N2 — whether "edit just this one" is reachable. A key is only as good as')
+      console.log('         the developer\'s keys.')
+      console.log('    N3 — whether drag-to-reorder can ship. A move needs an unambiguous')
+      console.log('         CONTAINER plus an ordinal, NOT per-instance identity.')
+
+      console.log('\n  CAVEAT on N2, and it is load-bearing: `key={index}` is not directly')
+      console.log('  observable — at read time an index key is just a string. A group is counted')
+      console.log('  index-shaped when every key equals its own position, which CANNOT separate')
+      console.log('  index-keying from data that happens to run 0,1,2… If that residual ambiguity')
+      console.log('  is large, keys must NOT drive a write: mistaking an index key for a real one')
+      console.log('  edits the wrong row silently. That is the disqualifying outcome in the plan.')
+
+      const ex = H.flatMap(h => h.samples).slice(0, 6)
+      if (ex.length) {
+        console.log('\n  Sample N1 recoveries (unstamped node -> React-reported source):')
+        for (const e of ex) console.log(`    <${e.tag}>${e.owner ? ` in ${e.owner}` : ''}  ->  ${e.reactSrc}`)
+      }
+      if (groups.length === 0) {
+        console.log('\n  NOTE: zero keyed sibling groups on these routes. N2 is undefined here,')
+        console.log('  not zero — the routes contain no .map()-rendered lists to measure.')
+      }
+    }
+
 
     // ── ANCHOR CORRECTNESS ───────────────────────────────────────────────────
     console.log('\n' + '='.repeat(78))
