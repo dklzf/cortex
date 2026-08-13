@@ -118,20 +118,31 @@ describe('verifyAnchor — the metric must be able to FAIL on a wrong label', ()
     expect(r.verdict).toBe('tag-only')
   })
 
-  it('UNRESOLVABLE, not wrong, when the file cannot be read', async () => {
+  it('UNREADABLE, not wrong, when the file cannot be read', async () => {
     const r = await verifyAnchor({ source: 'src/Gone.tsx:1:1', domTag: 'div' }, () => null)
-    expect(r.verdict).toBe('unresolvable')
+    expect(r.verdict).toBe('unreadable')
   })
 
-  it('UNRESOLVABLE when the anchor names a COMPONENT, not a host element', async () => {
+  it('COMPONENT-ANCHOR, distinct from unreadable, when the anchor names a component', async () => {
     // <Card> renders host elements whose tags never equal the component name, so
-    // the question is ill-formed rather than false. Counting it wrong would put a
-    // permanent floor under a number that must reach zero, and a metric that
-    // cannot reach its target stops being read.
+    // the question is ill-formed rather than false. Counting it WRONG would put a
+    // permanent floor under a number that must reach zero.
+    //
+    // But it must not share a bucket with `unreadable` either, and that is the
+    // point of this test. Under a call-site-addressing scheme EVERY anchor names
+    // a component, so a fully working scheme would report 100% of one blended
+    // bucket that also contains "file could not be read" — a working result and a
+    // broken harness rendered identical. Asserting the two verdicts differ is
+    // what keeps them tellable apart.
     const withComponent = `export const A = () => (\n  <Card title="x" />\n)\n`
     const r = await verifyAnchor({ source: 'src/A.tsx:2:3', domTag: 'div' }, () => withComponent)
-    expect(r.verdict).toBe('unresolvable')
+    expect(r.verdict).toBe('component-anchor')
     expect(r.reason).toContain('component')
+    // The discriminator is load-bearing: it must not equal the unreadable verdict.
+    const unreadable = await verifyAnchor({ source: 'src/Gone.tsx:1:1', domTag: 'div' }, () => null)
+    expect(r.verdict).not.toBe(unreadable.verdict)
+    // And the component NAME survives, since that is what a call-site scheme reads.
+    expect(r.sourceTag).toBe('Card')
   })
 
   it('compares SVG tags with EXACT casing', async () => {
@@ -165,7 +176,7 @@ describe('summarizeAnchors', () => {
         { source: 'src/App.tsx:6:11', domTag: 'li', domClass: 'row' },  // verified
         { source: 'src/App.tsx:25:11', domTag: 'h2' },                  // tag-only
         { source: 'src/App.tsx:9:7', domTag: 'li', domClass: 'row' },   // wrong (same tag!)
-        { source: 'src/Gone.tsx:1:1', domTag: 'div' },                  // unresolvable
+        { source: 'src/Gone.tsx:1:1', domTag: 'div' },                  // unreadable
       ],
       (p) => (p === 'src/Gone.tsx' ? null : FILE),
     )
@@ -173,7 +184,8 @@ describe('summarizeAnchors', () => {
     expect(summary.verified).toBe(1)
     expect(summary.tagOnly).toBe(1)
     expect(summary.silentlyWrong).toBe(1)
-    expect(summary.unresolvable).toBe(1)
+    expect(summary.unreadable).toBe(1)
+    expect(summary.componentAnchor).toBe(0)
     expect(summary.mismatches[0]).toMatchObject({
       source: 'src/App.tsx:9:7',
       domTag: 'li',
@@ -214,6 +226,27 @@ describe('summarizeAnchors', () => {
       () => FILE,
     )
     expect(s.mismatches.map(m => m.source)).toEqual(['zz/App.tsx:9:7', 'aa/App.tsx:9:7'])
+  })
+
+  it('a call-site-addressed page is legible, not one blended refusal bucket', async () => {
+    // The reason the split exists. Under a scheme that addresses COMPONENT call
+    // sites, every anchor names a component. With one `unresolvable` bucket the
+    // report read: verified 0, silently-wrong 0, unresolvable 100% — identical
+    // to a run where every file failed to open. A working scheme and a broken
+    // harness were indistinguishable, so the number could not be acted on.
+    const callSitePage = `export const A = () => (\n  <Card title="x" />\n)\n`
+    const summary = await summarizeAnchors(
+      [
+        { source: 'src/A.tsx:2:3', domTag: 'div' },
+        { source: 'src/A.tsx:2:3', domTag: 'div' },
+        { source: 'src/Gone.tsx:1:1', domTag: 'div' },   // genuinely unreadable
+      ],
+      (p) => (p === 'src/Gone.tsx' ? null : callSitePage),
+    )
+    expect(summary.componentAnchor).toBe(2)
+    expect(summary.unreadable).toBe(1)
+    // Neither is scored as an error — refusing is not lying.
+    expect(summary.silentlyWrong).toBe(0)
   })
 
   it('a uniform +19 offset drives silently-wrong to 100% — the case uniqueness cannot see', async () => {

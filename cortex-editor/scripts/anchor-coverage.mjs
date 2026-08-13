@@ -477,8 +477,10 @@ async function main() {
         '   tag agrees but nothing discriminates — NOT contradicted, NOT confirmed')
       console.log('  SILENTLY-WRONG' + String(verify.silentlyWrong).padStart(6) + pct(verify.silentlyWrong, t).padStart(9) +
         '   points at a different element, or at no JSX at all')
-      console.log('  unresolvable  ' + String(verify.unresolvable).padStart(6) + pct(verify.unresolvable, t).padStart(9) +
-        '   file unreadable, or the anchor names a component — a refusal, not a lie')
+      console.log('  unreadable    ' + String(verify.unreadable).padStart(6) + pct(verify.unreadable, t).padStart(9) +
+        '   file could not be read — a gap in what this harness saw, not a verdict')
+      console.log('  component-anch' + String(verify.componentAnchor).padStart(6) + pct(verify.componentAnchor, t).padStart(9) +
+        '   anchor names a COMPONENT, not a host tag — see note below')
       if (verify.dropped > 0) {
         console.log(`\n  NOTE: ${verify.dropped} pointable anchors exceeded the per-page sample cap and were NOT verified.`)
       }
@@ -487,6 +489,12 @@ async function main() {
         for (const m of verify.mismatches.slice(0, 10)) {
           console.log(`    ${m.source}  DOM <${m.domTag}> vs source <${m.sourceTag}>  — ${m.why}`)
         }
+      }
+      if (verify.componentAnchor > 0) {
+        console.log('\n  component-anchor is NOT a failure under a call-site-addressing scheme — it is')
+        console.log('  the expected result. It was previously folded into one `unresolvable` bucket')
+        console.log('  alongside unreadable files, which made a fully working call-site scheme')
+        console.log('  indistinguishable from a broken harness. Split so the two can be told apart.')
       }
       console.log('\n  SILENTLY-WRONG is the number that matters. Uniqueness cannot see it: a uniform')
       console.log('  line offset is one-to-one, so it leaves every coverage figure unchanged while')

@@ -32,13 +32,30 @@ import { findJsxElementAt } from './rewriter/jsx-utils.js'
  * would otherwise report SILENTLY-WRONG 0% while every anchor was false, which
  * is the exact blind spot this module exists to remove.
  *
- * `unresolvable` is reserved for cases where the QUESTION is ill-formed or the
- * evidence is missing — an unreadable file, or an anchor naming a component
- * rather than a host element. That distinction is load-bearing: a tool that
- * refuses is not a tool that lies, and one blended "accuracy" number scores them
- * identically.
+ * The two REFUSAL verdicts are kept apart because they mean opposite things
+ * about the anchor, and one blended "accuracy" number scores them identically.
+ * A tool that refuses is not a tool that lies — but WHY it refused decides what
+ * to do next:
+ *
+ * `unreadable` — the evidence is missing. The file could not be read, or the
+ * source is not a `file:line:col` at all. Says nothing about the anchor's
+ * quality; it is a gap in what the harness could see.
+ *
+ * `component-anchor` — the anchor names a COMPONENT (`<Card>`) rather than a
+ * host element. The tag can never equal the rendered DOM tag, so the
+ * tag-comparison question is ill-formed. This one is not a gap: it is a
+ * POSITIVE observation that the anchor points at a call site, and under a
+ * call-site-addressing scheme it is the expected result rather than a failure.
+ * Folding it into a bucket that also holds "file unreadable" made a fully
+ * working call-site scheme indistinguishable from a broken harness — the
+ * measurement blind spot recorded in the 2026-08-13 harvest plan.
  */
-export type AnchorVerdict = 'verified' | 'tag-only' | 'silently-wrong' | 'unresolvable'
+export type AnchorVerdict =
+  | 'verified'
+  | 'tag-only'
+  | 'silently-wrong'
+  | 'unreadable'
+  | 'component-anchor'
 
 export interface AnchorSample {
   /** The `data-cortex-source` value: `path/to/File.tsx:line:col`. */
@@ -62,7 +79,11 @@ export interface AnchorVerifySummary {
   verified: number
   tagOnly: number
   silentlyWrong: number
-  unresolvable: number
+  unreadable: number
+  /** Anchors naming a component rather than a host element. Counted separately
+   *  because under a call-site-addressing scheme this is the SUCCESS case, not
+   *  a refusal — see AnchorVerdict. */
+  componentAnchor: number
   mismatches: Array<{ source: string; domTag: string; sourceTag: string; why: string }>
 }
 
@@ -170,10 +191,10 @@ export async function verifyAnchor(
   readFile: (filePath: string) => string | null,
 ): Promise<AnchorVerifyResult> {
   const parsed = parseAnchorSource(sample.source)
-  if (!parsed) return { verdict: 'unresolvable', reason: 'source is not file:line:col' }
+  if (!parsed) return { verdict: 'unreadable', reason: 'source is not file:line:col' }
 
   const text = readFile(parsed.filePath)
-  if (text === null) return { verdict: 'unresolvable', reason: 'file could not be read' }
+  if (text === null) return { verdict: 'unreadable', reason: 'file could not be read' }
 
   const facts = await jsxFactsAt(text, parsed.line, parsed.col)
   if (facts === null) {
@@ -189,7 +210,7 @@ export async function verifyAnchor(
   // floor under the number that must reach zero, so the metric would stop being
   // read.
   if (/^[A-Z]/.test(facts.tag) || facts.tag.includes('.')) {
-    return { verdict: 'unresolvable', sourceTag: facts.tag, reason: 'anchor names a component, not a host element' }
+    return { verdict: 'component-anchor', sourceTag: facts.tag, reason: 'anchor names a component, not a host element' }
   }
 
   // EXACT comparison, not case-insensitive. The probe records `localName`
@@ -237,7 +258,8 @@ export async function summarizeAnchors(
     verified: 0,
     tagOnly: 0,
     silentlyWrong: 0,
-    unresolvable: 0,
+    unreadable: 0,
+    componentAnchor: 0,
     mismatches: [],
   }
   // Verify in file-grouped order so the one-entry parse cache in jsxFactsAt hits
@@ -257,7 +279,8 @@ export async function summarizeAnchors(
   for (const { sample, result } of verified) {
     if (result.verdict === 'verified') summary.verified++
     else if (result.verdict === 'tag-only') summary.tagOnly++
-    else if (result.verdict === 'unresolvable') summary.unresolvable++
+    else if (result.verdict === 'unreadable') summary.unreadable++
+    else if (result.verdict === 'component-anchor') summary.componentAnchor++
     else {
       summary.silentlyWrong++
       summary.mismatches.push({
