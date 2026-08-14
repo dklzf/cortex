@@ -1,0 +1,23 @@
+cortex-editor/scripts/anchor-coverage.mjs
+  s_515b894c608172::t_23164c2e9469cd 450,845-872,892-894
+  s_515b894c608172::t_a669e3a7121259 337-350,404-427,440-446,448
+  s_515b894c608172::t_bd7c6a55864bb5 94-116,428-439,447,449,638-644,873-891
+  s_515b894c608172::t_f3bf7f5668440f 613-619
+  s_515b894c608172::t_afb9a8b2c46ea6 451
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3ed082d49dd43620fcbefdc0f591bfeb22f2d15a",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
