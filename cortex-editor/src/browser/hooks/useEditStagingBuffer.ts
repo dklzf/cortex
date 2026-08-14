@@ -3,6 +3,7 @@ import { isStructuralEdit, isClassEdit, isStyleEdit, describeClassOp } from '../
 import { compositeKey } from '../../shared/composite-key.js'
 import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../../shared/preview-source.js'
 import { PREVIEW_SOURCE_ATTR } from '../preview-source.js'
+import { childDiscriminators } from '../child-discriminator.js'
 import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
 
@@ -346,22 +347,45 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
       // and moves the WRONG element.
       if (isStructuralEdit(edit)) {
         const parent = el.parentElement
+        // ONE walk feeding both arrays, so `live` and `liveKeys` are index-
+        // aligned by construction. Deriving them from two separate traversals
+        // would leave the alignment resting on a length check — which passes
+        // just as happily when the entries describe different nodes.
+        const children = parent ? Array.from(parent.children) : []
         // Read BOTH source formats, and read them without stamping: a child that
         // was never clicked has no preview id, and minting one here would mutate
-        // the DOM during a read-only reconcile. Mapping every unannotated child
-        // to '' would also make them indistinguishable from each other, so a
-        // reorder among them could never be detected as drifted.
-        const live = parent
-          ? Array.from(parent.children).map(c => {
-              const s = c.getAttribute('data-cortex-source')
-              if (s) return s
-              const p = c.getAttribute(PREVIEW_SOURCE_ATTR)
-              return p ? `${PREVIEW_SOURCE_PREFIX}${p}` : ''
-            })
-          : []
-        const { baseline } = edit.structural
+        // the DOM during a read-only reconcile.
+        const live = children.map(c => {
+          const s = c.getAttribute('data-cortex-source')
+          if (s) return s
+          const p = c.getAttribute(PREVIEW_SOURCE_ATTR)
+          return p ? `${PREVIEW_SOURCE_PREFIX}${p}` : ''
+        })
+        // COR-35. `live`/`baseline` alone cannot see a reorder: siblings from
+        // one `.map()` share a `data-cortex-source`, so the comparison below is
+        // N identical strings against N identical strings and holds under every
+        // permutation. Unannotated children collapse harder still — both map to
+        // '' — so two unstamped icons in a row were mutually invisible too.
+        // `childKeys` is the array that can witness a permutation; the schema
+        // requires its entries to be distinct, which is what makes positional
+        // comparison detect EVERY reorder rather than most of them.
+        // `childDiscriminators(parent)`, NOT `children.map(childDiscriminator)`:
+        // the keys escalate on collision, which is a property of the sibling
+        // SET, so a per-element map would compute different keys than the
+        // producer did and report drift on a tree that never moved.
+        const liveKeys = parent ? childDiscriminators(parent) : []
+        const { baseline, childKeys } = edit.structural
         const drifted = live.length !== baseline.length
           || baseline.some((source, i) => live[i] !== source)
+          // Fail closed on a malformed intent rather than fall back to the
+          // source-only comparison that cannot see a reorder. `append` does not
+          // validate — the schema runs at the wire boundary — so an intent from
+          // an older bundle or a buggy producer really can arrive here without
+          // usable keys, and treating that as "no drift" is the silent-wrong
+          // outcome this ticket exists to remove.
+          || !Array.isArray(childKeys)
+          || childKeys.length !== live.length
+          || childKeys.some((key, i) => liveKeys[i] !== key)
         if (drifted) divergent.push(edit)
         continue
       }

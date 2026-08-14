@@ -99,6 +99,23 @@ const PAGE_DERIVED_SOURCE_FIELDS = ['source', 'parentSource', 'elementSource'] a
 const CLASS_OP_TEXT_FIELDS = ['add', 'remove'] as const
 const INLINE_TEXT_FIELDS = ['property', 'value'] as const
 
+/** Arrays of page-derived strings. Same treatment as the scalar source fields
+ *  above; only the shape differs.
+ *
+ *  `baseline` and `childKeys` (COR-35) joined `instanceSources` here, and the
+ *  reason is the one this file keeps predicting about itself: a new
+ *  page-derived field arrives and the hand-written enumeration does not know
+ *  about it. `baseline` holds the same `cortex-preview:<id>` values as
+ *  `elementSource` — page-authored, because `ensurePreviewId` reuses an
+ *  attribute the page can set — and was never covered. `childKeys` is worse:
+ *  it is a list item's own TEXT and an attribute the page wrote, so it needs no
+ *  cleverness to carry a marker, just a row that says one.
+ *
+ *  Enumerating by hand keeps failing. It survives here only because a
+ *  deep-copy-everything default would strip markers out of genuinely
+ *  cortex-generated fields too — the fence's own tag among them. */
+const PAGE_DERIVED_STRING_ARRAYS = ['instanceSources', 'baseline', 'childKeys'] as const
+
 /**
  * Deep-copy `value`, stripping fence markers from every page-derived string found
  * anywhere inside it: the text fields of a `sourceResolutionHint`, and the source
@@ -145,7 +162,7 @@ export function sanitizeHintsForAgent<T>(value: T): T {
         }
         return e
       })
-    } else if (key === 'instanceSources' && Array.isArray(v)) {
+    } else if ((PAGE_DERIVED_STRING_ARRAYS as readonly string[]).includes(key) && Array.isArray(v)) {
       out[key] = v.map(s => (typeof s === 'string' ? stripFenceMarkers(s) : sanitizeHintsForAgent(s)))
     } else {
       out[key] = sanitizeHintsForAgent(v)

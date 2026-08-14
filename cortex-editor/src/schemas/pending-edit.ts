@@ -171,6 +171,38 @@ export const structuralIntentSchema = z.object({
    */
   baseline: z.array(z.string()).min(2).max(MAX_INTENT_INSTANCE_SOURCES),
   /**
+   * A discriminator per child, in the same order as `baseline` (COR-35).
+   *
+   * `baseline` cannot answer "did these children get reordered". N siblings
+   * from one `.map()` share ONE `data-cortex-source`, so `baseline` is N
+   * identical strings and comparing it position-by-position is satisfied under
+   * every permutation. The length check caught insertion and deletion; nothing
+   * caught the one mutation a reorder intent is actually racing.
+   *
+   * These entries must be pairwise DISTINCT, which is what turns the guard from
+   * a heuristic into a proof: given distinct keys at capture, positional
+   * comparison against the live children detects EVERY permutation, not most of
+   * them. Producers build them with `childDiscriminator` (browser/
+   * child-discriminator.ts) and the guard re-derives them with the same
+   * function, so there is one definition rather than two that can drift.
+   *
+   * REQUIRED, not optional, and deliberately so. No producer of structural
+   * intents exists yet, so there is no wire compatibility to preserve and
+   * nothing to migrate — while an optional field would let the first producer
+   * omit it and silently restore the exact bug this closes. Uniqueness within
+   * one parent's child list is a far weaker requirement than per-instance
+   * identity and depends on nothing from React internals or the bundler.
+   *
+   * When children genuinely cannot be told apart — several identical icons, say
+   * — no distinct set exists, the intent fails validation, and the reorder is
+   * refused. That is the intended outcome: a list whose order cannot be
+   * verified is one where a stale reorder writes to the wrong element.
+   */
+  childKeys: z
+    .array(z.string().min(1).refine((v) => utf8Bytes(v) <= MAX_SOURCE_HINT_FIELD_BYTES, { message: `childKeys element exceeds ${MAX_SOURCE_HINT_FIELD_BYTES} UTF-8 bytes` }))
+    .min(2)
+    .max(MAX_INTENT_INSTANCE_SOURCES),
+  /**
    * The desired final order, as a permutation of `baseline`'s INDICES.
    *
    * `order[i] === j` means "the child at baseline position j ends up at
@@ -355,7 +387,26 @@ export const pendingEditSchema = z.preprocess(
     })
   }
   if (edit.kind === 'structural') {
-    const { baseline, order } = edit.structural
+    const { baseline, order, childKeys } = edit.structural
+    // COR-35. `baseline` is N identical strings for a `.map()`, so it cannot
+    // witness a permutation; `childKeys` is what can, and only while these two
+    // properties hold. Both are checked here rather than left to the producer:
+    // the guard's correctness argument — positional comparison detects EVERY
+    // reorder — is only true when the keys are pairwise distinct, so this is
+    // the invariant the guard rests on, not a hygiene check.
+    if (childKeys.length !== baseline.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['structural', 'childKeys'],
+        message: `childKeys has ${childKeys.length} entries but baseline has ${baseline.length}`,
+      })
+    } else if (new Set(childKeys).size !== childKeys.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['structural', 'childKeys'],
+        message: 'childKeys must be pairwise distinct — children that cannot be told apart cannot have a reorder verified against them',
+      })
+    }
     // `order` must be a genuine permutation of `baseline`'s indices. Anything
     // else — a duplicate, an out-of-range index, a length mismatch — describes
     // a tree that cannot exist, and the agent would have to guess.

@@ -4,6 +4,7 @@ import { act } from 'preact/test-utils'
 import { useEditStagingBuffer, createPanelSyncEmitter, type PendingEdit, type SyncEmitter } from '../../../src/browser/hooks/useEditStagingBuffer.js'
 import type { CortexChannel } from '../../../src/adapters/types.js'
 import { cortexStorage } from '../../../src/browser/persistence.js'
+import { PREVIEW_SOURCE_PREFIX } from '../../../src/shared/preview-source.js'
 import { makeEdit } from '../../core/helpers.js'
 
 function renderHook<T>(hookFn: () => T): { result: { current: T }; unmount: () => void; rerender: (newHookFn: () => T) => void } {
@@ -916,6 +917,12 @@ describe('COR-26: structural intents with a preview source revalidate', () => {
   function makeRow(previewId: string): HTMLElement {
     const el = document.createElement('li')
     el.setAttribute('data-cortex-preview-id', previewId)
+    // COR-35 gave the guard a second array to compare, so these rows now need
+    // to be distinguishable from each other or every intent below fails closed.
+    // Text rather than a `data-cortex-preview-id` read: cortex MINTS that
+    // attribute lazily on click, so a key built from it would change under a
+    // tree that never moved.
+    el.textContent = previewId
     return el
   }
 
@@ -937,6 +944,7 @@ describe('COR-26: structural intents with a preview source revalidate', () => {
       parentSource: 'cortex-preview:parent-1',
       parentKey: 'k1',
       baseline,
+      childKeys: baseline.map(s => `#li:${s.slice(PREVIEW_SOURCE_PREFIX.length)}`),
       order: [1, 0],
     },
     applyMode: 'agent-resolve' as const,
@@ -1011,5 +1019,142 @@ describe('COR-26: structural intents with a preview source revalidate', () => {
     const { divergent } = result.current.reconcile(['src/Unrelated.tsx'])
     expect(divergent).toHaveLength(0)
     el.remove()
+  })
+})
+
+// ── COR-35 ──────────────────────────────────────────────────────────────────
+//
+// The drift guard compared each live child to the `data-cortex-source` it
+// carried at capture. N siblings from ONE `.map()` share that attribute, so the
+// comparison was N identical strings against N identical strings — satisfied
+// under every permutation. Insertion and deletion were caught by the length
+// check; the reorder a reorder-intent is actually racing was not.
+//
+// Every test below mounts children that SHARE one source. That is what makes
+// them falsifiable: give the children distinct sources and the pre-fix guard
+// catches the permutation on its own, and the test passes with the fix deleted.
+describe('COR-35: a reorder among identically-sourced siblings is drift', () => {
+  const SOURCE = 'src/List.tsx:15:11'
+
+  let parent: HTMLElement
+  afterEach(() => { parent?.remove() })
+
+  /** Rows as a `.map()` renders them: one shared source, distinct text. */
+  function mountRows(labels: string[]): void {
+    parent = document.createElement('ul')
+    for (const label of labels) {
+      const li = document.createElement('li')
+      li.setAttribute('data-cortex-source', SOURCE)
+      li.textContent = label
+      parent.appendChild(li)
+    }
+    document.body.appendChild(parent)
+  }
+
+  const intent = (childKeys: unknown) => ({
+    kind: 'structural' as const,
+    intentId: 'struct-35',
+    source: SOURCE,
+    structural: {
+      op: 'reorder' as const,
+      parentSource: 'cortex-preview:parent-1',
+      parentKey: 'k1',
+      baseline: [SOURCE, SOURCE, SOURCE],
+      childKeys,
+      order: [2, 0, 1],
+    },
+    applyMode: 'agent-resolve' as const,
+    sourceResolutionHint: { tagName: 'li', textPreview: 'row', domSelector: 'li' },
+    timestamp: 1000,
+  }) as unknown as PendingEdit
+
+  const KEYS = ['#li:Alpha', '#li:Bravo', '#li:Charlie']
+
+  it('reports drift when the live children are a PERMUTATION of the baseline', () => {
+    // The silent-wrong case from the ticket: the user drags, the app re-sorts
+    // or refetches before Apply, and the intent still described the old order.
+    // Pre-fix this reported clean and the reorder landed on a tree it no longer
+    // described.
+    mountRows(['Charlie', 'Alpha', 'Bravo'])
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => { result.current.append(intent(KEYS)) })
+
+    const { divergent } = result.current.reconcile(['src/List.tsx'])
+    expect(divergent).toHaveLength(1)
+    expect(divergent[0]!.intentId).toBe('struct-35')
+  })
+
+  it('reports drift for a SWAP of two adjacent children', () => {
+    // The minimum possible reorder. A guard that only noticed wholesale
+    // rearrangement would pass the test above and still miss this.
+    mountRows(['Bravo', 'Alpha', 'Charlie'])
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => { result.current.append(intent(KEYS)) })
+
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(1)
+  })
+
+  it('does NOT report drift when the children are unmoved', () => {
+    // The other half. A guard that reported drift unconditionally would pass
+    // both tests above while making every structural intent unusable.
+    mountRows(['Alpha', 'Bravo', 'Charlie'])
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => { result.current.append(intent(KEYS)) })
+
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(0)
+  })
+
+  it('reports drift when a child KEEPS its position but changes identity', () => {
+    // Replacement in place: same count, same sources, same slots — a different
+    // row. Neither the length check nor the source comparison can see it.
+    mountRows(['Alpha', 'Delta', 'Charlie'])
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => { result.current.append(intent(KEYS)) })
+
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(1)
+  })
+
+  it('fails CLOSED on an intent carrying no childKeys at all', () => {
+    // `append` does not validate — the schema runs at the wire boundary — so an
+    // intent from an older bundle or a buggy producer can reach the guard
+    // without keys. Falling back to the source-only comparison would restore
+    // the exact silent-wrong behaviour, so absence is treated as drift.
+    mountRows(['Alpha', 'Bravo', 'Charlie'])
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => { result.current.append(intent(undefined)) })
+
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(1)
+  })
+
+  it('distinguishes children by AUTHORED identity, not just text', () => {
+    // Icon-only rows have no text to tell them apart. `data-testid` is what a
+    // developer writes when they mean "this row is that item", and reading it
+    // is what keeps this list reorderable at all.
+    parent = document.createElement('ul')
+    for (const id of ['row-b', 'row-a']) {
+      const li = document.createElement('li')
+      li.setAttribute('data-cortex-source', SOURCE)
+      li.setAttribute('data-testid', id)
+      li.appendChild(document.createElement('svg'))
+      parent.appendChild(li)
+    }
+    document.body.appendChild(parent)
+
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => {
+      result.current.append({
+        ...(intent(['@data-testid=row-a', '@data-testid=row-b']) as object),
+        structural: {
+          op: 'reorder', parentSource: 'cortex-preview:parent-1', parentKey: 'k1',
+          baseline: [SOURCE, SOURCE],
+          childKeys: ['@data-testid=row-a', '@data-testid=row-b'],
+          order: [1, 0],
+        },
+      } as unknown as PendingEdit)
+    })
+
+    // Mounted b-then-a against a baseline of a-then-b: a swap, and textContent
+    // is empty for both rows, so only the testid can see it.
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(1)
   })
 })

@@ -293,19 +293,44 @@ async function applyOne(
   // Placed before the agent-resolve check so it wins, and so TypeScript narrows
   // the remainder of this function to style intents.
   if (isStructuralEdit(intent)) {
-    const { parentSource, parentKey, baseline, order } = intent.structural
-    const described = order.map((from, to) => `${to} <- ${from} (${baseline[from] ?? '?'})`).join(', ')
+    const { parentSource, parentKey, baseline, order, childKeys } = intent.structural
+    // COR-35. Describing the move with `baseline` alone is unactionable in the
+    // motivating case: N siblings from one `.map()` share a source, so the list
+    // reads `src/List.tsx:15:11, src/List.tsx:15:11, src/List.tsx:15:11` and
+    // says nothing about WHICH row the user dragged. Same defect the drift
+    // guard had, one layer up — the guard could not see the reorder, and the
+    // agent could not see what to reorder. `childKeys` names the children.
+    const describe = (i: number): string => childKeys?.[i] ?? baseline[i] ?? '?'
+    const described = order.map((from, to) => `${to} <- ${from} (${describe(from)})`).join(', ')
+    const observed = baseline
+      .map((source, i) => `[${i}] ${describe(i)} @ ${source}`)
+      .join('\n')
     return {
       intentId,
       status: 'needs-source-edit' as const,
       intent,
-      reason:
+      // Strip the ASSEMBLED reason, the same way the class branch below does.
+      // This branch never did, and adding `childKeys` is what made it urgent:
+      // every value interpolated here is page-derived — `parentKey` is a
+      // page-supplied DOM path, a `cortex-preview:` entry in `baseline` carries
+      // a page-authored id (`ensurePreviewId` REUSES an existing attribute),
+      // and a childKey is literally a row's text. `sanitizeHintsForAgent`
+      // cannot help: `reason` is a generic string it never visits, and this
+      // builds a NEW string out of those same values. A fence the payload can
+      // close from the inside is not a fence — the COR-27 `elementSource`
+      // lesson, in the one sibling branch that had not learned it.
+      reason: stripFenceMarkers(
         `Structural reorder: the container at ${parentSource} (runtime instance ${parentKey}) ` +
         `must end up with its children in this order — ${described}. Indices refer to the ` +
         `children's positions BEFORE the edit; the list describes the intended RESULT, not a ` +
         `sequence of moves, so apply it as a whole.\n\n` +
-        `Children as observed when the user dragged: ${baseline.join(', ')}. If the source no ` +
-        `longer matches that, stop and report the drift rather than reordering what is there.\n\n` +
+        `Children as observed when the user dragged, in their ORIGINAL order — each line is ` +
+        `the child's identity followed by the source location it was rendered from. An ` +
+        `identity beginning '@' is an attribute the developer authored; one beginning '#' is ` +
+        `the element's tag and text. Siblings from a .map() all share ONE source location, so ` +
+        `the identity is what tells you which row is which:\n${observed}\n\n` +
+        `If the source no longer matches that, stop and report the drift rather than ` +
+        `reordering what is there.\n\n` +
         `Reorder the SOURCE so the DOM order changes. If those children are rendered by a ` +
         `.map(), reorder the underlying array — the siblings share one source location, so ` +
         `editing the JSX cannot move a single instance. If they are hand-authored siblings, ` +
@@ -314,6 +339,7 @@ async function applyOne(
         `positioning. Those change visual order only; the accessibility tree and tab order ` +
         `keep following the original DOM sequence, which is a real regression that looks ` +
         `correct in a screenshot.`,
+      ),
     }
   }
 
