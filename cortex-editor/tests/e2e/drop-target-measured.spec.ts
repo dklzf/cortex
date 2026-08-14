@@ -1,0 +1,410 @@
+/**
+ * `resolveDropTarget` against real Chromium layout (COR-7, M1).
+ *
+ * Business purpose: the gesture has to answer "which slot is the user pointing
+ * at" before anything reaches source. Getting it wrong by one produces a
+ * confident, plausible-looking reorder of the wrong pair — the failure class
+ * this whole milestone is defended against.
+ *
+ * Falsifiability note, and the reason this is an e2e file rather than a unit
+ * test: happy-dom does not lay out, so every `getBoundingClientRect()` is zero.
+ * A unit test would be asserting against a stub of the exact thing under test,
+ * which is how the predicted `edgeResponse` resolver (COR-3) passed its own
+ * tests while being wrong about CSS in five separate ways. Every case below
+ * asserts the answer real layout gives.
+ *
+ * The module is bundled from source rather than imported from the product IIFE:
+ * it is not part of that bundle's public surface, and bundling the TypeScript
+ * directly means these tests exercise the real code rather than a copy that can
+ * drift.
+ */
+import { test, expect, type Page } from '@playwright/test'
+import * as esbuild from 'esbuild'
+import { fileURLToPath } from 'node:url'
+
+interface DropTarget { toIndex: number; axis: 'vertical' | 'horizontal' | 'grid' }
+interface IndicatorRect { left: number; top: number; width: number; height: number }
+
+let BUNDLE = ''
+
+test.beforeAll(async () => {
+  const result = await esbuild.build({
+    entryPoints: [fileURLToPath(new URL('../../src/browser/drop-target.ts', import.meta.url))],
+    bundle: true,
+    format: 'iife',
+    globalName: 'DT',
+    write: false,
+    target: 'es2020',
+  })
+  BUNDLE = result.outputFiles[0]!.text
+})
+
+const ROW = 'height:40px;width:200px;background:#eee'
+
+// Every container is pinned at the viewport origin. Laid out in flow they
+// stack down the page, and the arithmetic in each test's comment would then
+// describe only the FIRST list — which is exactly the mistake the first run of
+// this file made: `hiddenlist` sits ~320px down, so a pointer at y=70 was above
+// all of it and every drop resolved to 0.
+const AT_ORIGIN = 'position:absolute;top:0;left:0'
+
+const FIXTURE = `<!doctype html><body style="margin:0">
+  <!-- Plain vertical list: rows at y = 0..40, 40..80, 80..120, centres 20/60/100. -->
+  <ul id="vlist" style="${AT_ORIGIN};margin:0;padding:0;list-style:none;width:200px">
+    <li style="${ROW}">Alpha</li><li style="${ROW}">Bravo</li><li style="${ROW}">Charlie</li></ul>
+
+  <!-- Horizontal row: centres at x = 50/150/250. -->
+  <div id="hlist" style="${AT_ORIGIN};display:flex;width:300px">
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div></div>
+
+  <!-- row-reverse: child 0 is on the RIGHT. Measured centres run backwards
+       against DOM order, which is the whole point of the reversed flag. -->
+  <div id="rrlist" style="${AT_ORIGIN};display:flex;flex-direction:row-reverse;width:300px">
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div></div>
+
+  <!-- direction: rtl produces the same visual reversal from a completely
+       different property. Measuring cannot tell them apart, and does not need to. -->
+  <div id="rtllist" style="${AT_ORIGIN};display:flex;direction:rtl;width:300px">
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div></div>
+
+  <!-- Wrapped flex: two rows of two. Centres spread on BOTH axes, so no
+       single-axis midpoint rule is meaningful. -->
+  <div id="gridlist" style="${AT_ORIGIN};display:flex;flex-wrap:wrap;width:200px">
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div></div>
+
+  <!-- A hidden sibling among visible ones: zero-area rect, and counting
+       it would put a centre at the viewport origin and drag drops toward 0. -->
+  <ul id="hiddenlist" style="${AT_ORIGIN};margin:0;padding:0;list-style:none;width:200px">
+    <li style="${ROW}">Alpha</li>
+    <li style="display:none">Ghost</li>
+    <li style="${ROW}">Charlie</li></ul>
+
+  <!-- TWO children in a horizontal row. Measuring the axis WITHOUT the dragged
+       child leaves one rectangle, rows and cols both 1, and the tie resolves to
+       vertical — so dragging one button to the far right compares only the
+       unchanged Y and returns slot 0, which the producer refuses as a no-op. -->
+  <div id="pair" style="${AT_ORIGIN};display:flex;width:300px">
+    <button style="width:100px;height:40px">One</button>
+    <button style="width:100px;height:40px">Two</button></div>
+
+  <!-- A wrapped RTL grid: DOM order runs right-to-left within each row, so the
+       before/after sides mirror too. -->
+  <div id="rtlgrid" style="${AT_ORIGIN};display:flex;flex-wrap:wrap;direction:rtl;width:200px">
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div></div>
+
+  <!-- CSS order transposes the middle two: DOM [A,B,C,D] displays as
+       [A,C,B,D]. First and last are still in order, so reversed stays false,
+       and the visual-rank-to-DOM-index identification the counting loop relies
+       on quietly stops holding. -->
+  <ul id="cssorder" style="${AT_ORIGIN};display:flex;flex-direction:column;margin:0;padding:0;list-style:none;width:200px">
+    <li style="height:40px;order:1">A</li>
+    <li style="height:40px;order:3">B</li>
+    <li style="height:40px;order:2">C</li>
+    <li style="height:40px;order:4">D</li></ul>
+
+  <!-- Ragged widths in a vertical list. Centres differ horizontally, and a
+       naive both-axes-vary test would call this a grid. -->
+  <ul id="ragged" style="${AT_ORIGIN};margin:0;padding:0;list-style:none;width:400px">
+    <li style="height:40px;width:80px"></li>
+    <li style="height:40px;width:300px"></li>
+    <li style="height:40px;width:150px"></li></ul>
+</body>`
+
+async function drop(page: Page, id: string, x: number, y: number, fromIndex: number): Promise<DropTarget | null> {
+  return await page.evaluate(
+    ({ elementId, px, py, from }) => {
+      const el = document.getElementById(elementId)
+      if (!el) throw new Error(`[drop-target] fixture #${elementId} missing`)
+      return (window as unknown as {
+        DT: { resolveDropTarget: (n: Element, p: { x: number; y: number }, f: number) => DropTarget | null }
+      }).DT.resolveDropTarget(el, { x: px, y: py }, from)
+    },
+    { elementId: id, px: x, py: y, from: fromIndex },
+  )
+}
+
+async function indicator(page: Page, id: string, fromIndex: number, toIndex: number): Promise<IndicatorRect | null> {
+  return await page.evaluate(
+    ({ elementId, from, to }) => {
+      const el = document.getElementById(elementId)!
+      return (window as unknown as {
+        DT: { dropIndicatorRect: (n: Element, f: number, t: number) => IndicatorRect | null }
+      }).DT.dropIndicatorRect(el, from, to)
+    },
+    { elementId: id, from: fromIndex, to: toIndex },
+  )
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.setContent(FIXTURE)
+  await page.addScriptTag({ content: BUNDLE })
+})
+
+test.describe('dropIndicatorRect — the line matches the slot', () => {
+  test('draws BETWEEN the two rows that bound the slot', async ({ page }) => {
+    // Rows are 40px tall from y=0. Dragging row 2, dropping at slot 1 means
+    // between row 0 (ends at 40) and row 1 (starts at 40) — so the line sits at
+    // y=40, and its 2px thickness is centred on that boundary.
+    const r = await indicator(page, 'vlist', 2, 1)
+    expect(r).not.toBeNull()
+    expect(r!.top).toBeCloseTo(39, 0)
+    expect(r!.height).toBe(2)
+    // Spans the rows' width, so it reads as a slot in THIS list rather than a
+    // rule across the page.
+    expect(r!.width).toBeCloseTo(200, 0)
+  })
+
+  test('sits on the outer edge at either end', async ({ page }) => {
+    // Slot 0 with row 2 lifted: above row 0, whose top is y=0.
+    expect((await indicator(page, 'vlist', 2, 0))!.top).toBeCloseTo(-1, 0)
+    // The last slot: below row 1, which ends at y=80.
+    expect((await indicator(page, 'vlist', 2, 2))!.top).toBeCloseTo(79, 0)
+  })
+
+  test('agrees with the slot resolveDropTarget picked', async ({ page }) => {
+    // The property that matters. An indicator computed independently is how a
+    // drag starts feeling possessed — the user trusts a line drawn one slot
+    // away from where the release actually lands.
+    const target = await drop(page, 'vlist', 100, 39, 2)
+    const r = await indicator(page, 'vlist', 2, target!.toIndex)
+    expect(r!.top).toBeCloseTo(39, 0)
+  })
+
+  test('draws a VERTICAL line in a horizontal list', async ({ page }) => {
+    // A horizontal rule between side-by-side items would read as "between
+    // rows", which is not what the slot means.
+    const r = await indicator(page, 'hlist', 0, 1)
+    expect(r!.width).toBe(2)
+    expect(r!.height).toBeCloseTo(40, 0)
+  })
+
+  test('returns null when there is nothing to draw', async ({ page }) => {
+    expect(await indicator(page, 'vlist', 9, 0)).toBeNull()
+  })
+})
+
+test.describe('resolveDropTarget — vertical lists', () => {
+  test('measures the axis from layout, not from CSS', async ({ page }) => {
+    const t = await drop(page, 'vlist', 100, 10, 0)
+    expect(t?.axis).toBe('vertical')
+  })
+
+  test('dragging the last row above the first gives toIndex 0', async ({ page }) => {
+    // Rows 0 and 1 remain, at their UNCHANGED centres y=20 and y=60 — the
+    // dragged row is excluded from the measurement but stays in the DOM, so
+    // nothing reflows and no centre moves. Pointer at y=10 has passed neither.
+    const t = await drop(page, 'vlist', 100, 10, 2)
+    expect(t?.toIndex).toBe(0)
+  })
+
+  test('toIndex counts positions in the list WITHOUT the dragged row', async ({ page }) => {
+    // The off-by-one this test exists for: dragging row 0 to the bottom. Row 0
+    // is excluded from the measurement but NOT removed from the DOM, so the
+    // remaining centres stay at y=60 and y=100. A pointer below both is
+    // toIndex 2 — the end of a TWO-item list — and computing against the full
+    // three-item list would produce 3.
+    const t = await drop(page, 'vlist', 100, 115, 0)
+    expect(t?.toIndex).toBe(2)
+  })
+
+  test('the midpoint decides, not the row boundary', async ({ page }) => {
+    // Rows 0 and 1 remain at y=20 and y=60 (no reflow — see above). y=39 is
+    // past the first centre and short of the second.
+    expect((await drop(page, 'vlist', 100, 39, 2))?.toIndex).toBe(1)
+    expect((await drop(page, 'vlist', 100, 19, 2))?.toIndex).toBe(0)
+  })
+
+  test('ragged row widths do NOT read as a grid', async ({ page }) => {
+    // Centres differ on both axes here (80/300/150 wide). A both-axes-vary test
+    // without the 2x margin calls this two-dimensional and switches to
+    // nearest-centre, which changes the answer on an ordinary list.
+    const t = await drop(page, 'ragged', 40, 10, 2)
+    expect(t?.axis).toBe('vertical')
+  })
+
+  test('ignores a zero-area sibling instead of placing it at the origin', async ({ page }) => {
+    // The display:none li has a rect at 0,0. Counting it would put a centre
+    // above every real row and shift drops toward index 0.
+    //
+    // The RETURNED index is in full post-removal DOM coordinates, not measured
+    // ones, and this test previously asserted the measured value — which is the
+    // bug review caught. `[Alpha, Ghost, Charlie]` dragging Alpha below
+    // Charlie: measured-slot 1 applied to the full list produces
+    // `[Ghost, Alpha, Charlie]`, leaving the VISIBLE order untouched. The
+    // answer is 2.
+    const t = await drop(page, 'hiddenlist', 100, 70, 0)
+    expect(t?.toIndex).toBe(2)
+  })
+
+  test('a drop past a hidden sibling actually changes the visible order', async ({ page }) => {
+    // The property the index is for. Asserting the number alone is how the
+    // off-by-one survived: 1 and 2 both look plausible until you apply them.
+    const t = await drop(page, 'hiddenlist', 100, 70, 0)
+    const applied = await page.evaluate(({ from, to }) => {
+      const labels = ['Alpha', 'Ghost', 'Charlie']
+      const order = labels.map((_, i) => i)
+      const [moved] = order.splice(from, 1)
+      order.splice(to, 0, moved!)
+      return order.map(i => labels[i]!)
+    }, { from: 0, to: t!.toIndex })
+    // Alpha ends up after Charlie, which is what dropping below Charlie means.
+    expect(applied.filter(l => l !== 'Ghost')).toEqual(['Charlie', 'Alpha'])
+  })
+})
+
+test.describe('resolveDropTarget — horizontal and reversed', () => {
+  test('measures a flex row as horizontal', async ({ page }) => {
+    expect((await drop(page, 'hlist', 10, 20, 0))?.axis).toBe('horizontal')
+  })
+
+  test('drops to the far end of a row', async ({ page }) => {
+    // Child 0 excluded from the measurement, not removed: the remaining
+    // centres stay at x=150 and x=250.
+    expect((await drop(page, 'hlist', 290, 20, 0))?.toIndex).toBe(2)
+  })
+
+  test('row-reverse: DOM order runs right-to-left, and the index stays in DOM order', async ({ page }) => {
+    // Child 0 is drawn at the RIGHT. Excluding child 2 (drawn leftmost) leaves
+    // children 0 and 1 at x=250 and x=150. A pointer at the far RIGHT is before
+    // both in DOM terms, so toIndex is 0 — the returned index is a DOM index,
+    // which is the only coordinate `baseline` and `order` are expressed in.
+    expect((await drop(page, 'rrlist', 295, 20, 2))?.toIndex).toBe(0)
+    expect((await drop(page, 'rrlist', 5, 20, 2))?.toIndex).toBe(2)
+  })
+
+  test('direction: rtl reverses identically, from a different property', async ({ page }) => {
+    // Same visual result as row-reverse, produced by a property this module
+    // never reads. If the axis were predicted from CSS this would need its own
+    // branch; measured, it needs nothing.
+    expect((await drop(page, 'rtllist', 295, 20, 2))?.toIndex).toBe(0)
+    expect((await drop(page, 'rtllist', 5, 20, 2))?.toIndex).toBe(2)
+  })
+})
+
+test.describe('resolveDropTarget — review round 3', () => {
+  test('a TWO-item row still measures as horizontal', async ({ page }) => {
+    // The axis is a property of the CONTAINER, so it is measured from every
+    // laid-out child including the dragged one. Excluding it leaves a single
+    // rectangle, the 1x1 tie picks vertical, and the whole gesture dies on the
+    // most ordinary layout there is: two buttons side by side.
+    const t = await drop(page, 'pair', 10, 20, 0)
+    expect(t?.axis).toBe('horizontal')
+  })
+
+  test('dragging the first of two buttons to the right returns a REAL move', async ({ page }) => {
+    // Not just the axis — the slot. Under the vertical misreading this returned
+    // 0, and the producer refused it as a no-op, so the drag silently did
+    // nothing.
+    const t = await drop(page, 'pair', 290, 20, 0)
+    expect(t?.toIndex).toBe(1)
+  })
+
+  test('REFUSES a list whose CSS order transposes children', async ({ page }) => {
+    // The counting loop turns the pointer's VISUAL rank into a DOM insertion
+    // index, and that identification holds only while the two orders agree.
+    // With `order` transposing B and C, dropping between the visually adjacent
+    // C and B stages a different position or a no-op.
+    //
+    // Refused rather than mapped: a general visual-to-DOM mapping is a real
+    // feature, and inventing one silently inside a drop resolver is how a
+    // confidently wrong reorder ships.
+    expect(await drop(page, 'cssorder', 100, 70, 0)).toBeNull()
+  })
+
+  test('does NOT refuse an ordinary list', async ({ page }) => {
+    // The control — a monotonic check that refuses everything would pass the
+    // test above while killing the feature.
+    expect(await drop(page, 'vlist', 100, 70, 0)).not.toBeNull()
+  })
+
+  test('an RTL grid mirrors the before/after sides', async ({ page }) => {
+    // Cells run right-to-left in DOM order, so `pointer.x > centreX` means the
+    // slot BEFORE in DOM terms. Reading it as "past" stages the opposite
+    // reorder — a confidently wrong write, not a visible failure.
+    // Probe INSIDE a cell, not beyond the container: outside it, nearest-centre
+    // legitimately picks a cell from the other row and the comparison stops
+    // being about sides at all. DOM child 1 is the LEFTMOST cell of row 1 under
+    // RTL, and dragging child 0 leaves it in `others`.
+    const box = (await page.locator('#rtlgrid > div').nth(1).boundingBox())!
+    const y = box.y + box.height / 2
+    const leftHalf = await drop(page, 'rtlgrid', box.x + box.width * 0.25, y, 0)
+    const rightHalf = await drop(page, 'rtlgrid', box.x + box.width * 0.75, y, 0)
+
+    expect(leftHalf?.axis).toBe('grid')
+    // The two halves must disagree, or the side rule is not firing at all.
+    expect(leftHalf?.toIndex).not.toBe(rightHalf?.toIndex)
+    // And the mirror: in a right-to-left row, moving LEFT advances through DOM
+    // order, so the left half is the LATER slot. Reading it the other way
+    // stages the opposite reorder.
+    expect(leftHalf!.toIndex).toBeGreaterThan(rightHalf!.toIndex)
+  })
+})
+
+test.describe('resolveDropTarget — wrapped layouts and refusals', () => {
+  test('detects a wrapped flex container as a grid', async ({ page }) => {
+    expect((await drop(page, 'gridlist', 50, 20, 0))?.axis).toBe('grid')
+  })
+
+  test('a grid resolves by nearest centre rather than one axis', async ({ page }) => {
+    // Cells at (50,20) (150,20) (50,60) (150,60). Excluding child 0 leaves
+    // three. A pointer to the RIGHT of the bottom-right cell's centre, inside
+    // its row, lands after it. x=190 rather than x=150: sitting exactly ON the
+    // centre is the one input where "past" is a coin flip, and a test should
+    // not be built on it.
+    const t = await drop(page, 'gridlist', 190, 70, 0)
+    expect(t?.axis).toBe('grid')
+    expect(t?.toIndex).toBe(3)
+  })
+
+  test('inside a row, the HORIZONTAL side decides — not the vertical one', async ({ page }) => {
+    // The bug this pins: `past` was decided by y alone, with x consulted only
+    // on an exact tie that measured coordinates never produce. A pointer at
+    // (190,15) sits in the FIRST row and well to the right of the cell centred
+    // at (150,20) — reading order puts it AFTER that cell, but the y rule put
+    // it before, because 15 < 20.
+    const t = await drop(page, 'gridlist', 190, 15, 0)
+    expect(t?.axis).toBe('grid')
+    // `others` after excluding child 0: [child1 (150,20), child2 (50,60),
+    // child3 (150,60)]. Nearest is child1 at position 0, pointer is right of
+    // it, so the slot after it is 1.
+    expect(t?.toIndex).toBe(1)
+  })
+
+  test('below a row, the VERTICAL side still decides', async ({ page }) => {
+    // The other half — the row-aware rule must not break drops that fall
+    // outside every cell's band. `others` after excluding child 0 is
+    // [child1 (150,20), child2 (50,60), child3 (150,60)], all 100x40.
+    //
+    // Below the bottom-RIGHT cell: nearest is child3 at position 2, the pointer
+    // is outside its 40..80 band, so y decides and the slot after it is 3.
+    expect((await drop(page, 'gridlist', 150, 95, 0))?.toIndex).toBe(3)
+    // Below the bottom-LEFT cell: nearest is child2 at position 1, so the slot
+    // after it is 2 — not 3. Getting this from the same rule is the point;
+    // an x-only rule would put a left-hand pointer at the end of the list.
+    expect((await drop(page, 'gridlist', 50, 95, 0))?.toIndex).toBe(2)
+  })
+
+  test('returns null rather than guessing when there is nothing to resolve', async ({ page }) => {
+    // A null is "stage nothing". This feeds a source rewrite, and a
+    // plausible-looking wrong slot is worse than no drop at all.
+    await page.setContent('<ul id="one" style="margin:0"><li style="height:40px"></li></ul>')
+    await page.addScriptTag({ content: BUNDLE })
+    expect(await drop(page, 'one', 10, 10, 0)).toBeNull()
+  })
+
+  test('returns null for an out-of-range fromIndex', async ({ page }) => {
+    expect(await drop(page, 'vlist', 100, 10, 9)).toBeNull()
+  })
+})

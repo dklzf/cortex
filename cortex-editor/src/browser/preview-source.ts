@@ -1,4 +1,5 @@
 import { classAttr } from './class-attr.js'
+import { deepQueryAllElements } from './selection-metadata.js'
 import { MAX_SOURCE_HINT_FIELD_BYTES, PREVIEW_SOURCE_PREFIX, isPreviewSource } from '../shared/preview-source.js'
 export { MAX_SOURCE_HINT_FIELD_BYTES, PREVIEW_SOURCE_PREFIX, isPreviewSource } from '../shared/preview-source.js'
 
@@ -27,6 +28,29 @@ export function selectorForEditSource(source: string): string {
   return `[data-cortex-source="${CSS.escape(source)}"]`
 }
 
+/**
+ * The source string a container child reads back as, WITHOUT minting anything.
+ *
+ * The read-only twin of `getElementEditTarget(el).source`, and the pair must
+ * stay in lock-step: the producer calls the minting one to build a structural
+ * intent's `baseline`, and the drift guard calls this one to re-derive it from
+ * the live DOM. Two hand-written copies of "source first, else preview id"
+ * disagree the moment one of them is edited — and the failure is not loud. The
+ * producer would stamp a preview id on an already-annotated child, write that
+ * into the baseline, and the guard would read the `data-cortex-source` beside
+ * it and report drift on a tree nobody touched.
+ *
+ * Returns '' for a child with neither. That is a real state — the guard must
+ * not mint during a read-only reconcile — and the empty string is why COR-35's
+ * `childKeys` exists: two unannotated children are otherwise identical here.
+ */
+export function readChildSource(el: Element): string {
+  const source = el.getAttribute('data-cortex-source')
+  if (source) return source
+  const previewId = el.getAttribute(PREVIEW_SOURCE_ATTR)
+  return previewId ? `${PREVIEW_SOURCE_PREFIX}${previewId}` : ''
+}
+
 export function getElementEditTarget(el: Element): ElementEditTarget {
   const source = el.getAttribute('data-cortex-source')
   if (source) return { source, applyMode: 'direct' }
@@ -38,6 +62,63 @@ export function getElementEditTarget(el: Element): ElementEditTarget {
     applyMode: 'agent-resolve',
     sourceResolutionHint: buildSourceResolutionHint(el),
   }
+}
+
+/**
+ * An agent-resolve target for `el`, minting a preview id EVEN IF the element
+ * already carries a `data-cortex-source`.
+ *
+ * `getElementEditTarget` returns the direct target for a stamped element, and
+ * for a style edit that is right — a file position is a better address than a
+ * locator. A structural intent cannot use it, for two independent reasons that
+ * happen to have the same fix:
+ *
+ *  1. `structuralIntentSchema` FORCES `applyMode: 'agent-resolve'` — there is
+ *     no deterministic move rewriter — and that mode requires a hint.
+ *  2. A `data-cortex-source` names a source LOCATION, and the drift guard
+ *     resolves it through a first-seen-wins document index. Two `<Column/>`s
+ *     rendering one `.map()` give every row the same source, so the lookup
+ *     returns the FIRST column's row and the guard would check the wrong
+ *     container's children. A preview id is unique per rendered instance.
+ */
+export function getAgentResolveTarget(el: Element): Extract<ElementEditTarget, { applyMode: 'agent-resolve' }> {
+  return {
+    source: `${PREVIEW_SOURCE_PREFIX}${ensureUniquePreviewId(el)}`,
+    applyMode: 'agent-resolve',
+    sourceResolutionHint: buildSourceResolutionHint(el),
+  }
+}
+
+/**
+ * Like `ensurePreviewId`, but REPLACES an id that some other element already
+ * answers to.
+ *
+ * `ensurePreviewId` deliberately preserves an existing `data-cortex-preview-id`,
+ * and that attribute is page-controlled twice over: markup can write it
+ * directly, and `cloneNode` copies it off an already-stamped element. For a
+ * hint that is only a locator, a duplicate costs nothing.
+ *
+ * As a structural anchor it is load-bearing, because the drift guard indexes
+ * preview sources FIRST-SEEN-WINS. Drag the second of two elements sharing an
+ * id and reconcile inspects the FIRST one's parent — so a reorder in the
+ * container the user actually touched can keep comparing clean while that
+ * container drifts underneath it. Silent-wrong, and reachable without anything
+ * hostile: one `cloneNode` in a virtualised list is enough.
+ *
+ * Uniqueness is checked against open shadow roots as well as the light DOM,
+ * because that is the population the guard's index is built from.
+ */
+function ensureUniquePreviewId(el: Element): string {
+  const existing = el.getAttribute(PREVIEW_SOURCE_ATTR)
+  if (existing && ownsPreviewId(el, existing)) return existing
+  el.removeAttribute(PREVIEW_SOURCE_ATTR)
+  return ensurePreviewId(el)
+}
+
+/** True when `el` is the ONLY element carrying `id`, across open shadow roots. */
+function ownsPreviewId(el: Element, id: string): boolean {
+  const matches = deepQueryAllElements(`[${PREVIEW_SOURCE_ATTR}="${CSS.escape(id)}"]`)
+  return matches.length === 1 && matches[0] === el
 }
 
 function ensurePreviewId(el: Element): string {

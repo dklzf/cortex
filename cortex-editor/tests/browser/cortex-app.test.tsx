@@ -19,7 +19,13 @@ const WAIT_FOR_COMMIT_MS = 2000
 // Tests that need to select a single element use: selectCb([target], 'replace')
 // Tests that need to clear selection use: selectCb([], 'replace')
 // For back-compat with existing tests, a selectOne(el) helper is also exported.
-vi.mock('../../src/browser/selection.js', () => {
+vi.mock('../../src/browser/selection.js', async (importOriginal) => {
+  // Spread the REAL module first. A bare factory replaces it wholesale, so
+  // every export this file does not restate silently disappears — which is how
+  // adding `isOwnUI` to CortexApp broke tests that never mention selection at
+  // all. Only `initSelection` needs stubbing; everything else is pure and can
+  // stay real.
+  const actual = await importOriginal<typeof import('../../src/browser/selection.js')>()
   const cleanupFn = vi.fn()
   const setDesignModeFn = vi.fn()
   const setInterceptClicksFn = vi.fn()
@@ -27,6 +33,7 @@ vi.mock('../../src/browser/selection.js', () => {
   let selectCb: ((elements: Element[], action: 'replace' | 'add' | 'toggle') => void) | null = null
 
   return {
+    ...actual,
     initSelection: vi.fn((_shadow: ShadowRoot, onHover: (el: Element | null) => void, onSelect: (elements: Element[], action: 'replace' | 'add' | 'toggle') => void) => {
       hoverCb = onHover
       selectCb = onSelect

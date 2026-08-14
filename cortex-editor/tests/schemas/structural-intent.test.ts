@@ -264,3 +264,25 @@ describe('review findings — hardening', () => {
     expect(Math.max(...kept.map(e => e.timestamp))).toBe(1199)
   })
 })
+
+// Review round 4 — `baseline` was the one structural array with no byte cap,
+// so page-authored `data-cortex-source` values passed through unbounded.
+describe('structural intent — baseline is byte-bounded', () => {
+  it('REJECTS a baseline entry over the source byte cap', () => {
+    // A `data-cortex-source` / `data-cortex-preview-id` is page-authored. 100
+    // oversized entries validate cleanly under a bare z.string() and are then
+    // serialized onto the channel and into the agent prompt.
+    const huge = 'x'.repeat(2000)
+    const parsed = pendingEditSchema.safeParse(
+      structural({}, { baseline: [huge, 'src/App.tsx:12:4', 'src/App.tsx:12:4'] }),
+    )
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(parsed.error.issues.some(i => i.message.includes('baseline element exceeds'))).toBe(true)
+    }
+  })
+
+  it('still accepts ordinary sources', () => {
+    expect(pendingEditSchema.safeParse(structural()).success).toBe(true)
+  })
+})

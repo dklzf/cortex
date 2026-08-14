@@ -4496,3 +4496,35 @@ button.cortex-token-chip__body:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* COR-7 — reorder drop indicator.
+   `--cx-select` is the same accent the selection outline uses: a drop is a
+   selection statement about a slot, and a second colour would imply a second
+   kind of thing. Flat 2px, no glow or shadow, per DESIGN.md.
+   `will-change: transform` because this moves on every pointermove — the
+   translate stays on the compositor rather than repainting the page. */
+.cortex-reorder-drop-indicator {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  background: var(--cx-select);
+  will-change: transform;
+}
+
+/* COR-7 — the reason a reorder was refused. Sits with the banners rather than
+   in the panel: the gesture happens on the page, and a message in a panel the
+   user is not looking at is the same as no message. Neutral surface, not an
+   error colour — a refusal is cortex declining to guess, not a failure. */
+.cortex-reorder-refusal {
+  pointer-events: auto;
+  margin: var(--cx-sp-3) auto 0;
+  max-width: 420px;
+  padding: var(--cx-sp-3) var(--cx-sp-4);
+  background: var(--cx-paper);
+  color: var(--cx-ink);
+  border: 1px solid var(--cx-rule);
+  border-radius: var(--cx-radius-md);
+  font-size: var(--cx-text-md);
+  line-height: 1.5;
+}

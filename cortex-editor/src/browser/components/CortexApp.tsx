@@ -6,7 +6,7 @@ import type { EditError } from './EditErrorCard.js'
 import { CSSOverrideManager } from '../override.js'
 import { onDivergence } from '../override-bus.js'
 import { CommandStack } from '../command-stack.js'
-import { initSelection } from '../selection.js'
+import { initSelection, isOwnUI } from '../selection.js'
 import type { SelectionHandle } from '../selection.js'
 import { cortexAppReducer, initialCortexAppReducerState, applySelectionUpdate } from '../cortex-app-reducer.js'
 import { resolveSelectionTargets } from '../selection-source-expand.js'
@@ -26,6 +26,10 @@ import { Panel } from './Panel.js'
 import { Toolbar } from './Toolbar.js'
 import { CommentPin } from './CommentPin.js'
 import { ErrorToast } from './ErrorToast.js'
+import { ReorderDropIndicator } from './ReorderDropIndicator.js'
+import { PropertyEditCommand } from '../edit-command.js'
+import { installReorderDrag } from '../reorder-drag-listener.js'
+import { IDLE, type ReorderDragState } from '../reorder-drag.js'
 import { CapabilityBanner } from './CapabilityBanner.js'
 import { InactiveTabBanner } from './InactiveTabBanner.js'
 import { NoAnnotationsBanner } from './NoAnnotationsBanner.js'
@@ -1487,6 +1491,71 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
     return unsubscribe
   }, [active, channel])
 
+  // COR-7 — drag to reorder. Installed alongside selection because they wire
+  // the same surface; kept as its own handle so its listeners detach with it.
+  const [dragState, setDragState] = useState<ReorderDragState>(IDLE)
+  const [reorderRefusal, setReorderRefusal] = useState<string | null>(null)
+  const selectedElementsRef = useRef(selectedElements)
+  selectedElementsRef.current = selectedElements
+
+  useEffect(() => {
+    if (!active) return
+    const handle = installReorderDrag({
+      // Only a SELECTED element can be dragged. Without this gate every
+      // pointerdown starts a press, and dragging to select text — which
+      // travels far past the 4px threshold — becomes a reorder gesture.
+      // Requiring selection also means the user has already said which element
+      // they mean, so the drag cannot be a surprise.
+      //
+      // Returns the SELECTED ancestor, not the pressed node: `event.target` is
+      // the innermost element under the pointer, so pressing the `<span>` in
+      // `<li><span>Alpha</span></li>` must reorder the li among its siblings,
+      // not the span among the li's children.
+      resolveDraggable: (el: Element) =>
+        selectedElementsRef.current.find(sel => sel === el || sel.contains(el)) ?? null,
+      isOwnUI,
+      onStateChange: setDragState,
+      onResult: (result) => {
+        if (result.ok) {
+          const displaced = buffer.append(result.intent)
+          // Record on the undo stack, or Cmd+Z either does nothing or undoes
+          // the PREVIOUS style gesture while leaving this reorder staged — so a
+          // later Apply performs a move the user believes they undid.
+          //
+          // `PropertyEditCommand` with no `changes` is exactly a buffer-only
+          // command: it already handles append/remove plus restoring whatever
+          // last-write-wins displaced, which a structural intent needs for the
+          // same reason a style one does — a second drag on one container
+          // replaces the first.
+          const stack = commandStackRef.current
+          const overrideManager = overrideRef.current
+          if (stack && overrideManager) {
+            stack.record(new PropertyEditCommand({
+              changes: [],
+              overrideManager,
+              pendingEdits: [result.intent],
+              displacedEdits: displaced ? [displaced] : [],
+              bufferOps: buffer,
+            }))
+          } else {
+            console.warn('[cortex] Reorder staged without undo stack — this move cannot be undone')
+          }
+          setReorderRefusal(null)
+          return
+        }
+        // A refused drag must SAY so. Silently doing nothing is
+        // indistinguishable from a bug, and the reason is the only thing that
+        // tells the user what would make it work.
+        setReorderRefusal(result.reason)
+      },
+    })
+    return () => handle.cleanup()
+  }, [active, buffer])
+
+  // Clear a stale refusal when the selection changes — it described the
+  // previous element and would otherwise sit there accusing the new one.
+  useEffect(() => { setReorderRefusal(null) }, [selectedElement])
+
   // setDesignMode must track active — selection events are otherwise unblocked when inactive
   useEffect(() => {
     selectionRef.current?.setDesignMode(active)
@@ -1506,6 +1575,9 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         <CapabilityBanner systems={capabilitySystems} />
         <InactiveTabBanner message={inactiveTabMessage} />
         <ErrorToast channel={channel} />
+        {reorderRefusal !== null && (
+          <div class="cortex-reorder-refusal" role="status">{reorderRefusal}</div>
+        )}
       </div>
       <TooltipLayer shadowRoot={shadowRoot} />
       {/* Wrapper shifts toolbar + every position:fixed UI down by the
@@ -1528,6 +1600,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
           which means no dropdown can open. */}
       <div style={{ transform: 'var(--cx-banner-transform, none)', transition: 'transform 200ms ease-out' }}>
       <HoverOverlay element={hoverEnabled ? hoveredElement : null} />
+      <ReorderDropIndicator state={dragState} />
       <SelectionOverlay
         element={selectedElement}
         availableStates={availableStates}

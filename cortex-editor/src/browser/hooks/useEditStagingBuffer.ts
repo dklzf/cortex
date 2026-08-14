@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'preact/hooks'
 import { isStructuralEdit, isClassEdit, isStyleEdit, describeClassOp } from '../../schemas/pending-edit.js'
 import { compositeKey } from '../../shared/composite-key.js'
 import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../../shared/preview-source.js'
-import { PREVIEW_SOURCE_ATTR } from '../preview-source.js'
+import { PREVIEW_SOURCE_ATTR, readChildSource } from '../preview-source.js'
 import { childDiscriminators } from '../child-discriminator.js'
 import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
@@ -352,15 +352,13 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         // would leave the alignment resting on a length check — which passes
         // just as happily when the entries describe different nodes.
         const children = parent ? Array.from(parent.children) : []
-        // Read BOTH source formats, and read them without stamping: a child that
-        // was never clicked has no preview id, and minting one here would mutate
-        // the DOM during a read-only reconcile.
-        const live = children.map(c => {
-          const s = c.getAttribute('data-cortex-source')
-          if (s) return s
-          const p = c.getAttribute(PREVIEW_SOURCE_ATTR)
-          return p ? `${PREVIEW_SOURCE_PREFIX}${p}` : ''
-        })
+        // `readChildSource`, not a copy of its rule inlined here: the PRODUCER
+        // builds `baseline` with the minting twin, and two hand-written copies
+        // of "source first, else preview id" disagree the moment one is edited.
+        // It reads without stamping — a child that was never clicked has no
+        // preview id, and minting one during a read-only reconcile would mutate
+        // the page cortex is only supposed to be observing.
+        const live = children.map(readChildSource)
         // COR-35. `live`/`baseline` alone cannot see a reorder: siblings from
         // one `.map()` share a `data-cortex-source`, so the comparison below is
         // N identical strings against N identical strings and holds under every

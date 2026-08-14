@@ -169,7 +169,15 @@ export const structuralIntentSchema = z.object({
    * intent describes a tree that no longer exists and must be discarded instead
    * of applied to whatever happens to be there now.
    */
-  baseline: z.array(z.string()).min(2).max(MAX_INTENT_INSTANCE_SOURCES),
+  // Byte-bounded like every other page-derived field. `z.string()` alone was
+  // the odd one out: a `data-cortex-source` or `data-cortex-preview-id` is
+  // page-authored, so 100 oversized attributes would validate cleanly and then
+  // be serialized onto the channel and into the agent prompt — an unbounded
+  // payload from a schema that bounds its neighbours.
+  baseline: z
+    .array(z.string().refine((v) => utf8Bytes(v) <= MAX_INTENT_SOURCE_BYTES, { message: `baseline element exceeds ${MAX_INTENT_SOURCE_BYTES} UTF-8 bytes` }))
+    .min(2)
+    .max(MAX_INTENT_INSTANCE_SOURCES),
   /**
    * A discriminator per child, in the same order as `baseline` (COR-35).
    *

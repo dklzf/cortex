@@ -5,6 +5,7 @@ import { useEditStagingBuffer, createPanelSyncEmitter, type PendingEdit, type Sy
 import type { CortexChannel } from '../../../src/adapters/types.js'
 import { cortexStorage } from '../../../src/browser/persistence.js'
 import { PREVIEW_SOURCE_PREFIX } from '../../../src/shared/preview-source.js'
+import { buildReorderIntent } from '../../../src/browser/reorder-intent.js'
 import { makeEdit } from '../../core/helpers.js'
 
 function renderHook<T>(hookFn: () => T): { result: { current: T }; unmount: () => void; rerender: (newHookFn: () => T) => void } {
@@ -1155,6 +1156,77 @@ describe('COR-35: a reorder among identically-sourced siblings is drift', () => 
 
     // Mounted b-then-a against a baseline of a-then-b: a swap, and textContent
     // is empty for both rows, so only the testid can see it.
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(1)
+  })
+})
+
+// ── COR-7 × COR-35 ──────────────────────────────────────────────────────────
+//
+// The producer and the guard are written separately and MUST agree: the
+// producer builds `baseline`/`childKeys` from a live container, the guard
+// re-derives both from the same DOM later and compares. Every test above pins
+// one side in isolation, which is exactly how the two can drift apart while
+// both look correct.
+//
+// This caught a real bug on the first run. The producer minted a preview id on
+// children that already carried a `data-cortex-source` and wrote THAT into the
+// baseline, while the guard reads the source first — so every reconcile
+// reported drift on a tree nobody had touched.
+describe('COR-7: a produced intent round-trips through the drift guard', () => {
+  let host: HTMLElement
+  afterEach(() => { host?.remove() })
+
+  function mapList(...labels: string[]): Element {
+    host = document.createElement('div')
+    host.innerHTML =
+      `<ul>${labels.map(l => `<li data-cortex-source="src/List.tsx:15:11">${l}</li>`).join('')}</ul>`
+    document.body.appendChild(host)
+    return host.firstElementChild!
+  }
+
+  function stage(intent: PendingEdit) {
+    const { result } = renderHook(() => useEditStagingBuffer())
+    act(() => { result.current.append(intent) })
+    return result
+  }
+
+  it('reports CLEAN when nothing moved', () => {
+    const ul = mapList('Alpha', 'Bravo', 'Charlie')
+    const built = buildReorderIntent(ul, 2, 0)
+    expect(built.ok).toBe(true)
+    if (!built.ok) return
+
+    const result = stage(built.intent)
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(0)
+  })
+
+  it('reports DRIFT after the app re-sorts the list underneath the intent', () => {
+    // The scenario the whole feature is defended against: the user drags, the
+    // app refetches or re-sorts before Apply, and the intent now describes a
+    // tree that no longer exists. Every child shares one `data-cortex-source`,
+    // so only childKeys can see this.
+    const ul = mapList('Alpha', 'Bravo', 'Charlie')
+    const built = buildReorderIntent(ul, 2, 0)
+    expect(built.ok).toBe(true)
+    if (!built.ok) return
+
+    const result = stage(built.intent)
+    ul.insertBefore(ul.children[2]!, ul.children[0]!)
+
+    expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(1)
+  })
+
+  it('reports DRIFT when a row is replaced in place', () => {
+    // Same count, same sources, same slots, different row. Neither the length
+    // check nor the source comparison can see it.
+    const ul = mapList('Alpha', 'Bravo', 'Charlie')
+    const built = buildReorderIntent(ul, 2, 0)
+    expect(built.ok).toBe(true)
+    if (!built.ok) return
+
+    const result = stage(built.intent)
+    ul.children[1]!.textContent = 'Delta'
+
     expect(result.current.reconcile(['src/List.tsx']).divergent).toHaveLength(1)
   })
 })
