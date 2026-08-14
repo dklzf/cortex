@@ -116,7 +116,7 @@ function makeReader(verifyRoot) {
  * Excluded only: cortex's own UI, non-visual tags, zero-area boxes, and the
  * document roots (which are never edit targets).
  */
-const PROBE = () => {
+const PROBE = ({ harvest: HARVEST } = { harvest: false }) => {
   const NON_VISUAL = new Set(['script', 'style', 'meta', 'head', 'title', 'link', 'noscript', 'template', 'br'])
   const NON_RENDERED_SVG = new Set(['defs', 'clippath', 'mask', 'marker', 'pattern', 'symbol', 'filter', 'metadata', 'desc', 'lineargradient', 'radialgradient'])
 
@@ -221,53 +221,78 @@ const PROBE = () => {
     return null
   }
 
+  // The nearest fiber at or above a DOM node that carries a React `key`.
+  // The key does not live on the host node's fiber: for
+  // `{rows.map(r => <Item key={r}/>)}` it sits on the COMPONENT fiber, and a
+  // library can stack many wrappers in between. Cycle-guarded, no fixed cap.
+  const keyedOf = (node) => {
+    const seen = new Set()
+    let x = fiberOf(node), n = 0
+    while (x && !seen.has(x)) {
+      seen.add(x)
+      if (x.key !== null) return x
+      if (++n > 200) return null
+      x = x.return
+    }
+    return null
+  }
+
   // A user-code source location out of ONE fiber's own creation stack.
   const stackSrc = (fiber) => {
+    // React 18 exposes JSX locations as `_debugSource` ({fileName,lineNumber,
+    // columnNumber}) and has no `_debugStack`. The package supports React >=18,
+    // so without this branch every fiber on an 18.x app returns null and the
+    // harvest reports N1 = 0% while React is carrying the answer. Raised in
+    // review.
+    const ds = fiber?._debugSource
+    if (ds?.fileName) return `${ds.fileName}:${ds.lineNumber ?? 0}:${ds.columnNumber ?? 0}`
+
     const raw = fiber?._debugStack
     if (!raw) return null
     const stack = String(raw.stack ?? raw)
     for (const line of stack.split('\n')) {
       const m = /\((https?:\/\/[^)]+)\)/.exec(line) ?? /at\s+(https?:\/\/\S+)/.exec(line)
-      const url = m?.[1]
-      if (!url || !/\.[jt]sx?:\d+:\d+/.test(url)) continue
-      // MEASURED FALSE POSITIVE (2026-08-13): excluding only `/node_modules/`
-      // is not enough. A BUNDLER rewrites module URLs, so under Next/Turbopack
-      // every frame reads `_next/static/chunks/<hash>._.js` — no `/node_modules/`
-      // anywhere in it. That filter passed compiled vendor code as "user code"
-      // and reported N1 = 70 of 70 (100%) on a real app, where every single
-      // recovery was the SAME chunk at the SAME offset (…_.js:1986:33). The
-      // honest answer there is 0%.
-      //
-      // Vite in dev serves unbundled ESM, so its frames really are `src/App.tsx`.
-      // The rule has to hold for both, so reject anything that looks like build
-      // output; the driver additionally requires the path to EXIST on disk.
-      if (url.includes('/node_modules/')) continue
-      if (/\/_next\/|\/\.vite\/deps\/|\/@fs\/|\/static\/chunks\//.test(url)) continue
-      // Strip origin and Vite's ?v= cache-buster so this is comparable with a
-      // `data-cortex-source` value.
-      return url.replace(/^https?:\/\/[^/]+\//, '').replace(/\?[^:]*(?=:\d+:\d+$)/, '')
+      let url = m?.[1]
+      if (!url) continue
+      // Split the :line:col off FIRST, then strip the query, then test the
+      // extension. Testing `\.[jt]sx?:\d+:\d+` against the raw URL rejected
+      // Vite's cache-busted form `…/src/App.tsx?t=123:6:11` outright — the
+      // extension is followed by `?`, not `:` — so after any HMR update N1 could
+      // collapse to zero. Raised in review.
+      const coord = /:(\d+):(\d+)$/.exec(url)
+      if (!coord) continue
+      let file = url.slice(0, coord.index)
+      file = file.replace(/\?.*$/, '')
+      if (!/\.[jt]sx?$/.test(file)) continue
+      if (file.includes('/node_modules/')) continue
+      // `/@fs/` is how Vite serves a LEGITIMATE source module from outside the
+      // configured root — normal in a monorepo. Rejecting it made N1 fall to 0%
+      // on shared-package routes. Normalise to the absolute path it encodes and
+      // let the disk check below decide. Raised in review.
+      let rel = file.replace(/^https?:\/\/[^/]+\//, '')
+      const fsIdx = rel.indexOf('@fs/')
+      if (fsIdx === 0) rel = rel.slice('@fs'.length)
+      else if (/\/_next\/|\.vite\/deps\/|\/static\/chunks\//.test(rel)) continue
+      return `${rel}:${coord[1]}:${coord[2]}`
     }
     return null
   }
 
-  // MEASURED CORRECTION (2026-08-13): `_debugStack` alone does NOT cross the
-  // library boundary. For a Radix-rendered <button> the whole stack is
-  //   at Primitive.button (@radix-ui_react-accordion.js:921:40)
-  //   at react_stack_bottom_frame (react-dom_client.js) …
-  // with NO user frame at all — because the stack records where THAT element
-  // was created, which is inside the library. So a stack-only harvest recovers
-  // nothing for exactly the population it was meant to reach (measured: 0 of 16).
+  // Climb owners until one was itself created in user code.
   //
-  // `_debugOwner` is the field that does cross it. On the same node the owner
-  // chain walks up through the library's wrappers and reaches `App`. So the
-  // route is: climb owners until one of them was itself created in user code,
-  // and take THAT owner's stack. The result is the user's call site — the
-  // element the designer would recognise as theirs.
+  // No fixed hop cap. A 12-hop limit reported "unrecoverable" purely because a
+  // component library or HOC stack was deep — Radix alone puts ~7 wrappers
+  // between a host node and its keyed item, and the first USER owner can sit
+  // well past that. Bounded instead by cycle detection plus a generous ceiling,
+  // and a truncation is REPORTED rather than silently read as missing data.
   const userSrcFrom = (fiber) => {
     const own = stackSrc(fiber)
     if (own) return { src: own, viaOwnerHops: 0 }
+    const seen = new Set()
     let owner = fiber?._debugOwner, hops = 0
-    while (owner && hops++ < 12) {
+    while (owner && !seen.has(owner)) {
+      seen.add(owner)
+      if (++hops > 200) return { truncated: true }
       const s = stackSrc(owner)
       if (s) return { src: s, viaOwnerHops: hops }
       owner = owner._debugOwner
@@ -281,104 +306,106 @@ const PROBE = () => {
 
   const harvest = {
     // N1
-    unstamped: 0, unstampedWithReactSrc: 0,
-    // How many needed an OWNER-CHAIN climb rather than the node's own stack.
-    // This is the library-boundary population; a stack-only harvest reports 0.
-    viaOwnerChain: 0,
-    // N2 — one record per .map()-style GROUP (siblings sharing a parent+source)
+    unstamped: 0, unstampedWithReactSrc: 0, viaOwnerChain: 0, truncatedChains: 0,
+    // N2 — one record per map-style sibling GROUP
     keyGroups: [],
     // N3
     containers: 0, containersUniquelyAnchored: 0,
-    // evidence for the report
+    // Availability. React debug data absent is "unavailable", NOT "zero" —
+    // reporting 0% for an app whose fibers cannot be read states a measurement
+    // that was never taken. Raised in review.
+    nodesConsidered: 0, nodesWithFiber: 0,
     samples: [],
-    // every recovered path, so the DRIVER can check it names a real file.
-    // A path that does not exist on disk is not a source location, whatever it
-    // looks like — this is the backstop for bundler-rewritten frames.
+    // EVERY recovered path, with how it was found, UNCAPPED. The cap used to be
+    // 400 while `unstampedWithReactSrc` counted all of them, so the driver's
+    // validated numerator silently topped out at 400 and the surplus was
+    // reported as nonexistent bundler output. `viaOwnerChain` also has to be
+    // recomputed AFTER validation or the report can say "0 have a source" and
+    // then "of those, dozens needed a climb". Raised in review.
     recovered: [],
   }
 
-  if (window.__CORTEX_HARVEST__) {
-    const seenGroup = new Set()
+  if (HARVEST) {
+    const seenGroupParent = new Set()
     for (const el of document.querySelectorAll('*')) {
-      if (NON_VISUAL.has(el.tagName.toLowerCase())) continue
+      // SAME exclusions as the all-elements walk. The harvest previously
+      // admitted documentElement/body and anything with a nonzero rect, so
+      // hidden tab panels, mounted modals and mid-transition trees — kept alive
+      // with visibility:hidden or opacity:0 — counted toward N1 and N3 even
+      // though no designer can target them. Raised in review.
+      const tag = el.tagName.toLowerCase()
+      if (NON_VISUAL.has(tag) || NON_RENDERED_SVG.has(tag)) continue
+      if (el === document.documentElement || el === document.body) continue
       if (el.closest('[data-cortex-host]') || el.hasAttribute('data-cortex-root')) continue
       const r = el.getBoundingClientRect()
       if (r.width === 0 || r.height === 0) continue
+      const cs = getComputedStyle(el)
+      if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue
 
       const stamp = el.getAttribute('data-cortex-source')
       const f = fiberOf(el)
+      harvest.nodesConsidered++
+      if (f) harvest.nodesWithFiber++
 
       // ── N1 ──
       if (!stamp) {
         harvest.unstamped++
         const found = userSrcFrom(f)
-        if (found) {
+        if (found?.truncated) harvest.truncatedChains++
+        else if (found?.src) {
           harvest.unstampedWithReactSrc++
-          if (found.viaOwnerHops > 0) harvest.viaOwnerChain++
+          harvest.recovered.push({ src: found.src, hops: found.viaOwnerHops })
           if (harvest.samples.length < 25) {
             harvest.samples.push({
               tag: el.localName, reactSrc: found.src, hops: found.viaOwnerHops,
               owner: ownerName(f?._debugOwner),
             })
           }
-          if (harvest.recovered.length < 400) {
-            harvest.recovered.push(found.src)
-          }
         }
       }
 
-      // ── N3: a plausible CONTAINER is a node with >= 2 element children ──
+      // ── N3 ──
       if (el.children.length >= 2) {
         harvest.containers++
-        // "Uniquely anchored" = carries a stamp that no other element carries.
         if (stamp && (sourceCounts.get(stamp) ?? 0) === 1) harvest.containersUniquelyAnchored++
       }
 
-      // ── N2: keyed sibling groups ──
-      // A group is the keyed children of one parent. Recorded once per parent.
-      // The key does NOT necessarily live on the DOM node's own fiber. For
-      // `{rows.map(r => <Accordion.Item key={r}/>)}` the key is on the COMPONENT
-      // fiber, and the host <div> it renders has key null. Reading only the DOM
-      // node's fiber therefore missed every component-keyed list — which is the
-      // common shape in library code, and it under-counted N2 to 1 group on a
-      // fixture that has two. Climb to the nearest keyed fiber instead.
-      // MEASURED: 6 hops is too shallow. Radix stacks ~7 levels of its own
-      // internals (Primitive.div -> Provider -> AccordionItemContext -> …)
-      // between the host node and the keyed <Accordion.Item>, so a shallow
-      // climb reports "no keyed group" for a list that plainly has one.
-      // Raised to 20, and the siblings' keyed fibers must share a `return` —
-      // otherwise the climb has walked past this list into an unrelated
-      // ancestor whose key belongs to a different group entirely.
-      const keyedOf = (node) => {
-        let x = fiberOf(node), n = 0
-        while (x && n++ < 20) { if (x.key !== null) return x; x = x.return }
-        return null
-      }
+      // ── N2: map-style sibling groups ──
+      // The population is defined by the DOM, NOT by the presence of a key.
+      // Keying off `key !== null` excluded unkeyed lists entirely — exactly the
+      // lists LEAST able to support per-instance edits — so N2 could report
+      // 100% by measuring only lists that already had keys. A group is now any
+      // parent with >= 2 element children that share one `data-cortex-source`
+      // (the documented map-style shape), and missing keys count as UNUSABLE
+      // rather than vanishing. Raised in review.
       const parent = el.parentElement
-      const selfKeyed = keyedOf(el)
-      if (parent && selfKeyed && !seenGroup.has(parent)) {
-        seenGroup.add(parent)
+      if (parent && !seenGroupParent.has(parent)) {
         const kids = Array.from(parent.children)
-          .map(c => ({ el: c, f: keyedOf(c) }))
-          .filter(x => x.f && x.f.key !== null)
-        // One list, not several: every keyed fiber must have the same parent.
-        const sameList = kids.length >= 2 && kids.every(x => x.f.return === kids[0].f.return)
-        if (sameList) {
-          const keys = kids.map(x => String(x.f.key))
-          // `key={index}` is the degenerate case and it is NOT directly
-          // observable — at read time an index key is just a string. The
-          // heuristic: if every key equals its own position, the group is
-          // almost certainly index-keyed. Reported AS a heuristic, because it
-          // cannot distinguish index-keying from data that happens to be
-          // 0,1,2… — and that residual ambiguity is itself a finding.
-          const looksIndexed = keys.every((k, i) => k === String(i))
-          harvest.keyGroups.push({
-            size: kids.length,
-            looksIndexed,
-            allDistinct: new Set(keys).size === keys.length,
-            parentStamped: !!parent.getAttribute('data-cortex-source'),
-            sampleKeys: keys.slice(0, 5),
-          })
+        if (kids.length >= 2) {
+          const srcs = kids.map(c => c.getAttribute('data-cortex-source'))
+          const shared = srcs[0] && srcs.every(x => x === srcs[0])
+          if (shared) {
+            seenGroupParent.add(parent)
+            const fibers = kids.map(c => keyedOf(c))
+            const keys = fibers.map(x => (x && x.key !== null ? String(x.key) : null))
+            // At least two DISTINCT keyed fibers. When one keyed component
+            // renders a host container with several children, keyedOf returns
+            // the SAME fiber for each — recording the component's internals as a
+            // bogus duplicate-key group, one per list item, which depressed N2
+            // sharply. Raised in review.
+            const distinctFibers = new Set(fibers.filter(Boolean)).size
+            const present = keys.filter(k => k !== null)
+            const looksIndexed = present.length === keys.length
+              && keys.every((k, i) => k === String(i))
+            harvest.keyGroups.push({
+              size: kids.length,
+              distinctFibers,
+              missingKeys: keys.length - present.length,
+              looksIndexed,
+              allDistinct: present.length === keys.length && new Set(present).size === present.length,
+              sampleKeys: present.slice(0, 5),
+            })
+          }
         }
       }
     }
@@ -515,14 +542,27 @@ async function main() {
     try {
       const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 })
       if (resp && resp.status() >= 400) { rows.push({ route, error: `HTTP ${resp.status()}` }); continue }
-      await page.addScriptTag({ content: `window.__CORTEX_HARVEST__ = ${harvest ? 'true' : 'false'}` })
       await page.waitForTimeout(settleMs)
-      r = await page.evaluate(PROBE)
+      // Passed as an ARGUMENT, not an injected <script>. An app with a strict
+      // Content-Security-Policy blocks inline scripts, so the flag silently
+      // never got set and --harvest returned empty measurements while
+      // page.evaluate itself worked fine. Raised in review.
+      r = await page.evaluate(PROBE, { harvest })
     } catch (err) {
       rows.push({ route, error: err.message.split('\n')[0] })
       continue
     }
-    if (!r.cortexPresent) { rows.push({ route, error: 'no [data-cortex-source] on page — cortex not instrumenting this route' }); continue }
+    // A route with NO stamps is precisely the shape N1 exists to measure —
+    // React-rendered nodes cortex annotated nothing on. Discarding it as an
+    // error biased addressability UPWARD by dropping the worst-coverage routes,
+    // and an entirely unstamped app produced no harvest report at all. Under
+    // --harvest the row is kept; the legacy coverage section still reports the
+    // missing instrumentation. Raised in review.
+    if (!r.cortexPresent) {
+      if (harvest) { rows.push({ route, ...r, coverageUnavailable: true }) }
+      else { rows.push({ route, error: 'no [data-cortex-source] on page — cortex not instrumenting this route' }) }
+      continue
+    }
 
     agg.unique += r.hit.unique
     agg.shared += r.hit.shared
@@ -566,6 +606,13 @@ async function main() {
   console.log('-'.repeat(78))
   for (const row of rows) {
     if (row.error) { console.log(row.route.padEnd(30) + '  ' + row.error); continue }
+    // Retained for --harvest but deliberately OUT of the coverage aggregate:
+    // cortex instrumented nothing here, so a coverage percentage would describe
+    // an absent instrument rather than the page.
+    if (row.coverageUnavailable) {
+      console.log(row.route.slice(0, 29).padEnd(30) + '  no [data-cortex-source] — harvested only, excluded from coverage')
+      continue
+    }
     console.log(
       row.route.slice(0, 29).padEnd(30) +
       String(row.hitTotal).padStart(7) +
@@ -633,44 +680,74 @@ async function main() {
 
     // ── HARVEST ──────────────────────────────────────────────────────────────
     if (harvest) {
+      // Includes rows flagged coverageUnavailable — a route with zero stamps is
+      // exactly the population N1 measures, and excluding it biased
+      // addressability upward. Only genuine errors (navigation failures) drop out.
       const H = rows.filter(r => !r.error).map(r => r.harvest).filter(Boolean)
       const sum = (f) => H.reduce((n, h) => n + f(h), 0)
-      const groups = H.flatMap(h => h.keyGroups)
+
       const unstamped = sum(h => h.unstamped)
-      const withSrcRaw = sum(h => h.unstampedWithReactSrc)
-      // A recovered path is only real if it names a file that EXISTS. Without
-      // this a bundler-rewritten frame counts as a recovery — measured at 100%
-      // on a Turbopack app where the true figure was 0%.
-      const allRecovered = H.flatMap(h => h.recovered ?? [])
-      let withSrc = withSrcRaw
-      if (verifyRoot) {
-        const read = makeReader(verifyRoot)
-        const ok = allRecovered.filter(rel => read(rel.replace(/:\d+:\d+$/, '')) !== null).length
-        withSrc = ok
-        if (ok !== withSrcRaw) {
-          console.log(`\n  NOTE: ${withSrcRaw - ok} of ${withSrcRaw} recovered paths do NOT name a file on`)
-          console.log('  disk and are NOT counted — bundler output masquerading as a source location.')
-        }
-      }
+      const groups = H.flatMap(h => h.keyGroups)
       const containers = sum(h => h.containers)
       const uniqueContainers = sum(h => h.containersUniquelyAnchored)
-      const usable = groups.filter(g => !g.looksIndexed && g.allDistinct)
-      const indexed = groups.filter(g => g.looksIndexed)
+      const considered = sum(h => h.nodesConsidered)
+      const withFiber = sum(h => h.nodesWithFiber)
+      const truncated = sum(h => h.truncatedChains)
+
+      // Validate EVERY recovered path (uncapped) and recompute the owner-chain
+      // count from the survivors, so the two numbers can never disagree.
+      const allRec = H.flatMap(h => h.recovered ?? [])
+      let withSrc = null, viaOwner = 0, dropped = 0
+      if (verifyRoot) {
+        const read = makeReader(verifyRoot)
+        const kept = allRec.filter(x => read(x.src.replace(/:\d+:\d+$/, '')) !== null)
+        withSrc = kept.length
+        viaOwner = kept.filter(x => x.hops > 0).length
+        dropped = allRec.length - kept.length
+      }
 
       console.log('\n' + '='.repeat(78))
       console.log('HARVEST — what React already knows that cortex did not stamp')
       console.log('='.repeat(78))
-      // Counts WITH denominators, always. A bare percentage over an unstated
-      // sample is how a measurement stops being checkable.
-      console.log(`  N1 addressability   ${withSrc} of ${unstamped} unstamped nodes carry a user-code`)
-      console.log(`                      source location from React   ${pct(withSrc, unstamped).trim()}`)
-      console.log(`                      of those, ${sum(h => h.viaOwnerChain)} needed an OWNER-CHAIN climb — the`)
-      console.log(`                      library-boundary population a stack-only read misses entirely`)
-      console.log(`  N2 per-instance     ${usable.length} of ${groups.length} keyed sibling groups have a USABLE key`)
-      console.log(`                      (distinct, and not index-shaped)          ${pct(usable.length, groups.length).trim()}`)
-      console.log(`                      ${indexed.length} look INDEX-KEYED — see the caveat below`)
-      console.log(`  N3 containers       ${uniqueContainers} of ${containers} multi-child containers are uniquely`)
-      console.log(`                      anchored                                  ${pct(uniqueContainers, containers).trim()}`)
+
+      // React debug data absent is UNAVAILABLE, not zero. Reporting 0% for an
+      // app whose fibers cannot be read states a measurement never taken.
+      if (withFiber === 0) {
+        console.log(`  N1/N2  n/a — no __reactFiber$ on any of ${considered} nodes.`)
+        console.log('         Not a React dev build, or React internals changed. NOT a score of 0.')
+      } else {
+        if (withFiber < considered) {
+          console.log(`  NOTE: ${considered - withFiber} of ${considered} nodes expose no fiber; they cannot`)
+          console.log('        contribute to N1/N2 and are excluded from those denominators.')
+        }
+        if (withSrc === null) {
+          console.log(`  N1 addressability   ${sum(h => h.unstampedWithReactSrc)} of ${unstamped} unstamped nodes — UNVALIDATED.`)
+          console.log('                      Pass --verify-root to confirm these name real files. Without it a')
+          console.log('                      generated bundle under an unrecognised path (/assets/app.js) counts')
+          console.log('                      as user code and inflates this number.')
+        } else {
+          console.log(`  N1 addressability   ${withSrc} of ${unstamped} unstamped nodes carry a user-code`)
+          console.log(`                      source location that EXISTS on disk   ${pct(withSrc, unstamped).trim()}`)
+          console.log(`                      of those, ${viaOwner} needed an OWNER-CHAIN climb — the`)
+          console.log('                      library-boundary population a stack-only read misses entirely')
+          if (dropped) console.log(`                      (${dropped} recovered paths named no file and were NOT counted)`)
+        }
+        if (truncated) console.log(`                      ${truncated} owner chains hit the cycle/depth guard — reported, not counted as absent`)
+
+        const usable = groups.filter(g => !g.looksIndexed && g.allDistinct && g.distinctFibers >= 2)
+        const indexed = groups.filter(g => g.looksIndexed)
+        const unkeyed = groups.filter(g => g.missingKeys > 0)
+        console.log(`  N2 per-instance     ${usable.length} of ${groups.length} map-style sibling groups have a USABLE key`)
+        console.log(`                      (>=2 distinct keyed fibers, all keys present and distinct,`)
+        console.log(`                      not index-shaped)                        ${pct(usable.length, groups.length).trim()}`)
+        console.log(`                      ${indexed.length} index-shaped · ${unkeyed.length} with MISSING keys — both counted as unusable`)
+      }
+
+      console.log(`  N3 containers       ${uniqueContainers} of ${containers} multi-child containers carry a UNIQUE`)
+      console.log(`                      stamp                                     ${pct(uniqueContainers, containers).trim()}`)
+      console.log('                      UNIQUENESS ONLY — not verified correct. A uniformly offset stamp')
+      console.log('                      (the COR-28 bug this harness exists to catch) is still unique, so')
+      console.log('                      this cannot on its own say drag-to-reorder is safe.')
 
       console.log('\n  What each number decides:')
       console.log('    N1 — how much of the app becomes addressable WITHOUT a build-time stamp.')
