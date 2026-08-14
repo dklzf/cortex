@@ -1505,7 +1505,13 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       // travels far past the 4px threshold — becomes a reorder gesture.
       // Requiring selection also means the user has already said which element
       // they mean, so the drag cannot be a surprise.
-      canDrag: (el) => selectedElementsRef.current.some(sel => sel === el || sel.contains(el)),
+      //
+      // Returns the SELECTED ancestor, not the pressed node: `event.target` is
+      // the innermost element under the pointer, so pressing the `<span>` in
+      // `<li><span>Alpha</span></li>` must reorder the li among its siblings,
+      // not the span among the li's children.
+      resolveDraggable: (el: Element) =>
+        selectedElementsRef.current.find(sel => sel === el || sel.contains(el)) ?? null,
       isOwnUI,
       onStateChange: setDragState,
       onResult: (result) => {

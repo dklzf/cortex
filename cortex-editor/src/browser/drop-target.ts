@@ -100,6 +100,24 @@ function measureAxis(items: readonly Measured[]): { axis: DropAxis; reversed: bo
 }
 
 /**
+ * Whether DOM order runs right-to-left WITHIN a row of a wrapped layout.
+ *
+ * A grid has no single axis to read reversal off, so it is read per row: take
+ * the first band of items that share a row and compare the DOM-first against
+ * the DOM-last. Under `direction: rtl` or `row-reverse` the later child sits
+ * further left, and treating `pointer.x > centerX` as "past" would then stage
+ * the OPPOSITE reorder — the reading order is mirrored, so the sides are too.
+ */
+function gridRowReversed(items: readonly Measured[]): boolean {
+  const first = items[0]
+  if (!first) return false
+  // Items sharing the first item's row band, in DOM order.
+  const row = items.filter(m => m.top < first.bottom && m.bottom > first.top)
+  if (row.length < 2) return false
+  return row[row.length - 1]!.centerX < row[0]!.centerX
+}
+
+/**
  * Resolve the pointer to a drop slot.
  *
  * Returns `null` when there is nothing to resolve — fewer than two children, an
@@ -118,19 +136,28 @@ export function resolveDropTarget(
   if (children.length < 2) return null
   if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex >= children.length) return null
 
-  // The dragged child is excluded from the measurement AND from the coordinate
-  // system. `reorderPermutation` splices it out before inserting, so `toIndex`
-  // counts positions in the list without it — computing against the full list
-  // produces an off-by-one for every drop past the dragged element's own slot.
+  // Two populations, and conflating them was two separate bugs.
+  //
+  // `laidOut` — every child with a box, INCLUDING the dragged one — is what the
+  // AXIS is measured from. Excluding the dragged child leaves a two-item row
+  // with a single rectangle, `rows` and `cols` are both 1, the tie resolves to
+  // vertical, and dragging the first of two side-by-side buttons to the far
+  // right compares only the unchanged Y — returning slot 0, which the producer
+  // then refuses as a no-op. The axis is a property of the CONTAINER, so it is
+  // measured from everything in it.
+  //
+  // `others` — the same minus the dragged child — is what SLOTS are counted
+  // from, because `reorderPermutation` splices the dragged child out before
+  // inserting.
+  const laidOut: Measured[] = []
   const others: Measured[] = []
   for (let i = 0; i < children.length; i += 1) {
-    if (i === fromIndex) continue
     const rect = children[i]!.getBoundingClientRect()
     // Zero-area children carry no position worth comparing; including them
     // would put a `display: none` sibling's centre at the viewport origin and
     // drag every drop toward index 0.
     if (rect.width === 0 && rect.height === 0) continue
-    others.push({
+    const m: Measured = {
       index: i,
       centerX: rect.left + rect.width / 2,
       centerY: rect.top + rect.height / 2,
@@ -138,11 +165,30 @@ export function resolveDropTarget(
       bottom: rect.bottom,
       left: rect.left,
       right: rect.right,
-    })
+    }
+    laidOut.push(m)
+    if (i !== fromIndex) others.push(m)
   }
   if (others.length === 0) return null
 
-  const { axis, reversed } = measureAxis(others)
+  const { axis, reversed } = measureAxis(laidOut)
+
+  /**
+   * Convert a slot in the MEASURED list back to one in the full post-removal
+   * DOM child list — the coordinate system `reorderPermutation` splices into.
+   *
+   * These differ whenever a child was skipped for having no box. For
+   * `[dragged, hidden, visible]` the measured list is just `[visible]`, so a
+   * drop after it is measured-slot 1 — and applied to the full list that means
+   * "position 1", producing `[hidden, dragged, visible]`: the visible order
+   * unchanged, which is not what the user did. Mapping through the retained DOM
+   * `index` gives 2, and the drop lands after the visible child.
+   */
+  const toDomSlot = (measuredSlot: number): number => {
+    if (measuredSlot >= others.length) return children.length - 1
+    const domIndex = others[measuredSlot]!.index
+    return domIndex - (domIndex > fromIndex ? 1 : 0)
+  }
 
   if (axis === 'grid') {
     // Nearest centre, then before/after by which side of it the pointer sits.
@@ -169,8 +215,14 @@ export function resolveDropTarget(
     // it the vertical one does. That is reading order — across a row, then down.
     const n = others[nearest]!
     const withinRow = pointer.y >= n.top && pointer.y <= n.bottom
-    const past = withinRow ? pointer.x > n.centerX : pointer.y > n.centerY
-    return { toIndex: past ? nearest + 1 : nearest, axis }
+    // Rows can run right-to-left, and then the sides mirror too — `pointer.x >
+    // centreX` would otherwise stage the opposite reorder on an RTL grid.
+    // Measured from the laid-out cells rather than read off `direction`, same
+    // as everything else here.
+    const rtlRow = gridRowReversed(laidOut)
+    const pastX = rtlRow ? pointer.x < n.centerX : pointer.x > n.centerX
+    const past = withinRow ? pastX : pointer.y > n.centerY
+    return { toIndex: toDomSlot(past ? nearest + 1 : nearest), axis }
   }
 
   const alongPointer = axis === 'vertical' ? pointer.y : pointer.x
@@ -179,12 +231,12 @@ export function resolveDropTarget(
   // Count the slots the pointer has passed. `reversed` flips the comparison
   // rather than the array, so the returned index stays in DOM order — which is
   // the only order `baseline` and `order` are expressed in.
-  let toIndex = 0
+  let measuredSlot = 0
   for (const item of others) {
     const passed = reversed ? alongPointer < alongItem(item) : alongPointer > alongItem(item)
-    if (passed) toIndex += 1
+    if (passed) measuredSlot += 1
   }
-  return { toIndex, axis }
+  return { toIndex: toDomSlot(measuredSlot), axis }
 }
 
 /** A viewport-coordinate line, for the drop indicator to render. */
@@ -233,8 +285,33 @@ export function dropIndicatorRect(
   }
   if (others.length === 0) return null
 
-  const clamped = Math.max(0, Math.min(toIndex, others.length))
-  const { axis, reversed } = measureAxis(others)
+  // `toIndex` arrives in full post-removal DOM coordinates (see `toDomSlot`),
+  // and this function counts in MEASURED slots — the two differ whenever a
+  // child was skipped for having no box. Map back by finding the first measured
+  // item at or after the requested DOM position, or the end.
+  const postRemoval = (m: Measured): number => m.index - (m.index > fromIndex ? 1 : 0)
+  let clamped = others.length
+  for (let k = 0; k < others.length; k += 1) {
+    if (postRemoval(others[k]!) >= toIndex) { clamped = k; break }
+  }
+  // The axis comes from every laid-out child, including the dragged one — a
+  // two-item row measured without it has one rectangle and always ties to
+  // vertical. Same reason as in `resolveDropTarget`.
+  const laidOutAll = others.slice()
+  const draggedRect = children[fromIndex]!.getBoundingClientRect()
+  if (draggedRect.width !== 0 || draggedRect.height !== 0) {
+    laidOutAll.push({
+      index: fromIndex,
+      centerX: draggedRect.left + draggedRect.width / 2,
+      centerY: draggedRect.top + draggedRect.height / 2,
+      top: draggedRect.top,
+      bottom: draggedRect.bottom,
+      left: draggedRect.left,
+      right: draggedRect.right,
+    })
+    laidOutAll.sort((a, b) => a.index - b.index)
+  }
+  const { axis, reversed } = measureAxis(laidOutAll)
 
   // The slot is a BOUNDARY, so it is described by the item on each side of it.
   // At the ends only one exists, and the line sits on that item's outer edge.

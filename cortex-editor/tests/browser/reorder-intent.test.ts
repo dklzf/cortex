@@ -367,3 +367,45 @@ describe('buildReorderIntent — the kill-condition cases', () => {
     expect(result.ok).toBe(false)
   })
 })
+
+describe('buildReorderIntent — a refused gesture leaves no trace', () => {
+  it('rolls back minted preview ids when the SCHEMA refuses', () => {
+    // Reachable without anything exotic: a deeply nested container produces a
+    // `parentKey` past the 1024-byte cap, and the schema rejects it AFTER the
+    // baseline has already stamped every unannotated child. Stray preview ids
+    // outlive the gesture — they match page selectors and change what a later
+    // capture reads back.
+    let deep = mount('<div></div>')
+    for (let i = 0; i < 120; i += 1) {
+      const next = document.createElement('div')
+      next.className = `wrapper-level-${i}-with-a-long-name`
+      deep.appendChild(next)
+      deep = next
+    }
+    deep.innerHTML = '<li>One</li><li>Two</li>'
+
+    const result = buildReorderIntent(deep, 1, 0)
+    expect(result.ok).toBe(false)
+    // Nothing left behind, on the container or any child.
+    expect(deep.getAttribute('data-cortex-preview-id')).toBeNull()
+    for (const child of Array.from(deep.children)) {
+      expect(child.getAttribute('data-cortex-preview-id')).toBeNull()
+    }
+  })
+
+  it('PRESERVES a preview id the element already had', () => {
+    // Rollback restores the prior value rather than clearing it — removing an
+    // id the page or an earlier capture set would break whatever referenced it.
+    let deep = mount('<div></div>')
+    for (let i = 0; i < 120; i += 1) {
+      const next = document.createElement('div')
+      next.className = `wrapper-level-${i}-with-a-long-name`
+      deep.appendChild(next)
+      deep = next
+    }
+    deep.innerHTML = '<li data-cortex-preview-id="kept">One</li><li>Two</li>'
+
+    expect(buildReorderIntent(deep, 1, 0).ok).toBe(false)
+    expect(deep.children[0]!.getAttribute('data-cortex-preview-id')).toBe('kept')
+  })
+})

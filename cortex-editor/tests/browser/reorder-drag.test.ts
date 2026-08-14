@@ -166,3 +166,47 @@ describe('release and cancel', () => {
     expect(onPointerMove(IDLE, { x: 5, y: 5 })).toEqual(IDLE)
   })
 })
+
+// Review round 3 on #196 — the release path trusted a press-time index, and
+// the producer left attributes behind on a refusal.
+describe('release re-derives the dragged element', () => {
+  it('REFUSES when a sibling was inserted under the held pointer', () => {
+    // `fromIndex` names a POSITION. If the app inserts a row above the dragged
+    // one mid-drag, that position now holds a different element and the release
+    // would build a perfectly valid intent for the wrong child. `toIndex` was
+    // also resolved against the old arrangement, so the whole gesture is
+    // refused rather than reinterpreted.
+    stubDrop(2)
+    const { container, children } = list(3)
+    const dragging = onPointerMove(beginPress(children[0]!, { x: 10, y: 10 }), { x: 200, y: 200 })
+
+    const inserted = document.createElement('li')
+    inserted.textContent = 'Injected'
+    container.insertBefore(inserted, container.firstElementChild)
+
+    const { result } = onPointerUp(dragging)
+    expect(result?.ok).toBe(false)
+    if (result?.ok !== false) return
+    expect(result.reason).toMatch(/changed while you were dragging/i)
+  })
+
+  it('REFUSES when the dragged element left the container', () => {
+    stubDrop(2)
+    const { children } = list(3)
+    const dragging = onPointerMove(beginPress(children[0]!, { x: 10, y: 10 }), { x: 200, y: 200 })
+    children[0]!.remove()
+
+    const { result } = onPointerUp(dragging)
+    expect(result?.ok).toBe(false)
+    if (result?.ok !== false) return
+    expect(result.reason).toMatch(/no longer in this list/i)
+  })
+
+  it('still stages when the list did NOT change', () => {
+    // The control: re-deriving must not make every drag refuse.
+    stubDrop(2)
+    const { children } = list(3)
+    const dragging = onPointerMove(beginPress(children[0]!, { x: 10, y: 10 }), { x: 200, y: 200 })
+    expect(onPointerUp(dragging).result?.ok).toBe(true)
+  })
+})

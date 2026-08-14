@@ -88,6 +88,22 @@ const FIXTURE = `<!doctype html><body style="margin:0">
     <li style="display:none">Ghost</li>
     <li style="${ROW}">Charlie</li></ul>
 
+  <!-- TWO children in a horizontal row. Measuring the axis WITHOUT the dragged
+       child leaves one rectangle, rows and cols both 1, and the tie resolves to
+       vertical — so dragging one button to the far right compares only the
+       unchanged Y and returns slot 0, which the producer refuses as a no-op. -->
+  <div id="pair" style="${AT_ORIGIN};display:flex;width:300px">
+    <button style="width:100px;height:40px">One</button>
+    <button style="width:100px;height:40px">Two</button></div>
+
+  <!-- A wrapped RTL grid: DOM order runs right-to-left within each row, so the
+       before/after sides mirror too. -->
+  <div id="rtlgrid" style="${AT_ORIGIN};display:flex;flex-wrap:wrap;direction:rtl;width:200px">
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div>
+    <div style="width:100px;height:40px"></div></div>
+
   <!-- Ragged widths in a vertical list. Centres differ horizontally, and a
        naive both-axes-vary test would call this a grid. -->
   <ul id="ragged" style="${AT_ORIGIN};margin:0;padding:0;list-style:none;width:400px">
@@ -211,8 +227,30 @@ test.describe('resolveDropTarget — vertical lists', () => {
   test('ignores a zero-area sibling instead of placing it at the origin', async ({ page }) => {
     // The display:none li has a rect at 0,0. Counting it would put a centre
     // above every real row and shift drops toward index 0.
+    //
+    // The RETURNED index is in full post-removal DOM coordinates, not measured
+    // ones, and this test previously asserted the measured value — which is the
+    // bug review caught. `[Alpha, Ghost, Charlie]` dragging Alpha below
+    // Charlie: measured-slot 1 applied to the full list produces
+    // `[Ghost, Alpha, Charlie]`, leaving the VISIBLE order untouched. The
+    // answer is 2.
     const t = await drop(page, 'hiddenlist', 100, 70, 0)
-    expect(t?.toIndex).toBe(1)
+    expect(t?.toIndex).toBe(2)
+  })
+
+  test('a drop past a hidden sibling actually changes the visible order', async ({ page }) => {
+    // The property the index is for. Asserting the number alone is how the
+    // off-by-one survived: 1 and 2 both look plausible until you apply them.
+    const t = await drop(page, 'hiddenlist', 100, 70, 0)
+    const applied = await page.evaluate(({ from, to }) => {
+      const labels = ['Alpha', 'Ghost', 'Charlie']
+      const order = labels.map((_, i) => i)
+      const [moved] = order.splice(from, 1)
+      order.splice(to, 0, moved!)
+      return order.map(i => labels[i]!)
+    }, { from: 0, to: t!.toIndex })
+    // Alpha ends up after Charlie, which is what dropping below Charlie means.
+    expect(applied.filter(l => l !== 'Ghost')).toEqual(['Charlie', 'Alpha'])
   })
 })
 
@@ -242,6 +280,47 @@ test.describe('resolveDropTarget — horizontal and reversed', () => {
     // branch; measured, it needs nothing.
     expect((await drop(page, 'rtllist', 295, 20, 2))?.toIndex).toBe(0)
     expect((await drop(page, 'rtllist', 5, 20, 2))?.toIndex).toBe(2)
+  })
+})
+
+test.describe('resolveDropTarget — review round 3', () => {
+  test('a TWO-item row still measures as horizontal', async ({ page }) => {
+    // The axis is a property of the CONTAINER, so it is measured from every
+    // laid-out child including the dragged one. Excluding it leaves a single
+    // rectangle, the 1x1 tie picks vertical, and the whole gesture dies on the
+    // most ordinary layout there is: two buttons side by side.
+    const t = await drop(page, 'pair', 10, 20, 0)
+    expect(t?.axis).toBe('horizontal')
+  })
+
+  test('dragging the first of two buttons to the right returns a REAL move', async ({ page }) => {
+    // Not just the axis — the slot. Under the vertical misreading this returned
+    // 0, and the producer refused it as a no-op, so the drag silently did
+    // nothing.
+    const t = await drop(page, 'pair', 290, 20, 0)
+    expect(t?.toIndex).toBe(1)
+  })
+
+  test('an RTL grid mirrors the before/after sides', async ({ page }) => {
+    // Cells run right-to-left in DOM order, so `pointer.x > centreX` means the
+    // slot BEFORE in DOM terms. Reading it as "past" stages the opposite
+    // reorder — a confidently wrong write, not a visible failure.
+    // Probe INSIDE a cell, not beyond the container: outside it, nearest-centre
+    // legitimately picks a cell from the other row and the comparison stops
+    // being about sides at all. DOM child 1 is the LEFTMOST cell of row 1 under
+    // RTL, and dragging child 0 leaves it in `others`.
+    const box = (await page.locator('#rtlgrid > div').nth(1).boundingBox())!
+    const y = box.y + box.height / 2
+    const leftHalf = await drop(page, 'rtlgrid', box.x + box.width * 0.25, y, 0)
+    const rightHalf = await drop(page, 'rtlgrid', box.x + box.width * 0.75, y, 0)
+
+    expect(leftHalf?.axis).toBe('grid')
+    // The two halves must disagree, or the side rule is not firing at all.
+    expect(leftHalf?.toIndex).not.toBe(rightHalf?.toIndex)
+    // And the mirror: in a right-to-left row, moving LEFT advances through DOM
+    // order, so the left half is the LATER slot. Reading it the other way
+    // stages the opposite reorder.
+    expect(leftHalf!.toIndex).toBeGreaterThan(rightHalf!.toIndex)
   })
 })
 

@@ -34,10 +34,13 @@ export interface Pointer { x: number; y: number }
 export type ReorderDragState =
   | { phase: 'idle' }
   /** Pointer is down but has not travelled far enough to be a drag yet. */
-  | { phase: 'pressed'; container: Element; fromIndex: number; origin: Pointer }
+  | { phase: 'pressed'; container: Element; dragged: Element; fromIndex: number; origin: Pointer }
   | {
       phase: 'dragging'
       container: Element
+      /** The ELEMENT being dragged. `fromIndex` is where it was at press time
+       *  and can go stale under a held pointer; this cannot. */
+      dragged: Element
       fromIndex: number
       origin: Pointer
       /** Where the release would put it, in post-removal coordinates. */
@@ -61,7 +64,7 @@ export function beginPress(el: Element, pointer: Pointer): ReorderDragState {
   const fromIndex = Array.from(container.children).indexOf(el)
   if (fromIndex < 0) return IDLE
   if (container.children.length < 2) return IDLE
-  return { phase: 'pressed', container, fromIndex, origin: { ...pointer } }
+  return { phase: 'pressed', container, dragged: el, fromIndex, origin: { ...pointer } }
 }
 
 /**
@@ -92,6 +95,7 @@ export function onPointerMove(state: ReorderDragState, pointer: Pointer): Reorde
   return {
     phase: 'dragging',
     container: state.container,
+    dragged: state.dragged,
     fromIndex: state.fromIndex,
     origin: state.origin,
     toIndex: target.toIndex,
@@ -111,12 +115,35 @@ export function onPointerUp(
   state: ReorderDragState,
 ): { state: ReorderDragState; result?: ReorderIntentResult } {
   if (state.phase !== 'dragging') return { state: IDLE }
-  // Re-derive from the live DOM at release rather than trusting the index
-  // carried since the last move. The list can change under a held pointer, and
-  // the intent must describe the tree as it is when the user lets go.
+
+  // Re-derive the dragged element's CURRENT index rather than trusting the one
+  // captured at press time. If the app inserts, removes or reorders a sibling
+  // while the pointer is held, `fromIndex` names whichever child now occupies
+  // that position — and the release would build an otherwise valid intent for
+  // the wrong element. An earlier comment here claimed the live DOM was
+  // re-derived; only `buildReorderIntent`'s child array was, and the dragged
+  // identity stayed stale.
+  const liveIndex = Array.from(state.container.children).indexOf(state.dragged)
+  if (liveIndex < 0) {
+    // The element left the container mid-drag. Nothing to describe.
+    return {
+      state: IDLE,
+      result: { ok: false, reason: 'That element is no longer in this list — the page changed while you were dragging.' },
+    }
+  }
+  // `toIndex` was resolved against the press-time arrangement. If the dragged
+  // element moved, the slot it named no longer means the same thing, so the
+  // whole gesture is refused rather than applied to a tree it does not
+  // describe — the same fail-closed direction as the drift guard.
+  if (liveIndex !== state.fromIndex) {
+    return {
+      state: IDLE,
+      result: { ok: false, reason: 'The list changed while you were dragging, so this move was not applied. Try again.' },
+    }
+  }
   return {
     state: IDLE,
-    result: buildReorderIntent(state.container, state.fromIndex, state.toIndex),
+    result: buildReorderIntent(state.container, liveIndex, state.toIndex),
   }
 }
 

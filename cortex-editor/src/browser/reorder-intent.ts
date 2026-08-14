@@ -1,5 +1,5 @@
 import { childDiscriminators } from './child-discriminator.js'
-import { getAgentResolveTarget, getElementEditTarget } from './preview-source.js'
+import { getAgentResolveTarget, getElementEditTarget, PREVIEW_SOURCE_ATTR } from './preview-source.js'
 import { pendingEditSchema, MAX_INTENT_INSTANCE_SOURCES } from '../schemas/pending-edit.js'
 import { generateId } from './uuid.js'
 import type { PendingEdit } from '../adapters/types.js'
@@ -217,6 +217,25 @@ export function buildReorderIntent(
   //  - `parentSource` takes the BEST address available rather than a forced
   //    preview id: the agent has to find this container in source, and a file
   //    position beats a locator. `parentKey` is what separates two instances.
+  // Minting starts HERE, after both refusal checks — but the schema can still
+  // refuse below (an over-long `parentKey` from a deeply nested container, for
+  // one), so record what every touched element looked like first. The producer
+  // promises a refused gesture leaves the page untouched, and stray preview ids
+  // break that promise in a way that OUTLIVES the gesture: they can match page
+  // selectors, fire mutation observers, and change what a later capture reads
+  // back.
+  const touched = [container, ...children]
+  const priorPreviewIds = touched.map(el => el.getAttribute(PREVIEW_SOURCE_ATTR))
+  const rollback = (): void => {
+    for (let i = 0; i < touched.length; i += 1) {
+      const prior = priorPreviewIds[i]
+      // `removeAttribute`, not setting '': an element that had no attribute
+      // must not start matching `[data-cortex-preview-id]`.
+      if (prior === null || prior === undefined) touched[i]!.removeAttribute(PREVIEW_SOURCE_ATTR)
+      else touched[i]!.setAttribute(PREVIEW_SOURCE_ATTR, prior)
+    }
+  }
+
   const dragged = getAgentResolveTarget(children[fromIndex]!)
   const parentSource = getElementEditTarget(container).source
   const baseline = children.map(child => getElementEditTarget(child).source)
@@ -247,6 +266,7 @@ export function buildReorderIntent(
   // gesture that vanishes with no explanation.
   const parsed = pendingEditSchema.safeParse(intent)
   if (!parsed.success) {
+    rollback()
     return {
       ok: false,
       reason: `Cannot stage this reorder: ${parsed.error.issues[0]?.message ?? 'the intent failed validation'}.`,
