@@ -1,0 +1,37 @@
+cortex-editor/tests/browser/cortex-app.test.tsx
+  s_515b894c608172::t_9301529482e717 22-28,36
+cortex-editor/src/browser/components/ReorderDropIndicator.tsx
+  s_515b894c608172::t_67da7bee2a2d10 1-50
+cortex-editor/src/browser/components/CortexApp.tsx
+  s_515b894c608172::t_842ee177b44b47 29-31,1493-1529,1549-1551,1574
+  s_515b894c608172::t_41cf7a233520f6 9
+cortex-editor/src/browser/styles.css
+  s_515b894c608172::t_3b374573c3eb1d 4521,4523-4529
+  s_515b894c608172::t_67da7bee2a2d10 4499-4513
+  s_515b894c608172::t_41cf7a233520f6 4514-4520,4522,4530
+cortex-editor/tests/browser/reorder-intent.test.ts
+  s_515b894c608172::t_9f7e0fa43b3e0f 301-369
+cortex-editor/tests/e2e/drop-target-measured.spec.ts
+  s_515b894c608172::t_53cb4394148b91 26,112-123,129-169
+  s_515b894c608172::t_6001d127c98d6d 170-171
+cortex-editor/src/browser/drop-target.ts
+  s_515b894c608172::t_5028912063c919 189-277
+cortex-editor/tests/browser/keyboard-shortcuts.test.tsx
+  s_515b894c608172::t_9301529482e717 59-65,78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "907500e9be4f4a0af68d727bdf2a74f3f9c36f72",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
