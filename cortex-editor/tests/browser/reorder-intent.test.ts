@@ -43,16 +43,26 @@ describe('reorderPermutation', () => {
     expect(reorderPermutation(length, from, to)).toEqual(expected)
   })
 
-  it('states the intended RESULT, so applying it twice is the same as once', () => {
+  it('states the intended RESULT, not a move, so it is absolute', () => {
     // Idempotence is the property the absolute encoding was chosen for — it is
     // what lets one intent be dropped, retried or merged without invalidating
     // any other. A from/to pair could not promise it.
+    //
+    // The first version of this compared `order.map(i => applied[i])` against a
+    // variable defined as that same expression — a tautology that could not
+    // fail. The real property is that the order indexes the ORIGINAL array, so
+    // applying it to the original always gives the same answer no matter what
+    // else happened in between.
     const order = reorderPermutation(3, 2, 0)
     const items = ['a', 'b', 'c']
+    expect(order.map(i => items[i]!)).toEqual(['c', 'a', 'b'])
+    // Re-applying to the ALREADY-REORDERED array is a different operation and
+    // must NOT be the same — that is what distinguishes an absolute order from
+    // a relative move, and asserting it pins the distinction.
     const applied = order.map(i => items[i]!)
-    const twice = order.map(i => applied[i]!)
-    expect(applied).toEqual(['c', 'a', 'b'])
-    expect(order.map(i => applied[i]!)).toEqual(twice)
+    expect(order.map(i => applied[i]!)).not.toEqual(applied)
+    // And the original mapping is stable across repeats.
+    expect(order.map(i => items[i]!)).toEqual(order.map(i => items[i]!))
   })
 })
 

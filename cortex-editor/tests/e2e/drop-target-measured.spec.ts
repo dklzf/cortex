@@ -120,24 +120,26 @@ test.describe('resolveDropTarget — vertical lists', () => {
   })
 
   test('dragging the last row above the first gives toIndex 0', async ({ page }) => {
-    // Rows 0 and 1 remain (centres y=20 and y=60 once row 2 is lifted out).
-    // Pointer at y=10 has passed neither.
+    // Rows 0 and 1 remain, at their UNCHANGED centres y=20 and y=60 — the
+    // dragged row is excluded from the measurement but stays in the DOM, so
+    // nothing reflows and no centre moves. Pointer at y=10 has passed neither.
     const t = await drop(page, 'vlist', 100, 10, 2)
     expect(t?.toIndex).toBe(0)
   })
 
   test('toIndex counts positions in the list WITHOUT the dragged row', async ({ page }) => {
-    // The off-by-one this test exists for: dragging row 0 to the bottom. With
-    // row 0 lifted, the remaining centres are y=20 and y=60 (rows shift up).
-    // A pointer below both is toIndex 2 — the end of a TWO-item list — and
-    // computing against the full three-item list would produce 3.
+    // The off-by-one this test exists for: dragging row 0 to the bottom. Row 0
+    // is excluded from the measurement but NOT removed from the DOM, so the
+    // remaining centres stay at y=60 and y=100. A pointer below both is
+    // toIndex 2 — the end of a TWO-item list — and computing against the full
+    // three-item list would produce 3.
     const t = await drop(page, 'vlist', 100, 115, 0)
     expect(t?.toIndex).toBe(2)
   })
 
   test('the midpoint decides, not the row boundary', async ({ page }) => {
-    // With row 2 lifted, remaining centres are y=20 and y=60. y=39 is past the
-    // first centre and short of the second.
+    // Rows 0 and 1 remain at y=20 and y=60 (no reflow — see above). y=39 is
+    // past the first centre and short of the second.
     expect((await drop(page, 'vlist', 100, 39, 2))?.toIndex).toBe(1)
     expect((await drop(page, 'vlist', 100, 19, 2))?.toIndex).toBe(0)
   })
@@ -164,12 +166,13 @@ test.describe('resolveDropTarget — horizontal and reversed', () => {
   })
 
   test('drops to the far end of a row', async ({ page }) => {
-    // Child 0 lifted; remaining centres x=50 and x=150 (children shift left).
+    // Child 0 excluded from the measurement, not removed: the remaining
+    // centres stay at x=150 and x=250.
     expect((await drop(page, 'hlist', 290, 20, 0))?.toIndex).toBe(2)
   })
 
   test('row-reverse: DOM order runs right-to-left, and the index stays in DOM order', async ({ page }) => {
-    // Child 0 is drawn at the RIGHT. Lifting child 2 (drawn leftmost) leaves
+    // Child 0 is drawn at the RIGHT. Excluding child 2 (drawn leftmost) leaves
     // children 0 and 1 at x=250 and x=150. A pointer at the far RIGHT is before
     // both in DOM terms, so toIndex is 0 — the returned index is a DOM index,
     // which is the only coordinate `baseline` and `order` are expressed in.
@@ -192,11 +195,42 @@ test.describe('resolveDropTarget — wrapped layouts and refusals', () => {
   })
 
   test('a grid resolves by nearest centre rather than one axis', async ({ page }) => {
-    // Cells at (50,20) (150,20) (50,60) (150,60). Lifting child 0 leaves three.
-    // A pointer just below the bottom-right cell's centre lands after it.
-    const t = await drop(page, 'gridlist', 150, 70, 0)
+    // Cells at (50,20) (150,20) (50,60) (150,60). Excluding child 0 leaves
+    // three. A pointer to the RIGHT of the bottom-right cell's centre, inside
+    // its row, lands after it. x=190 rather than x=150: sitting exactly ON the
+    // centre is the one input where "past" is a coin flip, and a test should
+    // not be built on it.
+    const t = await drop(page, 'gridlist', 190, 70, 0)
     expect(t?.axis).toBe('grid')
     expect(t?.toIndex).toBe(3)
+  })
+
+  test('inside a row, the HORIZONTAL side decides — not the vertical one', async ({ page }) => {
+    // The bug this pins: `past` was decided by y alone, with x consulted only
+    // on an exact tie that measured coordinates never produce. A pointer at
+    // (190,15) sits in the FIRST row and well to the right of the cell centred
+    // at (150,20) — reading order puts it AFTER that cell, but the y rule put
+    // it before, because 15 < 20.
+    const t = await drop(page, 'gridlist', 190, 15, 0)
+    expect(t?.axis).toBe('grid')
+    // `others` after excluding child 0: [child1 (150,20), child2 (50,60),
+    // child3 (150,60)]. Nearest is child1 at position 0, pointer is right of
+    // it, so the slot after it is 1.
+    expect(t?.toIndex).toBe(1)
+  })
+
+  test('below a row, the VERTICAL side still decides', async ({ page }) => {
+    // The other half — the row-aware rule must not break drops that fall
+    // outside every cell's band. `others` after excluding child 0 is
+    // [child1 (150,20), child2 (50,60), child3 (150,60)], all 100x40.
+    //
+    // Below the bottom-RIGHT cell: nearest is child3 at position 2, the pointer
+    // is outside its 40..80 band, so y decides and the slot after it is 3.
+    expect((await drop(page, 'gridlist', 150, 95, 0))?.toIndex).toBe(3)
+    // Below the bottom-LEFT cell: nearest is child2 at position 1, so the slot
+    // after it is 2 — not 3. Getting this from the same rule is the point;
+    // an x-only rule would put a left-hand pointer at the end of the list.
+    expect((await drop(page, 'gridlist', 50, 95, 0))?.toIndex).toBe(2)
   })
 
   test('returns null rather than guessing when there is nothing to resolve', async ({ page }) => {

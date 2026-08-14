@@ -65,8 +65,10 @@ function bandCount(items: readonly Measured[], axis: 'y' | 'x'): number {
   let bands = 0
   let reach = -Infinity
   for (const item of sorted) {
-    // Strictly greater: stacked rows share an edge (row 1 ends at 40, row 2
-    // starts at 40) and touching is not overlapping.
+    // Greater-or-EQUAL, and the `=` is load-bearing: stacked rows share an edge
+    // (row 1 ends at 40, row 2 starts at 40), touching is not overlapping, so a
+    // shared edge must start a new band. Changing this to `>` merges every
+    // adjacent row into one band and grid detection stops working.
     if (start(item) >= reach) { bands += 1; reach = end(item) }
     else reach = Math.max(reach, end(item))
   }
@@ -155,8 +157,19 @@ export function resolveDropTarget(
       const d = dx * dx + dy * dy
       if (d < best) { best = d; nearest = k }
     }
-    const past = pointer.y > others[nearest]!.centerY
-      || (pointer.y === others[nearest]!.centerY && pointer.x > others[nearest]!.centerX)
+    // Which SIDE of that cell, in reading order. The first version compared y
+    // and only fell back to x on an exact tie — which measured coordinates
+    // essentially never produce, so the x comparison was dead. A pointer in the
+    // upper half of a cell resolved to "before" it even when sitting well to
+    // its right: at (190,15), right of the cell centred at (150,20), the answer
+    // was that cell's own index instead of the slot after it. Plausible, and
+    // wrong, which is the class this module exists to avoid.
+    //
+    // Inside the nearest cell's row band the HORIZONTAL side decides; outside
+    // it the vertical one does. That is reading order — across a row, then down.
+    const n = others[nearest]!
+    const withinRow = pointer.y >= n.top && pointer.y <= n.bottom
+    const past = withinRow ? pointer.x > n.centerX : pointer.y > n.centerY
     return { toIndex: past ? nearest + 1 : nearest, axis }
   }
 
