@@ -1,4 +1,5 @@
 import { classAttr } from './class-attr.js'
+import { deepQueryAllElements } from './selection-metadata.js'
 import { MAX_SOURCE_HINT_FIELD_BYTES, PREVIEW_SOURCE_PREFIX, isPreviewSource } from '../shared/preview-source.js'
 export { MAX_SOURCE_HINT_FIELD_BYTES, PREVIEW_SOURCE_PREFIX, isPreviewSource } from '../shared/preview-source.js'
 
@@ -82,10 +83,42 @@ export function getElementEditTarget(el: Element): ElementEditTarget {
  */
 export function getAgentResolveTarget(el: Element): Extract<ElementEditTarget, { applyMode: 'agent-resolve' }> {
   return {
-    source: `${PREVIEW_SOURCE_PREFIX}${ensurePreviewId(el)}`,
+    source: `${PREVIEW_SOURCE_PREFIX}${ensureUniquePreviewId(el)}`,
     applyMode: 'agent-resolve',
     sourceResolutionHint: buildSourceResolutionHint(el),
   }
+}
+
+/**
+ * Like `ensurePreviewId`, but REPLACES an id that some other element already
+ * answers to.
+ *
+ * `ensurePreviewId` deliberately preserves an existing `data-cortex-preview-id`,
+ * and that attribute is page-controlled twice over: markup can write it
+ * directly, and `cloneNode` copies it off an already-stamped element. For a
+ * hint that is only a locator, a duplicate costs nothing.
+ *
+ * As a structural anchor it is load-bearing, because the drift guard indexes
+ * preview sources FIRST-SEEN-WINS. Drag the second of two elements sharing an
+ * id and reconcile inspects the FIRST one's parent — so a reorder in the
+ * container the user actually touched can keep comparing clean while that
+ * container drifts underneath it. Silent-wrong, and reachable without anything
+ * hostile: one `cloneNode` in a virtualised list is enough.
+ *
+ * Uniqueness is checked against open shadow roots as well as the light DOM,
+ * because that is the population the guard's index is built from.
+ */
+function ensureUniquePreviewId(el: Element): string {
+  const existing = el.getAttribute(PREVIEW_SOURCE_ATTR)
+  if (existing && ownsPreviewId(el, existing)) return existing
+  el.removeAttribute(PREVIEW_SOURCE_ATTR)
+  return ensurePreviewId(el)
+}
+
+/** True when `el` is the ONLY element carrying `id`, across open shadow roots. */
+function ownsPreviewId(el: Element, id: string): boolean {
+  const matches = deepQueryAllElements(`[${PREVIEW_SOURCE_ATTR}="${CSS.escape(id)}"]`)
+  return matches.length === 1 && matches[0] === el
 }
 
 function ensurePreviewId(el: Element): string {

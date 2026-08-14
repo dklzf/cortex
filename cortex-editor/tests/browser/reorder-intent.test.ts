@@ -217,3 +217,74 @@ describe('buildReorderIntent — refusals', () => {
     expect(ul.getAttribute('data-cortex-preview-id')).toBeNull()
   })
 })
+
+// Review round 1 on #196 — three findings, each a way the instance anchor or
+// the refusal path stops doing its job.
+describe('buildReorderIntent — review findings', () => {
+  it('crosses shadow boundaries, so two web-component instances differ', () => {
+    // `parentElement` is null for a top-level child of a shadow root, so a walk
+    // that stops there returns a bare `ul` for EVERY instance. Two instances
+    // whose containers share a transformed parentSource then produce the same
+    // composite key, and staging a reorder in the second silently displaces the
+    // first — the exact collision parentKey exists to prevent, reintroduced at
+    // the one boundary parentElement cannot see through.
+    const wrap = mount('<div><div id="h1"></div><div id="h2"></div></div>')
+    const keys = Array.from(wrap.children).map(host => {
+      const root = host.attachShadow({ mode: 'open' })
+      root.innerHTML = '<ul><li>a</li><li>b</li></ul>'
+      return containerInstanceKey(root.firstElementChild!)
+    })
+    expect(keys[0]).not.toBe(keys[1])
+    expect(keys[0]).toContain('::shadow')
+  })
+
+  it('replaces a preview id another element already answers to', () => {
+    // `ensurePreviewId` preserves an existing attribute, and that attribute is
+    // page-controlled twice over — markup writes it, and cloneNode copies it.
+    // The guard indexes preview sources first-seen-wins, so dragging the SECOND
+    // of two elements sharing an id makes reconcile inspect the FIRST one's
+    // parent, and a reorder can keep comparing clean while the container the
+    // user touched drifts underneath it.
+    const wrap = mount(
+      '<div>' +
+      '<ul><li data-cortex-preview-id="dupe">a</li><li>b</li></ul>' +
+      '<ul><li data-cortex-preview-id="dupe">c</li><li>d</li></ul>' +
+      '</div>',
+    )
+    const [first, second] = Array.from(wrap.children)
+    const a = buildReorderIntent(first!, 0, 1)
+    const b = buildReorderIntent(second!, 0, 1)
+    expect(a.ok && b.ok).toBe(true)
+    if (!a.ok || !b.ok) return
+    expect((a.intent as { source: string }).source).not.toBe((b.intent as { source: string }).source)
+  })
+
+  it('refuses an oversized list WITHOUT deriving a key for every child', () => {
+    // `childDiscriminators` reads each child's whole textContent subtree and
+    // then runs collision passes. Doing that before the cheap shape checks
+    // makes dragging inside a thousand-row table synchronously walk all of it
+    // to produce a refusal the row count alone already decided.
+    const rows = Array.from({ length: MAX_INTENT_INSTANCE_SOURCES + 1 }, () => '<li>x</li>').join('')
+    const ul = mount(`<ul>${rows}</ul>`)
+    // The descriptor lives on Element, not Node, in this DOM. Locating the
+    // owner rather than assuming it is what makes this test falsifiable at all
+    // — patching the wrong prototype intercepts nothing and the assertion holds
+    // whichever order the production code runs in.
+    const owner = Element.prototype
+    const proto = Object.getOwnPropertyDescriptor(owner, 'textContent')
+    expect(proto?.get).toBeTypeOf('function')
+    let textReads = 0
+    Object.defineProperty(owner, 'textContent', {
+      ...proto!,
+      get(this: Element) { textReads += 1; return proto!.get!.call(this) },
+    })
+    try {
+      const result = buildReorderIntent(ul, 1, 0)
+      expect(result.ok).toBe(false)
+    } finally {
+      Object.defineProperty(owner, 'textContent', proto!)
+    }
+    // Zero, not "fewer": the refusal is decided by childElementCount alone.
+    expect(textReads).toBe(0)
+  })
+})

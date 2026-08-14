@@ -53,18 +53,41 @@ export function reorderPermutation(length: number, fromIndex: number, toIndex: n
  * An nth-child path rather than the container's preview id: the id is minted by
  * cortex and does not survive the HMR cycle that replaces the node, while the
  * path is recomputed from the live tree each time and describes the same slot.
+ *
+ * The walk CROSSES SHADOW BOUNDARIES. `parentElement` is null for a top-level
+ * child of a shadow root, so stopping there returns a bare `ul` for every
+ * instance of a web component — and two instances whose containers share a
+ * transformed `parentSource` would then produce the same composite key, so
+ * staging a reorder in the second silently displaces the first. Exactly the
+ * collision this function exists to prevent, reintroduced at the one boundary
+ * `parentElement` does not see through.
  */
 export function containerInstanceKey(container: Element): string {
   const segments: string[] = []
   let node: Element | null = container
-  while (node && node.parentElement) {
-    const index = Array.from(node.parentElement.children).indexOf(node) + 1
-    segments.unshift(`${node.localName}:nth-child(${index})`)
-    node = node.parentElement
+  while (node) {
+    const parent: HTMLElement | null = node.parentElement
+    if (parent) {
+      const index = Array.from(parent.children).indexOf(node) + 1
+      segments.unshift(`${node.localName}:nth-child(${index})`)
+      node = parent
+      continue
+    }
+    const root = node.getRootNode()
+    if (root instanceof ShadowRoot) {
+      const index = Array.from(root.children).indexOf(node) + 1
+      // `::shadow>` marks the crossing so a light-DOM path can never collide
+      // with a shadow path that happens to have the same tags and positions.
+      segments.unshift(`${node.localName}:nth-child(${index})`)
+      segments.unshift('::shadow>')
+      node = root.host
+      continue
+    }
+    // A document root, or a detached tree: nothing above to be nth of.
+    segments.unshift(node.localName)
+    node = null
   }
-  // The root itself carries no nth-child — it has no parent to be nth of.
-  if (node) segments.unshift(node.localName)
-  return segments.join('>')
+  return segments.join('>').replace(/::shadow>>/g, '::shadow>')
 }
 
 /**
@@ -76,9 +99,8 @@ export function containerInstanceKey(container: Element): string {
  * the childKeys being pairwise distinct, so a list that cannot produce distinct
  * keys has no safe reorder available at all.
  */
-function refuseReorder(
+function refuseOnShape(
   children: readonly Element[],
-  childKeys: readonly string[],
   fromIndex: number,
   toIndex: number,
 ): string | null {
@@ -107,14 +129,27 @@ function refuseReorder(
     // identity permutation", which describes the encoding, not the gesture.
     return 'That item is already in this position.'
   }
+  return null
+}
 
-  // The one that carries COR-35's invariant. The drift guard proves a reorder
-  // is still valid by comparing these keys position-by-position, and that proof
-  // holds ONLY while they are pairwise distinct — two identical keys mean
-  // swapping the children they name compares clean. So a list that cannot
-  // produce distinct keys has no verifiable reorder available at all, and
-  // staging one anyway is the silent-wrong write this whole path exists to
-  // prevent.
+/**
+ * The refusal that carries COR-35's invariant, split out because deriving the
+ * keys is the EXPENSIVE part.
+ *
+ * `childDiscriminators` reads every child's whole `textContent` subtree and
+ * then runs collision-escalation passes over the result. Doing that before the
+ * cheap shape checks means dragging inside a non-virtualised table of thousands
+ * of rows synchronously walks all of them — to produce a refusal the row count
+ * alone already determined. Shape first, keys only for a list that could stage.
+ *
+ * The drift guard proves a reorder still applies by comparing these keys
+ * position-by-position, and that proof holds ONLY while they are pairwise
+ * distinct: two identical keys mean swapping the children they name compares
+ * clean. A list that cannot produce distinct keys has no verifiable reorder
+ * available at all, and staging one is the silent-wrong write this whole path
+ * exists to prevent.
+ */
+function refuseOnKeys(childKeys: readonly string[]): string | null {
   const seen = new Map<string, number>()
   for (let i = 0; i < childKeys.length; i += 1) {
     const key = childKeys[i]!
@@ -154,12 +189,18 @@ export function buildReorderIntent(
   toIndex: number,
 ): ReorderIntentResult {
   const children = Array.from(container.children)
+
+  // Shape before keys. `childDiscriminators` walks every child's text subtree,
+  // so deriving it first makes a refusal that the child COUNT already decided
+  // cost a full scan of a thousand-row table.
+  const shapeRefusal = refuseOnShape(children, fromIndex, toIndex)
+  if (shapeRefusal !== null) return { ok: false, reason: shapeRefusal }
+
   const childKeys = childDiscriminators(container)
+  const keyRefusal = refuseOnKeys(childKeys)
+  if (keyRefusal !== null) return { ok: false, reason: keyRefusal }
 
-  const refusal = refuseReorder(children, childKeys, fromIndex, toIndex)
-  if (refusal !== null) return { ok: false, reason: refusal }
-
-  // Minted AFTER the refusal check, so a refused gesture leaves no attributes
+  // Minted AFTER both refusal checks, so a refused gesture leaves no attributes
   // behind on a tree the user never successfully edited.
   // Three different addressing needs, and using one function for all of them
   // was a bug the tests caught immediately:
