@@ -309,7 +309,17 @@ async function applyOne(
       intentId,
       status: 'needs-source-edit' as const,
       intent,
-      reason:
+      // Strip the ASSEMBLED reason, the same way the class branch below does.
+      // This branch never did, and adding `childKeys` is what made it urgent:
+      // every value interpolated here is page-derived — `parentKey` is a
+      // page-supplied DOM path, a `cortex-preview:` entry in `baseline` carries
+      // a page-authored id (`ensurePreviewId` REUSES an existing attribute),
+      // and a childKey is literally a row's text. `sanitizeHintsForAgent`
+      // cannot help: `reason` is a generic string it never visits, and this
+      // builds a NEW string out of those same values. A fence the payload can
+      // close from the inside is not a fence — the COR-27 `elementSource`
+      // lesson, in the one sibling branch that had not learned it.
+      reason: stripFenceMarkers(
         `Structural reorder: the container at ${parentSource} (runtime instance ${parentKey}) ` +
         `must end up with its children in this order — ${described}. Indices refer to the ` +
         `children's positions BEFORE the edit; the list describes the intended RESULT, not a ` +
@@ -329,6 +339,7 @@ async function applyOne(
         `positioning. Those change visual order only; the accessibility tree and tab order ` +
         `keep following the original DOM sequence, which is a real regression that looks ` +
         `correct in a screenshot.`,
+      ),
     }
   }
 

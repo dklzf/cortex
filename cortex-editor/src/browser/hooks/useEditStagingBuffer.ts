@@ -3,7 +3,7 @@ import { isStructuralEdit, isClassEdit, isStyleEdit, describeClassOp } from '../
 import { compositeKey } from '../../shared/composite-key.js'
 import { isPreviewSource, PREVIEW_SOURCE_PREFIX } from '../../shared/preview-source.js'
 import { PREVIEW_SOURCE_ATTR } from '../preview-source.js'
-import { childDiscriminator } from '../child-discriminator.js'
+import { childDiscriminators } from '../child-discriminator.js'
 import { stripLineCol, deepQueryAllElements } from '../selection-metadata.js'
 import type { CortexChannel, PendingEdit } from '../../adapters/types.js'
 
@@ -369,7 +369,11 @@ export default function useEditStagingBuffer(emitter?: SyncEmitter): StagingBuff
         // `childKeys` is the array that can witness a permutation; the schema
         // requires its entries to be distinct, which is what makes positional
         // comparison detect EVERY reorder rather than most of them.
-        const liveKeys = children.map(childDiscriminator)
+        // `childDiscriminators(parent)`, NOT `children.map(childDiscriminator)`:
+        // the keys escalate on collision, which is a property of the sibling
+        // SET, so a per-element map would compute different keys than the
+        // producer did and report drift on a tree that never moved.
+        const liveKeys = parent ? childDiscriminators(parent) : []
         const { baseline, childKeys } = edit.structural
         const drifted = live.length !== baseline.length
           || baseline.some((source, i) => live[i] !== source)

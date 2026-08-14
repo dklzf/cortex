@@ -61,25 +61,22 @@ const decoder = new TextDecoder('utf-8', { fatal: true })
 const IDENTITY_ATTRS = ['data-testid', 'id', 'name', 'aria-label', 'href', 'src', 'alt'] as const
 
 /**
- * A stable, order-sensitive key for one child of a container.
+ * Every facet of one element that could tell it apart from a sibling, most
+ * stable first: the authored attributes it actually carries, then tag + text.
  *
- * Pure: reads the DOM and mutates nothing. The guard runs during a read-only
- * reconcile, and `getElementEditTarget` has already shown what stamping during
- * a read costs — see `ensurePreviewId`.
- *
- * Two children of the same parent produce the same key only when they are
- * genuinely indistinguishable from the outside, which is the case the schema
- * refuses to stage rather than guess at.
+ * The text facet is ALWAYS last and always present, so the list is never empty
+ * and escalation always has somewhere to go.
  */
-export function childDiscriminator(el: Element): string {
+function facetsOf(el: Element): string[] {
+  const facets: string[] = []
   for (const attr of IDENTITY_ATTRS) {
     const raw = el.getAttribute(attr)
     if (raw === null) continue
     const value = raw.trim()
-    // `@` and `#` lead the two shapes so an attribute key can never collide
+    // `@` and `#` lead the two shapes so an attribute facet can never collide
     // with a structural one. Attribute names cannot contain '=', so the first
     // '=' splits the pair unambiguously even when the VALUE contains one.
-    if (value) return clampUtf8(`@${attr}=${value}`)
+    if (value) facets.push(`@${attr}=${value}`)
   }
 
   // `localName`, not `tagName.toLowerCase()` — SVG element names are
@@ -90,7 +87,23 @@ export function childDiscriminator(el: Element): string {
   // element without changing what it says; comparing raw textContent would
   // report drift on a reformat.
   const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
-  return clampUtf8(`#${el.localName}:${text}`)
+  facets.push(`#${el.localName}:${text}`)
+  return facets
+}
+
+/**
+ * A stable, order-sensitive key for one child, considered ALONE.
+ *
+ * Pure: reads the DOM and mutates nothing. The guard runs during a read-only
+ * reconcile, and `getElementEditTarget` has already shown what stamping during
+ * a read costs — see `ensurePreviewId`.
+ *
+ * Prefer `childDiscriminators` for a real container — it can see the sibling
+ * set and escalate on a collision, which this cannot. Exported for the cases
+ * that genuinely have one element and no siblings to compare against.
+ */
+export function childDiscriminator(el: Element): string {
+  return clampUtf8(facetsOf(el)[0]!)
 }
 
 /**
@@ -99,9 +112,57 @@ export function childDiscriminator(el: Element): string {
  * Walks `parent.children` — the same collection the guard reads sources from —
  * so the two arrays are index-aligned by construction rather than by a length
  * check that could pass while the entries described different nodes.
+ *
+ * ## Why this escalates instead of taking the first facet and stopping
+ *
+ * Review caught a case that first-wins gets badly wrong, and it is idiomatic
+ * rather than exotic: rows sharing ONE `data-testid` (the shape
+ * `getAllByTestId` is written for) while differing in `id` and text. First-wins
+ * keys them all `@data-testid=row`, the schema's distinctness rule rejects the
+ * intent, and cortex refuses to reorder a list every human can tell apart.
+ *
+ * Distinctness is the property the whole scheme rests on, so it wins over the
+ * preference order: where a facet collides, the colliding children — and ONLY
+ * those — take on their next facet too. Children that were already unique keep
+ * their stable, short key, so one duplicated testid cannot drag an entire list
+ * onto volatile text.
+ *
+ * Deterministic, which is what lets capture and reconcile agree: the base
+ * facets are per-element pure, and the collision structure is a pure function
+ * of the sibling set. The same DOM always produces the same keys. A set that
+ * differs enough to change the collision structure differs by an insertion or
+ * a deletion, which the length check catches first.
  */
 export function childDiscriminators(parent: Element): string[] {
-  return Array.from(parent.children, childDiscriminator)
+  const facets = Array.from(parent.children, facetsOf)
+  // Depth 1 = the first facet alone; grows only for entries that collide.
+  const depth = facets.map(() => 1)
+  const keyAt = (i: number): string => facets[i]!.slice(0, depth[i]!).join('|')
+
+  // At most one pass per facet position: each pass either resolves a group or
+  // exhausts its members' facets, and the longest facet list bounds both.
+  const maxFacets = facets.reduce((m, f) => Math.max(m, f.length), 0)
+  for (let pass = 1; pass < maxFacets; pass += 1) {
+    const groups = new Map<string, number[]>()
+    for (let i = 0; i < facets.length; i += 1) {
+      const k = keyAt(i)
+      const g = groups.get(k)
+      if (g) g.push(i)
+      else groups.set(k, [i])
+    }
+    let escalated = false
+    for (const members of groups.values()) {
+      if (members.length < 2) continue
+      for (const i of members) {
+        if (depth[i]! < facets[i]!.length) { depth[i]! += 1; escalated = true }
+      }
+    }
+    // Nothing left to add — the remaining collisions are children that really
+    // are indistinguishable, and the schema refuses those rather than guessing.
+    if (!escalated) break
+  }
+
+  return facets.map((_, i) => clampUtf8(keyAt(i)))
 }
 
 /** Room reserved at the end of a truncated key for the `~<hash>` suffix. */

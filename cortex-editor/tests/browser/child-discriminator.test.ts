@@ -139,3 +139,76 @@ describe('childDiscriminators — a container\'s children', () => {
     expect(ul.outerHTML).toBe(before)
   })
 })
+
+// Review finding (P2): first-wins on a preferred attribute makes otherwise
+// distinguishable children collide. `<li data-testid="row" id="a">Alice</li>`
+// beside `id="b">Bob` keyed both `@data-testid=row`, the schema's distinctness
+// rule rejected the intent, and cortex refused to reorder a list every human
+// can tell apart. A shared testid across rows is idiomatic — it is what
+// `getAllByTestId` is written for — so this is a common list, not an exotic one.
+describe('childDiscriminators — escalates only where facets collide', () => {
+  function ul(...html: string[]): Element {
+    const host = document.createElement('div')
+    host.innerHTML = `<ul>${html.join('')}</ul>`
+    return host.firstElementChild!
+  }
+
+  it('falls through to another facet when the preferred attribute is shared', () => {
+    const keys = childDiscriminators(ul(
+      '<li data-testid="row" id="a">Alice</li>',
+      '<li data-testid="row" id="b">Bob</li>',
+    ))
+    expect(new Set(keys).size).toBe(2)
+    expect(keys[0]).toContain('@id=a')
+    expect(keys[1]).toContain('@id=b')
+  })
+
+  it('leaves ALREADY-UNIQUE siblings on their short, stable key', () => {
+    // The reason for escalating per-group instead of raising the whole list:
+    // one duplicated testid must not drag every other row onto volatile text.
+    const keys = childDiscriminators(ul(
+      '<li data-testid="dup">Alice</li>',
+      '<li data-testid="dup">Bob</li>',
+      '<li data-testid="unique">Carol</li>',
+    ))
+    expect(keys[2]).toBe('@data-testid=unique')
+    expect(new Set(keys).size).toBe(3)
+  })
+
+  it('escalates all the way to text when every attribute is shared', () => {
+    const keys = childDiscriminators(ul(
+      '<li data-testid="row" class="r">Alice</li>',
+      '<li data-testid="row" class="r">Bob</li>',
+    ))
+    expect(new Set(keys).size).toBe(2)
+    expect(keys[0]).toContain('Alice')
+    expect(keys[1]).toContain('Bob')
+  })
+
+  it('still collides when the children are genuinely identical', () => {
+    // Escalation cannot invent identity. Exhausting every facet and still
+    // colliding is the honest report, and the schema refuses that intent
+    // rather than staging a reorder it cannot verify.
+    const keys = childDiscriminators(ul('<li data-testid="row"></li>', '<li data-testid="row"></li>'))
+    expect(keys[0]).toBe(keys[1])
+  })
+
+  it('is deterministic — the same DOM yields the same keys', () => {
+    // Load-bearing, not hygiene: capture and reconcile call this on the same
+    // tree at different times. If escalation were order- or identity-dependent
+    // the guard would report drift on a list that never moved.
+    const markup = ['<li data-testid="row" id="a">Alice</li>', '<li data-testid="row" id="b">Bob</li>']
+    expect(childDiscriminators(ul(...markup))).toEqual(childDiscriminators(ul(...markup)))
+  })
+
+  it('escalation does not let one child borrow another\'s identity', () => {
+    // A composite key must stay anchored to its own element: row A escalated
+    // with row B's text would compare equal after a swap.
+    const keys = childDiscriminators(ul(
+      '<li data-testid="row">Alice</li>',
+      '<li data-testid="row">Bob</li>',
+    ))
+    expect(keys[0]).not.toContain('Bob')
+    expect(keys[1]).not.toContain('Alice')
+  })
+})
