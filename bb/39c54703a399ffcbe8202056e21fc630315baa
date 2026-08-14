@@ -1,0 +1,37 @@
+cortex-editor/src/browser/drop-target.ts
+  s_515b894c608172::t_2548ffb6908228 231-245
+cortex-editor/src/schemas/pending-edit.ts
+  s_515b894c608172::t_a7da9448f4f9c5 172-180
+cortex-editor/tests/browser/reorder-intent.test.ts
+  s_515b894c608172::t_236e5388b67615 412-442
+cortex-editor/tests/e2e/drop-target-measured.spec.ts
+  s_515b894c608172::t_46b831765d8f20 109-116,314-330
+  s_515b894c608172::t_2a0561184929c4 107-108
+  s_515b894c608172::t_2ed6cda2d36b4c 331
+cortex-editor/src/browser/reorder-drag-listener.ts
+  s_515b894c608172::t_2548ffb6908228 72-83,104-114,149,192
+cortex-editor/src/browser/components/CortexApp.tsx
+  s_515b894c608172::t_de3f8caabf32cd 1520-1530,1533-1542
+  s_515b894c608172::t_6e7752e1469bd7 30,1531-1532
+cortex-editor/src/browser/reorder-intent.ts
+  s_515b894c608172::t_a7da9448f4f9c5 69-77,102-114
+  s_515b894c608172::t_1b72562d522d3c 115-116
+cortex-editor/tests/schemas/structural-intent.test.ts
+  s_515b894c608172::t_236e5388b67615 267-288
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bb39c54703a399ffcbe8202056e21fc630315baa",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
