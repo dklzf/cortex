@@ -30,6 +30,10 @@ function structural(over: Record<string, unknown> = {}, inner: Record<string, un
       parentSource: 'src/App.tsx:10:2',
       parentKey: 'body>div:nth-child(1)>ul',
       baseline: ['src/App.tsx:12:4', 'src/App.tsx:12:4', 'src/App.tsx:12:4'],
+      // COR-35: three rows from one `.map()` share a source, so `baseline`
+      // above is three identical strings and cannot witness a permutation.
+      // These can.
+      childKeys: ['#li:Item A', '#li:Item B', '#li:Item C'],
       order: [2, 0, 1],
       ...inner,
     },
@@ -92,6 +96,65 @@ describe('structural intent — schema', () => {
     const parsed = pendingEditSchema.parse(structural())
     expect(isStructuralEdit(parsed)).toBe(true)
     if (isStructuralEdit(parsed)) expect(parsed.structural.baseline).toHaveLength(3)
+  })
+})
+
+// ── COR-35 ──────────────────────────────────────────────────────────────────
+//
+// `baseline` is N identical strings for a `.map()`, so comparing it
+// position-by-position is satisfied under every permutation — a reorder between
+// capture and Apply was invisible to the drift guard. `childKeys` is the array
+// that can witness one, and only while these rules hold.
+describe('structural intent — childKeys (COR-35)', () => {
+  it('REJECTS an intent with no childKeys, so a producer cannot omit them', () => {
+    // Required rather than optional, deliberately: no producer exists yet, so
+    // there is nothing to migrate — and an optional field would let the first
+    // producer skip it and silently restore the bug this closes.
+    expect(pendingEditSchema.safeParse(structural({}, { childKeys: undefined })).success).toBe(false)
+  })
+
+  it('REJECTS childKeys that are not pairwise distinct', () => {
+    // The guard's correctness argument is "given distinct keys, positional
+    // comparison detects EVERY permutation". Duplicate keys void it — swapping
+    // the two children they name compares clean — so the intent is refused
+    // rather than staged with a guard that cannot see the swap.
+    const parsed = pendingEditSchema.safeParse(
+      structural({}, { childKeys: ['#li:Row', '#li:Row', '#li:Other'] }),
+    )
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(parsed.error.issues.some(i => i.path.join('.') === 'structural.childKeys')).toBe(true)
+    }
+  })
+
+  it('REJECTS childKeys whose length disagrees with baseline', () => {
+    // The guard indexes the two arrays together. A short array would leave the
+    // trailing children unchecked — precisely the ones a reorder moves.
+    const parsed = pendingEditSchema.safeParse(
+      structural({}, { childKeys: ['#li:Item A', '#li:Item B'] }),
+    )
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(parsed.error.issues.some(i => i.path.join('.') === 'structural.childKeys')).toBe(true)
+    }
+  })
+
+  it('REJECTS an empty-string key rather than treating it as "no identity"', () => {
+    // '' is what an unannotated, textless child would collapse to. Two of them
+    // are indistinguishable, and admitting one entry now is how a second gets
+    // admitted later.
+    expect(pendingEditSchema.safeParse(
+      structural({}, { childKeys: ['', '#li:Item B', '#li:Item C'] }),
+    ).success).toBe(false)
+  })
+
+  it('accepts distinct keys of the same length as baseline', () => {
+    // Control: the rules above must not make well-formed intents unstageable.
+    const parsed = pendingEditSchema.parse(structural())
+    expect(isStructuralEdit(parsed)).toBe(true)
+    if (isStructuralEdit(parsed)) {
+      expect(parsed.structural.childKeys).toEqual(['#li:Item A', '#li:Item B', '#li:Item C'])
+    }
   })
 })
 

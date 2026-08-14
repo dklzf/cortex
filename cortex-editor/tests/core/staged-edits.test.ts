@@ -786,3 +786,70 @@ describe('agentResolveIntentContext', () => {
     expect(serializeForAgent(withHint).startsWith(`<${FENCE_TAG} `)).toBe(true)
   })
 })
+
+// ── COR-35 ──────────────────────────────────────────────────────────────────
+//
+// The drift guard could not SEE a reorder among `.map()` siblings; the agent
+// instruction could not SAY which sibling moved. Same root cause one layer up —
+// N siblings share one `data-cortex-source`, so a description built from
+// `baseline` reads `src/List.tsx:15:11, src/List.tsx:15:11, src/List.tsx:15:11`
+// and names nothing. `childKeys` is what makes the instruction executable.
+describe('structural intent — the agent instruction names WHICH child (COR-35)', () => {
+  const SOURCE = 'src/List.tsx:15:11'
+
+  const reorder = (over: Record<string, unknown> = {}): PendingEdit => ({
+    kind: 'structural',
+    intentId: 'struct-agent-1',
+    source: SOURCE,
+    applyMode: 'agent-resolve',
+    sourceResolutionHint: { tagName: 'li', textPreview: 'Alpha', domSelector: 'ul > li' },
+    structural: {
+      op: 'reorder',
+      parentSource: 'src/List.tsx:14:3',
+      parentKey: 'body>ul',
+      baseline: [SOURCE, SOURCE, SOURCE],
+      childKeys: ['#li:Alpha', '#li:Bravo', '#li:Charlie'],
+      order: [2, 0, 1],
+      ...over,
+    },
+    timestamp: 1,
+  } as unknown as PendingEdit)
+
+  /** Structural intents return before any pipeline work, so a bare stub suffices. */
+  async function reasonFor(edit: PendingEdit): Promise<string> {
+    const { applyEditsCore } = await import('../../src/core/staged-edits.js')
+    const cache = new StagedEditsCache()
+    cache.append(edit)
+    const pipeline = {
+      beginApply: () => true,
+      endApply: () => {},
+    } as never
+    const [result] = await applyEditsCore(cache, [edit.intentId], pipeline, 1_000)
+    expect(result!.status).toBe('needs-source-edit')
+    return (result as { reason: string }).reason
+  }
+
+  it('names each child by its discriminator, not by a source they all share', async () => {
+    const reason = await reasonFor(reorder())
+    for (const key of ['#li:Alpha', '#li:Bravo', '#li:Charlie']) {
+      expect(reason).toContain(key)
+    }
+  })
+
+  it('states the intended order using those names', async () => {
+    // `order: [2, 0, 1]` means Charlie ends up first. Without a name attached,
+    // "0 <- 2" is an index into a list the agent cannot see.
+    const reason = await reasonFor(reorder())
+    expect(reason).toContain('0 <- 2 (#li:Charlie)')
+  })
+
+  it('still describes the move when childKeys is absent', async () => {
+    // Defence in depth, not a supported shape: the schema requires childKeys,
+    // but applyEditsCore reads whatever is in the cache. Falling back to the
+    // source keeps the instruction degraded-but-present rather than printing
+    // 'undefined' at the agent.
+    const reason = await reasonFor(reorder({ childKeys: undefined }))
+    expect(reason).toContain(SOURCE)
+    expect(reason).not.toContain('undefined')
+  })
+})
