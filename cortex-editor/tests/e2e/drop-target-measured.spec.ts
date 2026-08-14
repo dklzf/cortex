@@ -23,6 +23,7 @@ import * as esbuild from 'esbuild'
 import { fileURLToPath } from 'node:url'
 
 interface DropTarget { toIndex: number; axis: 'vertical' | 'horizontal' | 'grid' }
+interface IndicatorRect { left: number; top: number; width: number; height: number }
 
 let BUNDLE = ''
 
@@ -108,9 +109,64 @@ async function drop(page: Page, id: string, x: number, y: number, fromIndex: num
   )
 }
 
+async function indicator(page: Page, id: string, fromIndex: number, toIndex: number): Promise<IndicatorRect | null> {
+  return await page.evaluate(
+    ({ elementId, from, to }) => {
+      const el = document.getElementById(elementId)!
+      return (window as unknown as {
+        DT: { dropIndicatorRect: (n: Element, f: number, t: number) => IndicatorRect | null }
+      }).DT.dropIndicatorRect(el, from, to)
+    },
+    { elementId: id, from: fromIndex, to: toIndex },
+  )
+}
+
 test.beforeEach(async ({ page }) => {
   await page.setContent(FIXTURE)
   await page.addScriptTag({ content: BUNDLE })
+})
+
+test.describe('dropIndicatorRect — the line matches the slot', () => {
+  test('draws BETWEEN the two rows that bound the slot', async ({ page }) => {
+    // Rows are 40px tall from y=0. Dragging row 2, dropping at slot 1 means
+    // between row 0 (ends at 40) and row 1 (starts at 40) — so the line sits at
+    // y=40, and its 2px thickness is centred on that boundary.
+    const r = await indicator(page, 'vlist', 2, 1)
+    expect(r).not.toBeNull()
+    expect(r!.top).toBeCloseTo(39, 0)
+    expect(r!.height).toBe(2)
+    // Spans the rows' width, so it reads as a slot in THIS list rather than a
+    // rule across the page.
+    expect(r!.width).toBeCloseTo(200, 0)
+  })
+
+  test('sits on the outer edge at either end', async ({ page }) => {
+    // Slot 0 with row 2 lifted: above row 0, whose top is y=0.
+    expect((await indicator(page, 'vlist', 2, 0))!.top).toBeCloseTo(-1, 0)
+    // The last slot: below row 1, which ends at y=80.
+    expect((await indicator(page, 'vlist', 2, 2))!.top).toBeCloseTo(79, 0)
+  })
+
+  test('agrees with the slot resolveDropTarget picked', async ({ page }) => {
+    // The property that matters. An indicator computed independently is how a
+    // drag starts feeling possessed — the user trusts a line drawn one slot
+    // away from where the release actually lands.
+    const target = await drop(page, 'vlist', 100, 39, 2)
+    const r = await indicator(page, 'vlist', 2, target!.toIndex)
+    expect(r!.top).toBeCloseTo(39, 0)
+  })
+
+  test('draws a VERTICAL line in a horizontal list', async ({ page }) => {
+    // A horizontal rule between side-by-side items would read as "between
+    // rows", which is not what the slot means.
+    const r = await indicator(page, 'hlist', 0, 1)
+    expect(r!.width).toBe(2)
+    expect(r!.height).toBeCloseTo(40, 0)
+  })
+
+  test('returns null when there is nothing to draw', async ({ page }) => {
+    expect(await indicator(page, 'vlist', 9, 0)).toBeNull()
+  })
 })
 
 test.describe('resolveDropTarget — vertical lists', () => {

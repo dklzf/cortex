@@ -56,7 +56,13 @@ vi.mock('../../src/browser/command-stack.js', () => ({
 // Mock the selection module (same pattern as cortex-app.test.tsx).
 // _resetCallbacks nulls the module-scope closure so a prior test's callbacks
 // cannot be returned under async timing (ZF0-1297 test-hygiene fix).
-vi.mock('../../src/browser/selection.js', () => {
+vi.mock('../../src/browser/selection.js', async (importOriginal) => {
+  // Spread the REAL module first. A bare factory replaces it wholesale, so
+  // every export this file does not restate silently disappears — which is how
+  // adding `isOwnUI` to CortexApp broke tests that never mention selection at
+  // all. Only `initSelection` needs stubbing; everything else is pure and can
+  // stay real.
+  const actual = await importOriginal<typeof import('../../src/browser/selection.js')>()
   const cleanupFn = vi.fn()
   const setDesignModeFn = vi.fn()
   const setInterceptClicksFn = vi.fn()
@@ -69,6 +75,7 @@ vi.mock('../../src/browser/selection.js', () => {
   let selectCb: ((elements: Element[], action: 'replace' | 'add' | 'toggle') => void) | null = null
 
   return {
+    ...actual,
     initSelection: vi.fn((
       _shadow: ShadowRoot,
       onHover: (el: Element | null) => void,

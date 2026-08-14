@@ -186,3 +186,92 @@ export function resolveDropTarget(
   }
   return { toIndex, axis }
 }
+
+/** A viewport-coordinate line, for the drop indicator to render. */
+export interface DropIndicatorRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** Thickness of the indicator line, in CSS pixels. */
+const INDICATOR_PX = 2
+
+/**
+ * Where to draw the "it will land here" line for a resolved drop.
+ *
+ * Measured from the same rects the resolution used, so the line cannot claim a
+ * boundary the resolver did not pick — the failure that makes a drag feel
+ * possessed is an indicator drawn one slot away from where the release lands.
+ *
+ * Returns `null` when there is nothing to draw, on the same terms
+ * `resolveDropTarget` returns null.
+ */
+export function dropIndicatorRect(
+  container: Element,
+  fromIndex: number,
+  toIndex: number,
+): DropIndicatorRect | null {
+  const children = Array.from(container.children)
+  if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex >= children.length) return null
+
+  const others: Measured[] = []
+  for (let i = 0; i < children.length; i += 1) {
+    if (i === fromIndex) continue
+    const rect = children[i]!.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) continue
+    others.push({
+      index: i,
+      centerX: rect.left + rect.width / 2,
+      centerY: rect.top + rect.height / 2,
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    })
+  }
+  if (others.length === 0) return null
+
+  const clamped = Math.max(0, Math.min(toIndex, others.length))
+  const { axis, reversed } = measureAxis(others)
+
+  // The slot is a BOUNDARY, so it is described by the item on each side of it.
+  // At the ends only one exists, and the line sits on that item's outer edge.
+  const before = clamped > 0 ? others[clamped - 1]! : null
+  const after = clamped < others.length ? others[clamped]! : null
+
+  if (axis === 'vertical') {
+    const span = others.reduce(
+      (acc, m) => ({ left: Math.min(acc.left, m.left), right: Math.max(acc.right, m.right) }),
+      { left: Infinity, right: -Infinity },
+    )
+    // `reversed` swaps which neighbour is visually above, and the midpoint of
+    // the two edges keeps the line centred in whatever gap the layout leaves.
+    const lo = reversed ? after : before
+    const hi = reversed ? before : after
+    const y = lo && hi ? (lo.bottom + hi.top) / 2 : lo ? lo.bottom : hi!.top
+    return { left: span.left, top: y - INDICATOR_PX / 2, width: span.right - span.left, height: INDICATOR_PX }
+  }
+
+  // Horizontal and grid both draw a VERTICAL line: in a wrapped layout the
+  // insertion point is still between two cells in reading order, and a
+  // horizontal rule there would read as "between rows" rather than "here".
+  const rowSource = after ?? before!
+  const lo = reversed ? after : before
+  const hi = reversed ? before : after
+  const x = lo && hi && lo.bottom > hi.top && lo.top < hi.bottom
+    // Same row: the gap between them.
+    ? (lo.right + hi.left) / 2
+    : lo && !hi ? lo.right
+    : hi && !lo ? hi.left
+    // Different rows (a wrap boundary): pin to the incoming cell's leading
+    // edge rather than spanning the gap, which would draw across the page.
+    : (reversed ? rowSource.right : rowSource.left)
+  return {
+    left: x - INDICATOR_PX / 2,
+    top: rowSource.top,
+    width: INDICATOR_PX,
+    height: rowSource.bottom - rowSource.top,
+  }
+}

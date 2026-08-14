@@ -298,3 +298,72 @@ describe('buildReorderIntent — review findings', () => {
     expect(textReads).toBe(0)
   })
 })
+
+// COR-7's kill condition names three cases that must EACH produce a correct
+// source edit: a `.map()` instance, a portal child, and an SVG icon. The first
+// two are covered above; these are the remaining two.
+describe('buildReorderIntent — the kill-condition cases', () => {
+  it('handles a PORTAL child, whose DOM parent is not its JSX parent', () => {
+    // A portal renders children into a DOM node elsewhere in the tree. The
+    // children ARE real DOM siblings there, so the reorder itself is
+    // well-formed — what changes is that the container carries no
+    // `data-cortex-source`, because the transform never stamped the portal
+    // host. That is not a failure: it falls to the agent-resolve path, which
+    // is exactly what a preview source plus a hint is for.
+    const portalHost = mount('<div id="portal-root"></div>')
+    portalHost.innerHTML =
+      '<li data-cortex-source="src/Menu.tsx:22:7">One</li>' +
+      '<li data-cortex-source="src/Menu.tsx:22:7">Two</li>' +
+      '<li data-cortex-source="src/Menu.tsx:22:7">Three</li>'
+
+    const result = buildReorderIntent(portalHost, 2, 0)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    const s = structuralOf(result.intent)
+    // The container is unstamped, so `parentSource` is a preview source rather
+    // than a file position — the agent locates it from the hint. The children
+    // still carry their real source, so the agent knows which JSX renders them.
+    expect(s.parentSource.startsWith(PREVIEW_SOURCE_PREFIX)).toBe(true)
+    expect(new Set(s.baseline)).toEqual(new Set(['src/Menu.tsx:22:7']))
+    expect(s.childKeys).toEqual(['#li:One', '#li:Two', '#li:Three'])
+    expect(s.order).toEqual([2, 0, 1])
+  })
+
+  it('handles SVG children, whose element names are case-sensitive', () => {
+    // The transform annotates every lowercase JSX tag with no HTML allowlist,
+    // so `<svg>`/`<path>`/`<circle>` in the user's own source carry anchors.
+    // `localName` rather than `tagName.toLowerCase()` is what keeps
+    // <linearGradient> from collapsing onto <lineargradient>.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    for (const [name, id] of [['linearGradient', 'a'], ['linearGradient', 'b'], ['circle', 'c']] as const) {
+      const child = document.createElementNS('http://www.w3.org/2000/svg', name)
+      child.setAttribute('data-cortex-source', 'src/Icon.tsx:4:3')
+      child.setAttribute('id', id)
+      svg.appendChild(child)
+    }
+    document.body.appendChild(svg)
+
+    const result = buildReorderIntent(svg, 2, 0)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Textless SVG children would ALL key as '#svgtag:' — the authored `id` is
+    // what makes them distinguishable, and without it this reorder is refused.
+    expect(structuralOf(result.intent).childKeys).toEqual(['@id=a', '@id=b', '@id=c'])
+  })
+
+  it('REFUSES textless SVG children with no authored identity', () => {
+    // The honest other half: two identical `<path>`s cannot be told apart, so
+    // the reorder is refused rather than staged against a guess.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    for (let i = 0; i < 2; i += 1) {
+      const child = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      child.setAttribute('data-cortex-source', 'src/Icon.tsx:4:3')
+      svg.appendChild(child)
+    }
+    document.body.appendChild(svg)
+
+    const result = buildReorderIntent(svg, 1, 0)
+    expect(result.ok).toBe(false)
+  })
+})
