@@ -1,0 +1,25 @@
+cortex-editor/src/browser/resize-pin.ts
+  s_515b894c608172::t_0a71d2fe5eb8d0 1-98
+cortex-editor/tests/browser/resize-pin.test.ts
+  s_515b894c608172::t_b8a03edbac0fff 1-99
+cortex-editor/tests/browser/resize-drag.test.ts
+  s_515b894c608172::t_d71743477a11ad 1-162
+cortex-editor/src/browser/resize-drag.ts
+  s_515b894c608172::t_e0a5d291ae7056 1-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "76c4e096660ed61be95cc0daadbcdd4c5f0c9d1c",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
