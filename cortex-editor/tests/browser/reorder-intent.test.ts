@@ -409,3 +409,34 @@ describe('buildReorderIntent — a refused gesture leaves no trace', () => {
     expect(deep.children[0]!.getAttribute('data-cortex-preview-id')).toBe('kept')
   })
 })
+
+describe('containerInstanceKey — stable under sibling churn (review round 4)', () => {
+  it('does NOT change when a sibling is inserted above the container', () => {
+    // `compositeKey` dedupes structural edits by parentSource + parentKey. An
+    // all-nth-child path changes whenever the app inserts a node anywhere
+    // above, so a SECOND drag on the same live container would fail to replace
+    // the first intent — leaving the buffer holding two conflicting final
+    // orders for one container.
+    const wrap = mount('<div><ul id="rows"><li>a</li><li>b</li></ul></div>')
+    const ul = wrap.querySelector('#rows')!
+    const before = containerInstanceKey(ul)
+    wrap.insertBefore(document.createElement('div'), wrap.firstElementChild)
+    expect(containerInstanceKey(ul)).toBe(before)
+  })
+
+  it('uses data-testid when there is no id', () => {
+    const wrap = mount('<div><ul data-testid="rows"><li>a</li><li>b</li></ul></div>')
+    const ul = wrap.firstElementChild!
+    const before = containerInstanceKey(ul)
+    wrap.insertBefore(document.createElement('div'), ul)
+    expect(containerInstanceKey(ul)).toBe(before)
+  })
+
+  it('still distinguishes two anchorless instances positionally', () => {
+    // The fallback has to keep working — without an authored anchor, position
+    // is the only thing that separates two renders of one component.
+    const wrap = mount('<div><ul><li>a</li></ul><ul><li>b</li></ul></div>')
+    const [first, second] = Array.from(wrap.children)
+    expect(containerInstanceKey(first!)).not.toBe(containerInstanceKey(second!))
+  })
+})

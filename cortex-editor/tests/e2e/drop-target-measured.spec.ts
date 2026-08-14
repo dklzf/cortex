@@ -104,6 +104,16 @@ const FIXTURE = `<!doctype html><body style="margin:0">
     <div style="width:100px;height:40px"></div>
     <div style="width:100px;height:40px"></div></div>
 
+  <!-- CSS order transposes the middle two: DOM [A,B,C,D] displays as
+       [A,C,B,D]. First and last are still in order, so reversed stays false,
+       and the visual-rank-to-DOM-index identification the counting loop relies
+       on quietly stops holding. -->
+  <ul id="cssorder" style="${AT_ORIGIN};display:flex;flex-direction:column;margin:0;padding:0;list-style:none;width:200px">
+    <li style="height:40px;order:1">A</li>
+    <li style="height:40px;order:3">B</li>
+    <li style="height:40px;order:2">C</li>
+    <li style="height:40px;order:4">D</li></ul>
+
   <!-- Ragged widths in a vertical list. Centres differ horizontally, and a
        naive both-axes-vary test would call this a grid. -->
   <ul id="ragged" style="${AT_ORIGIN};margin:0;padding:0;list-style:none;width:400px">
@@ -299,6 +309,24 @@ test.describe('resolveDropTarget — review round 3', () => {
     // nothing.
     const t = await drop(page, 'pair', 290, 20, 0)
     expect(t?.toIndex).toBe(1)
+  })
+
+  test('REFUSES a list whose CSS order transposes children', async ({ page }) => {
+    // The counting loop turns the pointer's VISUAL rank into a DOM insertion
+    // index, and that identification holds only while the two orders agree.
+    // With `order` transposing B and C, dropping between the visually adjacent
+    // C and B stages a different position or a no-op.
+    //
+    // Refused rather than mapped: a general visual-to-DOM mapping is a real
+    // feature, and inventing one silently inside a drop resolver is how a
+    // confidently wrong reorder ships.
+    expect(await drop(page, 'cssorder', 100, 70, 0)).toBeNull()
+  })
+
+  test('does NOT refuse an ordinary list', async ({ page }) => {
+    // The control — a monotonic check that refuses everything would pass the
+    // test above while killing the feature.
+    expect(await drop(page, 'vlist', 100, 70, 0)).not.toBeNull()
   })
 
   test('an RTL grid mirrors the before/after sides', async ({ page }) => {

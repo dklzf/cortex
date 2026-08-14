@@ -27,6 +27,7 @@ import { Toolbar } from './Toolbar.js'
 import { CommentPin } from './CommentPin.js'
 import { ErrorToast } from './ErrorToast.js'
 import { ReorderDropIndicator } from './ReorderDropIndicator.js'
+import { PropertyEditCommand } from '../edit-command.js'
 import { installReorderDrag } from '../reorder-drag-listener.js'
 import { IDLE, type ReorderDragState } from '../reorder-drag.js'
 import { CapabilityBanner } from './CapabilityBanner.js'
@@ -1516,7 +1517,29 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       onStateChange: setDragState,
       onResult: (result) => {
         if (result.ok) {
-          buffer.append(result.intent)
+          const displaced = buffer.append(result.intent)
+          // Record on the undo stack, or Cmd+Z either does nothing or undoes
+          // the PREVIOUS style gesture while leaving this reorder staged — so a
+          // later Apply performs a move the user believes they undid.
+          //
+          // `PropertyEditCommand` with no `changes` is exactly a buffer-only
+          // command: it already handles append/remove plus restoring whatever
+          // last-write-wins displaced, which a structural intent needs for the
+          // same reason a style one does — a second drag on one container
+          // replaces the first.
+          const stack = commandStackRef.current
+          const overrideManager = overrideRef.current
+          if (stack && overrideManager) {
+            stack.record(new PropertyEditCommand({
+              changes: [],
+              overrideManager,
+              pendingEdits: [result.intent],
+              displacedEdits: displaced ? [displaced] : [],
+              bufferOps: buffer,
+            }))
+          } else {
+            console.warn('[cortex] Reorder staged without undo stack — this move cannot be undone')
+          }
           setReorderRefusal(null)
           return
         }

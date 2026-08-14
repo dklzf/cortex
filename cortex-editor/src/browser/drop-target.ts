@@ -228,6 +228,21 @@ export function resolveDropTarget(
   const alongPointer = axis === 'vertical' ? pointer.y : pointer.x
   const alongItem = (m: Measured): number => (axis === 'vertical' ? m.centerY : m.centerX)
 
+  // The counting loop below turns the pointer's VISUAL rank into a DOM
+  // insertion index, and that identification only holds while visual order and
+  // DOM order agree. CSS `order` can break it arbitrarily: DOM `[A,B,C,D]`
+  // displayed as `[A,C,B,D]` leaves `reversed` false — first and last are still
+  // in order — while B and C are transposed in the middle. Dropping between the
+  // visually adjacent C and B then stages a different position, or a no-op.
+  //
+  // Refused rather than mapped. A general visual-to-DOM mapping is a real
+  // feature and this is not the place to invent it silently; a reorder cortex
+  // cannot describe is one it should decline, which is the same call every
+  // other refusal here makes.
+  const monotonic = others.every((m, i) => i === 0
+    || (reversed ? alongItem(m) <= alongItem(others[i - 1]!) : alongItem(m) >= alongItem(others[i - 1]!)))
+  if (!monotonic) return null
+
   // Count the slots the pointer has passed. `reversed` flips the comparison
   // rather than the array, so the returned index stays in DOM order — which is
   // the only order `baseline` and `order` are expressed in.

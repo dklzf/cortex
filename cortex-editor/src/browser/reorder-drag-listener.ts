@@ -69,6 +69,18 @@ export function installReorderDrag(options: ReorderDragOptions): ReorderDragHand
   // Set between a completed drag and the click the browser synthesises after
   // it, so that click can be swallowed exactly once.
   let swallowNextClick = false
+  // What the dragged element's inline `touch-action` was before we pinned it.
+  let priorTouchAction: { el: HTMLElement; value: string } | null = null
+
+  function restoreTouchAction(): void {
+    if (!priorTouchAction) return
+    const { el, value } = priorTouchAction
+    // Assigning '' removes the declaration, which is what an element with no
+    // inline touch-action started with — setting 'auto' would leave a rule
+    // behind that overrides a stylesheet.
+    el.style.touchAction = value
+    priorTouchAction = null
+  }
 
   function setState(next: ReorderDragState): void {
     if (next === state) return
@@ -88,6 +100,17 @@ export function installReorderDrag(options: ReorderDragOptions): ReorderDragHand
     const next = beginPress(el, { x: event.clientX, y: event.clientY })
     if (next.phase === 'idle') return
     activePointerId = event.pointerId
+
+    // Touch: the browser decides whether this gesture is a pan BEFORE the
+    // threshold is crossed, and `preventDefault` on a later `pointermove` is
+    // too late to change its mind — it claims the pointer, fires
+    // `pointercancel`, and the reorder is abandoned before it began. Pinning
+    // `touch-action: none` for the duration is what keeps the gesture ours.
+    // Restored on release/cancel so the page scrolls normally again.
+    if (event.pointerType === 'touch' && el instanceof HTMLElement) {
+      priorTouchAction = { el, value: el.style.touchAction }
+      el.style.touchAction = 'none'
+    }
 
     // NO `setPointerCapture`. The obvious reasoning says it is required — a
     // reorder is by definition a move away from where it started, so the
@@ -123,6 +146,7 @@ export function installReorderDrag(options: ReorderDragOptions): ReorderDragHand
     const { state: next, result } = onPointerUp(state)
     setState(next)
     activePointerId = null
+    restoreTouchAction()
     if (wasDragging) {
       // A completed drag must not also read as a click — the same press would
       // otherwise reorder the list AND change the selection.
@@ -165,6 +189,7 @@ export function installReorderDrag(options: ReorderDragOptions): ReorderDragHand
     // A cancel from some OTHER pointer must not kill this gesture.
     if (event && 'pointerId' in event && (event as PointerEvent).pointerId !== activePointerId) return
     activePointerId = null
+    restoreTouchAction()
     setState(onCancel())
   }
 

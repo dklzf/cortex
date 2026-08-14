@@ -66,6 +66,15 @@ export function containerInstanceKey(container: Element): string {
   const segments: string[] = []
   let node: Element | null = container
   while (node) {
+    // A stable authored anchor ENDS the walk. An all-nth-child path changes
+    // whenever the app inserts or removes a sibling anywhere above the
+    // container — and `compositeKey` dedupes structural edits by
+    // parentSource + parentKey, so a second drag on the SAME live container
+    // would then keep the earlier intent instead of replacing it, and the
+    // buffer would carry two conflicting final orders for one container. An
+    // `id` or `data-testid` names the instance directly and cannot drift.
+    const anchor = stableAnchor(node)
+    if (anchor) { segments.unshift(anchor); break }
     const parent: HTMLElement | null = node.parentElement
     if (parent) {
       const index = Array.from(parent.children).indexOf(node) + 1
@@ -88,6 +97,21 @@ export function containerInstanceKey(container: Element): string {
     node = null
   }
   return segments.join('>').replace(/::shadow>>/g, '::shadow>')
+}
+
+/**
+ * An authored identifier for this element, or null.
+ *
+ * `id` first because it is unique by definition; `data-testid` next because a
+ * developer writing one means "this specific thing". Both are things a person
+ * typed, so neither moves when a sibling is inserted.
+ */
+function stableAnchor(el: Element): string | null {
+  const id = el.id.trim()
+  if (id) return `#${id}`
+  const testId = el.getAttribute('data-testid')?.trim()
+  if (testId) return `[data-testid=${testId}]`
+  return null
 }
 
 /**
