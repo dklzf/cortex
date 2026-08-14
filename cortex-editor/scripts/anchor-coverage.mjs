@@ -230,7 +230,19 @@ const PROBE = () => {
       const m = /\((https?:\/\/[^)]+)\)/.exec(line) ?? /at\s+(https?:\/\/\S+)/.exec(line)
       const url = m?.[1]
       if (!url || !/\.[jt]sx?:\d+:\d+/.test(url)) continue
+      // MEASURED FALSE POSITIVE (2026-08-13): excluding only `/node_modules/`
+      // is not enough. A BUNDLER rewrites module URLs, so under Next/Turbopack
+      // every frame reads `_next/static/chunks/<hash>._.js` — no `/node_modules/`
+      // anywhere in it. That filter passed compiled vendor code as "user code"
+      // and reported N1 = 70 of 70 (100%) on a real app, where every single
+      // recovery was the SAME chunk at the SAME offset (…_.js:1986:33). The
+      // honest answer there is 0%.
+      //
+      // Vite in dev serves unbundled ESM, so its frames really are `src/App.tsx`.
+      // The rule has to hold for both, so reject anything that looks like build
+      // output; the driver additionally requires the path to EXIST on disk.
       if (url.includes('/node_modules/')) continue
+      if (/\/_next\/|\/\.vite\/deps\/|\/@fs\/|\/static\/chunks\//.test(url)) continue
       // Strip origin and Vite's ?v= cache-buster so this is comparable with a
       // `data-cortex-source` value.
       return url.replace(/^https?:\/\/[^/]+\//, '').replace(/\?[^:]*(?=:\d+:\d+$)/, '')
@@ -279,6 +291,10 @@ const PROBE = () => {
     containers: 0, containersUniquelyAnchored: 0,
     // evidence for the report
     samples: [],
+    // every recovered path, so the DRIVER can check it names a real file.
+    // A path that does not exist on disk is not a source location, whatever it
+    // looks like — this is the backstop for bundler-rewritten frames.
+    recovered: [],
   }
 
   if (window.__CORTEX_HARVEST__) {
@@ -304,6 +320,9 @@ const PROBE = () => {
               tag: el.localName, reactSrc: found.src, hops: found.viaOwnerHops,
               owner: ownerName(f?._debugOwner),
             })
+          }
+          if (harvest.recovered.length < 400) {
+            harvest.recovered.push(found.src)
           }
         }
       }
@@ -618,7 +637,21 @@ async function main() {
       const sum = (f) => H.reduce((n, h) => n + f(h), 0)
       const groups = H.flatMap(h => h.keyGroups)
       const unstamped = sum(h => h.unstamped)
-      const withSrc = sum(h => h.unstampedWithReactSrc)
+      const withSrcRaw = sum(h => h.unstampedWithReactSrc)
+      // A recovered path is only real if it names a file that EXISTS. Without
+      // this a bundler-rewritten frame counts as a recovery — measured at 100%
+      // on a Turbopack app where the true figure was 0%.
+      const allRecovered = H.flatMap(h => h.recovered ?? [])
+      let withSrc = withSrcRaw
+      if (verifyRoot) {
+        const read = makeReader(verifyRoot)
+        const ok = allRecovered.filter(rel => read(rel.replace(/:\d+:\d+$/, '')) !== null).length
+        withSrc = ok
+        if (ok !== withSrcRaw) {
+          console.log(`\n  NOTE: ${withSrcRaw - ok} of ${withSrcRaw} recovered paths do NOT name a file on`)
+          console.log('  disk and are NOT counted — bundler output masquerading as a source location.')
+        }
+      }
       const containers = sum(h => h.containers)
       const uniqueContainers = sum(h => h.containersUniquelyAnchored)
       const usable = groups.filter(g => !g.looksIndexed && g.allDistinct)
