@@ -888,6 +888,46 @@ async function main() {
           console.log('                      The name path names a CALL SITE, so siblings from one call site')
           console.log('                      collide by construction. This is whether the discriminator that')
           console.log('                      already ships closes that gap.')
+
+          // ── N4-verify — what is actually carrying the address? ──
+          //
+          // Every figure above measures UNIQUENESS, and an address can be
+          // unique while pointing nowhere useful. The first version of this
+          // check tested whether the OUTERMOST component in the path appears in
+          // the anchor's file and reported 0 of 55 — which was a bug in the
+          // check, not a finding: the outermost owner is the framework root
+          // (`ClientPageRoot`), which is of course absent from a layout file.
+          // Dumping the real pairs is what showed it, and what showed something
+          // sharper:
+          //
+          //     anchor=app/layout.tsx:133:7  path=ClientPageRoot>DesignLabPage>@mantine/core/Box
+          //
+          // ONE anchor for the whole page. The nearest stamped ancestor of
+          // every unstamped node is the app shell, so the anchor contributes
+          // nothing to telling them apart — all the discrimination is coming
+          // from the name path and the discriminator. That materially weakens
+          // the reading of N4+: it says "these nodes are DISTINGUISHABLE", not
+          // "we can locate them in source".
+          //
+          // So the useful thing to report is composition: does the path contain
+          // a component the APP author wrote (locatable) or only library and
+          // framework internals (not)?
+          const distinctAnchors = new Set(uniq2.map(j => j.anchor)).size
+          const isLibrary = (n) => n.includes('/')
+          const isFrameworkInternal = (n) => /^(ClientPageRoot|ClientSegmentRoot|InnerLayoutRouter|OuterLayoutRouter|RedirectBoundary|NotFoundBoundary|LoadingBoundary|ErrorBoundary|Router|AppRouter|HTTPAccessFallbackBoundary|MetadataOutlet|ViewportBoundary|__next.*)$/.test(n)
+          const appNamed = uniq2.filter(j =>
+            j.path.split('>').some(n => n && !isLibrary(n) && !isFrameworkInternal(n)))
+          console.log(`  N4-verify           ${distinctAnchors} distinct anchor(s) across ${uniq2.length} unique addresses`)
+          if (distinctAnchors === 1) {
+            console.log('                      ONE anchor for every node — the stamped ancestor is the app')
+            console.log('                      shell, so it discriminates nothing. The name path and the')
+            console.log('                      discriminator are carrying the entire address.')
+          }
+          console.log(`                      ${appNamed.length} of ${uniq2.length} paths name at least one APP-AUTHORED`)
+          console.log(`                      component (not a library or framework internal) ${pct(appNamed.length, uniq2.length).trim()}`)
+          console.log('                      That is the segment an agent could actually locate in source.')
+          console.log('                      Still NOT correctness: landing on the right JSX needs an agent in')
+          console.log('                      the loop, which is what remains on COR-4.')
         }
       }
 
