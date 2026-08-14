@@ -27,6 +27,29 @@ export function selectorForEditSource(source: string): string {
   return `[data-cortex-source="${CSS.escape(source)}"]`
 }
 
+/**
+ * The source string a container child reads back as, WITHOUT minting anything.
+ *
+ * The read-only twin of `getElementEditTarget(el).source`, and the pair must
+ * stay in lock-step: the producer calls the minting one to build a structural
+ * intent's `baseline`, and the drift guard calls this one to re-derive it from
+ * the live DOM. Two hand-written copies of "source first, else preview id"
+ * disagree the moment one of them is edited — and the failure is not loud. The
+ * producer would stamp a preview id on an already-annotated child, write that
+ * into the baseline, and the guard would read the `data-cortex-source` beside
+ * it and report drift on a tree nobody touched.
+ *
+ * Returns '' for a child with neither. That is a real state — the guard must
+ * not mint during a read-only reconcile — and the empty string is why COR-35's
+ * `childKeys` exists: two unannotated children are otherwise identical here.
+ */
+export function readChildSource(el: Element): string {
+  const source = el.getAttribute('data-cortex-source')
+  if (source) return source
+  const previewId = el.getAttribute(PREVIEW_SOURCE_ATTR)
+  return previewId ? `${PREVIEW_SOURCE_PREFIX}${previewId}` : ''
+}
+
 export function getElementEditTarget(el: Element): ElementEditTarget {
   const source = el.getAttribute('data-cortex-source')
   if (source) return { source, applyMode: 'direct' }
@@ -35,6 +58,31 @@ export function getElementEditTarget(el: Element): ElementEditTarget {
   const previewSource = `${PREVIEW_SOURCE_PREFIX}${previewId}`
   return {
     source: previewSource,
+    applyMode: 'agent-resolve',
+    sourceResolutionHint: buildSourceResolutionHint(el),
+  }
+}
+
+/**
+ * An agent-resolve target for `el`, minting a preview id EVEN IF the element
+ * already carries a `data-cortex-source`.
+ *
+ * `getElementEditTarget` returns the direct target for a stamped element, and
+ * for a style edit that is right — a file position is a better address than a
+ * locator. A structural intent cannot use it, for two independent reasons that
+ * happen to have the same fix:
+ *
+ *  1. `structuralIntentSchema` FORCES `applyMode: 'agent-resolve'` — there is
+ *     no deterministic move rewriter — and that mode requires a hint.
+ *  2. A `data-cortex-source` names a source LOCATION, and the drift guard
+ *     resolves it through a first-seen-wins document index. Two `<Column/>`s
+ *     rendering one `.map()` give every row the same source, so the lookup
+ *     returns the FIRST column's row and the guard would check the wrong
+ *     container's children. A preview id is unique per rendered instance.
+ */
+export function getAgentResolveTarget(el: Element): Extract<ElementEditTarget, { applyMode: 'agent-resolve' }> {
+  return {
+    source: `${PREVIEW_SOURCE_PREFIX}${ensurePreviewId(el)}`,
     applyMode: 'agent-resolve',
     sourceResolutionHint: buildSourceResolutionHint(el),
   }
