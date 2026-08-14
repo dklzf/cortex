@@ -39,12 +39,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 function parseArgs(argv) {
-  const out = { base: null, routes: [], viewport: { width: 1440, height: 900 }, settleMs: 1500, verifyRoot: null }
+  const out = { base: null, routes: [], viewport: { width: 1440, height: 900 }, settleMs: 1500, verifyRoot: null, harvest: false }
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--base') out.base = argv[++i]
     else if (a === '--settle') out.settleMs = Number(argv[++i])
     else if (a === '--verify-root') out.verifyRoot = path.resolve(argv[++i])
+    else if (a === '--harvest') out.harvest = true
     else if (a === '--routes-file') {
       out.routes.push(...fs.readFileSync(argv[++i], 'utf8').split('\n').map(s => s.trim()).filter(Boolean))
     } else if (a === '--routes') {
@@ -115,7 +116,7 @@ function makeReader(verifyRoot) {
  * Excluded only: cortex's own UI, non-visual tags, zero-area boxes, and the
  * document roots (which are never edit targets).
  */
-const PROBE = () => {
+const PROBE = ({ harvest: HARVEST } = { harvest: false }) => {
   const NON_VISUAL = new Set(['script', 'style', 'meta', 'head', 'title', 'link', 'noscript', 'template', 'br'])
   const NON_RENDERED_SVG = new Set(['defs', 'clippath', 'mask', 'marker', 'pattern', 'symbol', 'filter', 'metadata', 'desc', 'lineargradient', 'radialgradient'])
 
@@ -203,6 +204,212 @@ const PROBE = () => {
     }
   }
   window.scrollTo(0, 0)
+
+  // ── HARVEST (COR plan 2026-08-13) ────────────────────────────────────────
+  // What does REACT already know that cortex did not stamp?
+  //
+  // Three numbers, deliberately separate because they decide different things:
+  //   N1  of nodes with NO cortex stamp, how many get a user-code source
+  //       location from React's own `_debugStack`?           → addressability
+  //   N2  of `.map()` children, how many carry a USABLE key?  → per-instance
+  //   N3  of plausible containers, how many are unique?       → can move ship
+  //
+  // All of this is DEV-ONLY and reads private React fields. That is acceptable
+  // for a measurement; it is not a shipping decision. See the plan's §7.
+  const fiberOf = (el) => {
+    for (const k in el) if (k.charCodeAt(0) === 95 && k.startsWith('__reactFiber$')) return el[k]
+    return null
+  }
+
+  // The nearest fiber at or above a DOM node that carries a React `key`.
+  // The key does not live on the host node's fiber: for
+  // `{rows.map(r => <Item key={r}/>)}` it sits on the COMPONENT fiber, and a
+  // library can stack many wrappers in between. Cycle-guarded, no fixed cap.
+  const keyedOf = (node) => {
+    const seen = new Set()
+    let x = fiberOf(node), n = 0
+    while (x && !seen.has(x)) {
+      seen.add(x)
+      if (x.key !== null) return x
+      if (++n > 200) return null
+      x = x.return
+    }
+    return null
+  }
+
+  // A user-code source location out of ONE fiber's own creation stack.
+  const stackSrc = (fiber) => {
+    // React 18 exposes JSX locations as `_debugSource` ({fileName,lineNumber,
+    // columnNumber}) and has no `_debugStack`. The package supports React >=18,
+    // so without this branch every fiber on an 18.x app returns null and the
+    // harvest reports N1 = 0% while React is carrying the answer. Raised in
+    // review.
+    const ds = fiber?._debugSource
+    if (ds?.fileName) return `${ds.fileName}:${ds.lineNumber ?? 0}:${ds.columnNumber ?? 0}`
+
+    const raw = fiber?._debugStack
+    if (!raw) return null
+    const stack = String(raw.stack ?? raw)
+    for (const line of stack.split('\n')) {
+      const m = /\((https?:\/\/[^)]+)\)/.exec(line) ?? /at\s+(https?:\/\/\S+)/.exec(line)
+      let url = m?.[1]
+      if (!url) continue
+      // Split the :line:col off FIRST, then strip the query, then test the
+      // extension. Testing `\.[jt]sx?:\d+:\d+` against the raw URL rejected
+      // Vite's cache-busted form `…/src/App.tsx?t=123:6:11` outright — the
+      // extension is followed by `?`, not `:` — so after any HMR update N1 could
+      // collapse to zero. Raised in review.
+      const coord = /:(\d+):(\d+)$/.exec(url)
+      if (!coord) continue
+      let file = url.slice(0, coord.index)
+      file = file.replace(/\?.*$/, '')
+      if (!/\.[jt]sx?$/.test(file)) continue
+      if (file.includes('/node_modules/')) continue
+      // `/@fs/` is how Vite serves a LEGITIMATE source module from outside the
+      // configured root — normal in a monorepo. Rejecting it made N1 fall to 0%
+      // on shared-package routes. Normalise to the absolute path it encodes and
+      // let the disk check below decide. Raised in review.
+      let rel = file.replace(/^https?:\/\/[^/]+\//, '')
+      const fsIdx = rel.indexOf('@fs/')
+      if (fsIdx === 0) rel = rel.slice('@fs'.length)
+      else if (/\/_next\/|\.vite\/deps\/|\/static\/chunks\//.test(rel)) continue
+      return `${rel}:${coord[1]}:${coord[2]}`
+    }
+    return null
+  }
+
+  // Climb owners until one was itself created in user code.
+  //
+  // No fixed hop cap. A 12-hop limit reported "unrecoverable" purely because a
+  // component library or HOC stack was deep — Radix alone puts ~7 wrappers
+  // between a host node and its keyed item, and the first USER owner can sit
+  // well past that. Bounded instead by cycle detection plus a generous ceiling,
+  // and a truncation is REPORTED rather than silently read as missing data.
+  const userSrcFrom = (fiber) => {
+    const own = stackSrc(fiber)
+    if (own) return { src: own, viaOwnerHops: 0 }
+    const seen = new Set()
+    let owner = fiber?._debugOwner, hops = 0
+    while (owner && !seen.has(owner)) {
+      seen.add(owner)
+      if (++hops > 200) return { truncated: true }
+      const s = stackSrc(owner)
+      if (s) return { src: s, viaOwnerHops: hops }
+      owner = owner._debugOwner
+    }
+    return null
+  }
+
+  const ownerName = (f) => f?.elementType?.name ?? f?.elementType?.displayName
+    ?? f?.type?.name ?? f?.type?.displayName
+    ?? f?.elementType?.render?.name ?? null
+
+  const harvest = {
+    // N1
+    unstamped: 0, unstampedWithReactSrc: 0, viaOwnerChain: 0, truncatedChains: 0,
+    // N2 — one record per map-style sibling GROUP
+    keyGroups: [],
+    // N3
+    containers: 0, containersUniquelyAnchored: 0,
+    // Availability. React debug data absent is "unavailable", NOT "zero" —
+    // reporting 0% for an app whose fibers cannot be read states a measurement
+    // that was never taken. Raised in review.
+    nodesConsidered: 0, nodesWithFiber: 0,
+    samples: [],
+    // EVERY recovered path, with how it was found, UNCAPPED. The cap used to be
+    // 400 while `unstampedWithReactSrc` counted all of them, so the driver's
+    // validated numerator silently topped out at 400 and the surplus was
+    // reported as nonexistent bundler output. `viaOwnerChain` also has to be
+    // recomputed AFTER validation or the report can say "0 have a source" and
+    // then "of those, dozens needed a climb". Raised in review.
+    recovered: [],
+  }
+
+  if (HARVEST) {
+    const seenGroupParent = new Set()
+    for (const el of document.querySelectorAll('*')) {
+      // SAME exclusions as the all-elements walk. The harvest previously
+      // admitted documentElement/body and anything with a nonzero rect, so
+      // hidden tab panels, mounted modals and mid-transition trees — kept alive
+      // with visibility:hidden or opacity:0 — counted toward N1 and N3 even
+      // though no designer can target them. Raised in review.
+      const tag = el.tagName.toLowerCase()
+      if (NON_VISUAL.has(tag) || NON_RENDERED_SVG.has(tag)) continue
+      if (el === document.documentElement || el === document.body) continue
+      if (el.closest('[data-cortex-host]') || el.hasAttribute('data-cortex-root')) continue
+      const r = el.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0) continue
+      const cs = getComputedStyle(el)
+      if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue
+
+      const stamp = el.getAttribute('data-cortex-source')
+      const f = fiberOf(el)
+      harvest.nodesConsidered++
+      if (f) harvest.nodesWithFiber++
+
+      // ── N1 ──
+      if (!stamp) {
+        harvest.unstamped++
+        const found = userSrcFrom(f)
+        if (found?.truncated) harvest.truncatedChains++
+        else if (found?.src) {
+          harvest.unstampedWithReactSrc++
+          harvest.recovered.push({ src: found.src, hops: found.viaOwnerHops })
+          if (harvest.samples.length < 25) {
+            harvest.samples.push({
+              tag: el.localName, reactSrc: found.src, hops: found.viaOwnerHops,
+              owner: ownerName(f?._debugOwner),
+            })
+          }
+        }
+      }
+
+      // ── N3 ──
+      if (el.children.length >= 2) {
+        harvest.containers++
+        if (stamp && (sourceCounts.get(stamp) ?? 0) === 1) harvest.containersUniquelyAnchored++
+      }
+
+      // ── N2: map-style sibling groups ──
+      // The population is defined by the DOM, NOT by the presence of a key.
+      // Keying off `key !== null` excluded unkeyed lists entirely — exactly the
+      // lists LEAST able to support per-instance edits — so N2 could report
+      // 100% by measuring only lists that already had keys. A group is now any
+      // parent with >= 2 element children that share one `data-cortex-source`
+      // (the documented map-style shape), and missing keys count as UNUSABLE
+      // rather than vanishing. Raised in review.
+      const parent = el.parentElement
+      if (parent && !seenGroupParent.has(parent)) {
+        const kids = Array.from(parent.children)
+        if (kids.length >= 2) {
+          const srcs = kids.map(c => c.getAttribute('data-cortex-source'))
+          const shared = srcs[0] && srcs.every(x => x === srcs[0])
+          if (shared) {
+            seenGroupParent.add(parent)
+            const fibers = kids.map(c => keyedOf(c))
+            const keys = fibers.map(x => (x && x.key !== null ? String(x.key) : null))
+            // At least two DISTINCT keyed fibers. When one keyed component
+            // renders a host container with several children, keyedOf returns
+            // the SAME fiber for each — recording the component's internals as a
+            // bogus duplicate-key group, one per list item, which depressed N2
+            // sharply. Raised in review.
+            const distinctFibers = new Set(fibers.filter(Boolean)).size
+            const present = keys.filter(k => k !== null)
+            const looksIndexed = present.length === keys.length
+              && keys.every((k, i) => k === String(i))
+            harvest.keyGroups.push({
+              size: kids.length,
+              distinctFibers,
+              missingKeys: keys.length - present.length,
+              looksIndexed,
+              allDistinct: present.length === keys.length && new Set(present).size === present.length,
+              sampleKeys: present.slice(0, 5),
+            })
+          }
+        }
+      }
+    }
+  }
 
   // ── Third population: nodes that are actually REORDERABLE. ───────────────
   // The headline number above is a marginal over every pointable node, which
@@ -309,6 +516,7 @@ const PROBE = () => {
     reorderUnannotatedSample,
     anchorSamples,
     anchorSamplesDropped,
+    harvest,
     cortexPresent: !!document.querySelector('[data-cortex-source]'),
   }
 }
@@ -316,7 +524,7 @@ const PROBE = () => {
 const pct = (n, d) => (d === 0 ? '  n/a' : `${((n / d) * 100).toFixed(1).padStart(5)}%`)
 
 async function main() {
-  const { base, routes, viewport, settleMs, verifyRoot } = parseArgs(process.argv)
+  const { base, routes, viewport, settleMs, verifyRoot, harvest } = parseArgs(process.argv)
   const browser = await chromium.launch()
   const page = await browser.newPage({ viewport })
 
@@ -335,12 +543,26 @@ async function main() {
       const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 })
       if (resp && resp.status() >= 400) { rows.push({ route, error: `HTTP ${resp.status()}` }); continue }
       await page.waitForTimeout(settleMs)
-      r = await page.evaluate(PROBE)
+      // Passed as an ARGUMENT, not an injected <script>. An app with a strict
+      // Content-Security-Policy blocks inline scripts, so the flag silently
+      // never got set and --harvest returned empty measurements while
+      // page.evaluate itself worked fine. Raised in review.
+      r = await page.evaluate(PROBE, { harvest })
     } catch (err) {
       rows.push({ route, error: err.message.split('\n')[0] })
       continue
     }
-    if (!r.cortexPresent) { rows.push({ route, error: 'no [data-cortex-source] on page — cortex not instrumenting this route' }); continue }
+    // A route with NO stamps is precisely the shape N1 exists to measure —
+    // React-rendered nodes cortex annotated nothing on. Discarding it as an
+    // error biased addressability UPWARD by dropping the worst-coverage routes,
+    // and an entirely unstamped app produced no harvest report at all. Under
+    // --harvest the row is kept; the legacy coverage section still reports the
+    // missing instrumentation. Raised in review.
+    if (!r.cortexPresent) {
+      if (harvest) { rows.push({ route, ...r, coverageUnavailable: true }) }
+      else { rows.push({ route, error: 'no [data-cortex-source] on page — cortex not instrumenting this route' }) }
+      continue
+    }
 
     agg.unique += r.hit.unique
     agg.shared += r.hit.shared
@@ -384,6 +606,13 @@ async function main() {
   console.log('-'.repeat(78))
   for (const row of rows) {
     if (row.error) { console.log(row.route.padEnd(30) + '  ' + row.error); continue }
+    // Retained for --harvest but deliberately OUT of the coverage aggregate:
+    // cortex instrumented nothing here, so a coverage percentage would describe
+    // an absent instrument rather than the page.
+    if (row.coverageUnavailable) {
+      console.log(row.route.slice(0, 29).padEnd(30) + '  no [data-cortex-source] — harvested only, excluded from coverage')
+      continue
+    }
     console.log(
       row.route.slice(0, 29).padEnd(30) +
       String(row.hitTotal).padStart(7) +
@@ -449,6 +678,105 @@ async function main() {
     console.log('  ∩ pointable = reorderable nodes elementFromPoint also returned (the strict intersection).')
     console.log('  >=1 sibling  = same filter with the threshold relaxed to a 2-item row, as a sensitivity check.')
 
+    // ── HARVEST ──────────────────────────────────────────────────────────────
+    if (harvest) {
+      // Includes rows flagged coverageUnavailable — a route with zero stamps is
+      // exactly the population N1 measures, and excluding it biased
+      // addressability upward. Only genuine errors (navigation failures) drop out.
+      const H = rows.filter(r => !r.error).map(r => r.harvest).filter(Boolean)
+      const sum = (f) => H.reduce((n, h) => n + f(h), 0)
+
+      const unstamped = sum(h => h.unstamped)
+      const groups = H.flatMap(h => h.keyGroups)
+      const containers = sum(h => h.containers)
+      const uniqueContainers = sum(h => h.containersUniquelyAnchored)
+      const considered = sum(h => h.nodesConsidered)
+      const withFiber = sum(h => h.nodesWithFiber)
+      const truncated = sum(h => h.truncatedChains)
+
+      // Validate EVERY recovered path (uncapped) and recompute the owner-chain
+      // count from the survivors, so the two numbers can never disagree.
+      const allRec = H.flatMap(h => h.recovered ?? [])
+      let withSrc = null, viaOwner = 0, dropped = 0
+      if (verifyRoot) {
+        const read = makeReader(verifyRoot)
+        const kept = allRec.filter(x => read(x.src.replace(/:\d+:\d+$/, '')) !== null)
+        withSrc = kept.length
+        viaOwner = kept.filter(x => x.hops > 0).length
+        dropped = allRec.length - kept.length
+      }
+
+      console.log('\n' + '='.repeat(78))
+      console.log('HARVEST — what React already knows that cortex did not stamp')
+      console.log('='.repeat(78))
+
+      // React debug data absent is UNAVAILABLE, not zero. Reporting 0% for an
+      // app whose fibers cannot be read states a measurement never taken.
+      if (withFiber === 0) {
+        console.log(`  N1/N2  n/a — no __reactFiber$ on any of ${considered} nodes.`)
+        console.log('         Not a React dev build, or React internals changed. NOT a score of 0.')
+      } else {
+        if (withFiber < considered) {
+          console.log(`  NOTE: ${considered - withFiber} of ${considered} nodes expose no fiber; they cannot`)
+          console.log('        contribute to N1/N2 and are excluded from those denominators.')
+        }
+        if (withSrc === null) {
+          console.log(`  N1 addressability   ${sum(h => h.unstampedWithReactSrc)} of ${unstamped} unstamped nodes — UNVALIDATED.`)
+          console.log('                      Pass --verify-root to confirm these name real files. Without it a')
+          console.log('                      generated bundle under an unrecognised path (/assets/app.js) counts')
+          console.log('                      as user code and inflates this number.')
+        } else {
+          console.log(`  N1 addressability   ${withSrc} of ${unstamped} unstamped nodes carry a user-code`)
+          console.log(`                      source location that EXISTS on disk   ${pct(withSrc, unstamped).trim()}`)
+          console.log(`                      of those, ${viaOwner} needed an OWNER-CHAIN climb — the`)
+          console.log('                      library-boundary population a stack-only read misses entirely')
+          if (dropped) console.log(`                      (${dropped} recovered paths named no file and were NOT counted)`)
+        }
+        if (truncated) console.log(`                      ${truncated} owner chains hit the cycle/depth guard — reported, not counted as absent`)
+
+        const usable = groups.filter(g => !g.looksIndexed && g.allDistinct && g.distinctFibers >= 2)
+        const indexed = groups.filter(g => g.looksIndexed)
+        const unkeyed = groups.filter(g => g.missingKeys > 0)
+        console.log(`  N2 per-instance     ${usable.length} of ${groups.length} map-style sibling groups have a USABLE key`)
+        console.log(`                      (>=2 distinct keyed fibers, all keys present and distinct,`)
+        console.log(`                      not index-shaped)                        ${pct(usable.length, groups.length).trim()}`)
+        console.log(`                      ${indexed.length} index-shaped · ${unkeyed.length} with MISSING keys — both counted as unusable`)
+      }
+
+      console.log(`  N3 containers       ${uniqueContainers} of ${containers} multi-child containers carry a UNIQUE`)
+      console.log(`                      stamp                                     ${pct(uniqueContainers, containers).trim()}`)
+      console.log('                      UNIQUENESS ONLY — not verified correct. A uniformly offset stamp')
+      console.log('                      (the COR-28 bug this harness exists to catch) is still unique, so')
+      console.log('                      this cannot on its own say drag-to-reorder is safe.')
+
+      console.log('\n  What each number decides:')
+      console.log('    N1 — how much of the app becomes addressable WITHOUT a build-time stamp.')
+      console.log('         React reports a call site even for library-rendered DOM, which the')
+      console.log('         transform skips by design. This is the 83.6%-no-anchor population.')
+      console.log('    N2 — whether "edit just this one" is reachable. A key is only as good as')
+      console.log('         the developer\'s keys.')
+      console.log('    N3 — whether drag-to-reorder can ship. A move needs an unambiguous')
+      console.log('         CONTAINER plus an ordinal, NOT per-instance identity.')
+
+      console.log('\n  CAVEAT on N2, and it is load-bearing: `key={index}` is not directly')
+      console.log('  observable — at read time an index key is just a string. A group is counted')
+      console.log('  index-shaped when every key equals its own position, which CANNOT separate')
+      console.log('  index-keying from data that happens to run 0,1,2… If that residual ambiguity')
+      console.log('  is large, keys must NOT drive a write: mistaking an index key for a real one')
+      console.log('  edits the wrong row silently. That is the disqualifying outcome in the plan.')
+
+      const ex = H.flatMap(h => h.samples).slice(0, 6)
+      if (ex.length) {
+        console.log('\n  Sample N1 recoveries (unstamped node -> React-reported source):')
+        for (const e of ex) console.log(`    <${e.tag}>${e.owner ? ` in ${e.owner}` : ''}  ->  ${e.reactSrc}`)
+      }
+      if (groups.length === 0) {
+        console.log('\n  NOTE: zero keyed sibling groups on these routes. N2 is undefined here,')
+        console.log('  not zero — the routes contain no .map()-rendered lists to measure.')
+      }
+    }
+
+
     // ── ANCHOR CORRECTNESS ───────────────────────────────────────────────────
     console.log('\n' + '='.repeat(78))
     console.log('ANCHOR CORRECTNESS — does each anchor point at the element it claims?')
@@ -477,8 +805,10 @@ async function main() {
         '   tag agrees but nothing discriminates — NOT contradicted, NOT confirmed')
       console.log('  SILENTLY-WRONG' + String(verify.silentlyWrong).padStart(6) + pct(verify.silentlyWrong, t).padStart(9) +
         '   points at a different element, or at no JSX at all')
-      console.log('  unresolvable  ' + String(verify.unresolvable).padStart(6) + pct(verify.unresolvable, t).padStart(9) +
-        '   file unreadable, or the anchor names a component — a refusal, not a lie')
+      console.log('  unreadable    ' + String(verify.unreadable).padStart(6) + pct(verify.unreadable, t).padStart(9) +
+        '   file could not be read — a gap in what this harness saw, not a verdict')
+      console.log('  component-anch' + String(verify.componentAnchor).padStart(6) + pct(verify.componentAnchor, t).padStart(9) +
+        '   anchor names a COMPONENT, not a host tag — see note below')
       if (verify.dropped > 0) {
         console.log(`\n  NOTE: ${verify.dropped} pointable anchors exceeded the per-page sample cap and were NOT verified.`)
       }
@@ -487,6 +817,12 @@ async function main() {
         for (const m of verify.mismatches.slice(0, 10)) {
           console.log(`    ${m.source}  DOM <${m.domTag}> vs source <${m.sourceTag}>  — ${m.why}`)
         }
+      }
+      if (verify.componentAnchor > 0) {
+        console.log('\n  component-anchor is NOT a failure under a call-site-addressing scheme — it is')
+        console.log('  the expected result. It was previously folded into one `unresolvable` bucket')
+        console.log('  alongside unreadable files, which made a fully working call-site scheme')
+        console.log('  indistinguishable from a broken harness. Split so the two can be told apart.')
       }
       console.log('\n  SILENTLY-WRONG is the number that matters. Uniqueness cannot see it: a uniform')
       console.log('  line offset is one-to-one, so it leaves every coverage figure unchanged while')
