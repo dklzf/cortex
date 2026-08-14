@@ -1,0 +1,24 @@
+cortex-editor/tests/e2e/reorder-drag-gesture.spec.ts
+  s_515b894c608172::t_b9da4882277aab 1-8,11,14-138,149-164,177,179-226
+  s_515b894c608172::t_fc34055d1c7320 139-148,165-176,178
+  s_515b894c608172::t_47b5d5e7accae2 9-10,12-13
+cortex-editor/src/browser/reorder-drag-listener.ts
+  s_515b894c608172::t_23f1540f9523a4 1-74,84-149
+  s_515b894c608172::t_8d68336ec7a480 75-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "31a5d4c1d886c8dcabdfb6e75d8323f86bfdc6d7",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
