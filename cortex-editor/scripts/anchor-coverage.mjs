@@ -91,6 +91,29 @@ async function loadVerifier() {
   return import(outfile)
 }
 
+/**
+ * Bundle the SHIPPED `childDiscriminator` for injection into the page.
+ *
+ * Bundled from source rather than reimplemented in the probe. A copy of the
+ * escalation logic inlined here would be a shadow copy of the thing being
+ * measured — it would drift from what actually ships, and the number would
+ * describe the copy. This is the same reason the e2e specs bundle their
+ * subject instead of stubbing it.
+ */
+async function loadDiscriminatorBundle() {
+  const esbuild = await import('esbuild')
+  const out = await esbuild.build({
+    entryPoints: [new URL('../src/browser/child-discriminator.ts', import.meta.url).pathname],
+    bundle: true,
+    format: 'iife',
+    globalName: 'CD',
+    write: false,
+    target: 'es2020',
+    logLevel: 'silent',
+  })
+  return out.outputFiles[0].text
+}
+
 /** Read a file named by an anchor, resolving relative paths against the app root. */
 function makeReader(verifyRoot) {
   const cache = new Map()
@@ -311,6 +334,20 @@ const PROBE = ({ harvest: HARVEST } = { harvest: false }) => {
     keyGroups: [],
     // N3
     containers: 0, containersUniquelyAnchored: 0,
+    // N4 — the owner-chain NAME join (COR-4).
+    //
+    // The source-map spike CLOSED position-based fiber addressing under
+    // Turbopack: app-chunk maps are stubs, and Next cannot symbolicate its own
+    // frames. What survived is that the owner chain still yields component
+    // NAMES where it yields no position, and cortex already stamps the app's
+    // own source. So the remaining candidate is a JOIN: nearest stamped
+    // ancestor + the component-name path from it down to the node.
+    //
+    // Records one entry per unstamped node, so uniqueness can be scored per
+    // anchor group afterwards. Uniqueness is the whole question — COR-35 spent
+    // three review rounds establishing that an address which cannot tell two
+    // siblings apart verifies nothing.
+    nameJoins: [],
     // Availability. React debug data absent is "unavailable", NOT "zero" —
     // reporting 0% for an app whose fibers cannot be read states a measurement
     // that was never taken. Raised in review.
@@ -361,6 +398,54 @@ const PROBE = ({ harvest: HARVEST } = { harvest: false }) => {
               owner: ownerName(f?._debugOwner),
             })
           }
+        }
+      }
+
+      // ── N4: the owner-chain NAME join ──
+      if (!stamp) {
+        // Nearest ancestor cortex DID stamp. That is the anchor the agent can
+        // actually locate in source; the name path says where to go from there.
+        const anchorEl = el.parentElement?.closest('[data-cortex-source]') ?? null
+        const anchor = anchorEl?.getAttribute('data-cortex-source') ?? null
+        if (anchor) {
+          // Walk owners collecting names, stopping at the anchor's own fiber
+          // depth. `?` marks a wrapper whose name could not be read —
+          // forwardRef/memo without a displayName — and an unresolved segment
+          // makes the whole path ambiguous, so it is counted as a MISS rather
+          // than quietly dropped.
+          const names = []
+          let owner = f?._debugOwner
+          let guard = 0
+          let unresolved = 0
+          const seen = new Set()
+          while (owner && guard++ < 200 && !seen.has(owner)) {
+            seen.add(owner)
+            const n = ownerName(owner)
+            if (n) names.push(n)
+            else unresolved++
+            owner = owner._debugOwner
+          }
+          // The per-instance discriminator COR-35 already ships. The name path
+          // describes a call site, so siblings from one call site collide by
+          // construction — the same wall every other addressing attempt hit.
+          // Scoring with and without it says whether the combination clears it.
+          let disc = null
+          try {
+            const CD = globalThis.CD
+            if (CD && typeof CD.childDiscriminators === 'function' && el.parentElement) {
+              const keys = CD.childDiscriminators(el.parentElement)
+              disc = keys[Array.prototype.indexOf.call(el.parentElement.children, el)] ?? null
+            }
+          } catch { disc = null }
+          harvest.nameJoins.push({
+            anchor,
+            // Outermost-first reads the way a person would say it.
+            path: names.reverse().join('>'),
+            tag: el.localName,
+            unresolved,
+            hasFiber: !!f,
+            disc,
+          })
         }
       }
 
@@ -525,6 +610,13 @@ const pct = (n, d) => (d === 0 ? '  n/a' : `${((n / d) * 100).toFixed(1).padStar
 
 async function main() {
   const { base, routes, viewport, settleMs, verifyRoot, harvest } = parseArgs(process.argv)
+  // Built once, injected per page. Failure here must not abort the run — the
+  // combined figure reports as unavailable instead.
+  let discriminatorBundle = null
+  if (harvest) {
+    try { discriminatorBundle = await loadDiscriminatorBundle() }
+    catch (err) { console.error(`[harvest] childDiscriminator bundle failed: ${err.message}`) }
+  }
   const browser = await chromium.launch()
   const page = await browser.newPage({ viewport })
 
@@ -543,6 +635,13 @@ async function main() {
       const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 })
       if (resp && resp.status() >= 400) { rows.push({ route, error: `HTTP ${resp.status()}` }); continue }
       await page.waitForTimeout(settleMs)
+      // The SHIPPED discriminator, for the N4-plus-discriminator score. Injected
+      // as a script tag rather than passed as an argument because it is a
+      // module, not data; if a strict CSP blocks it the probe reports the
+      // combined figure as unavailable rather than silently scoring zero.
+      if (harvest && discriminatorBundle) {
+        try { await page.addScriptTag({ content: discriminatorBundle }) } catch { /* CSP */ }
+      }
       // Passed as an ARGUMENT, not an injected <script>. An app with a strict
       // Content-Security-Policy blocks inline scripts, so the flag silently
       // never got set and --harvest returned empty measurements while
@@ -743,7 +842,56 @@ async function main() {
         console.log(`                      ${indexed.length} index-shaped · ${unkeyed.length} with MISSING keys — both counted as unusable`)
       }
 
-      console.log(`  N3 containers       ${uniqueContainers} of ${containers} multi-child containers carry a UNIQUE`)
+          // ── N4 — the owner-chain NAME join ──
+      //
+      // Scored by UNIQUENESS, not by "did we get a path". An address that
+      // cannot separate two nodes under the same anchor verifies nothing —
+      // the lesson COR-35 established for `childKeys`, applied one level up.
+      const joins = H.flatMap(h => h.nameJoins ?? [])
+      if (joins.length === 0) {
+        console.log('  N4 name join        n/a — no unstamped node had a stamped ancestor.')
+      } else {
+        // Group by (anchor, path): two nodes sharing both are indistinguishable
+        // to an agent handed that address.
+        const byAddress = new Map()
+        for (const j of joins) {
+          const key = `${j.anchor}\u0000${j.path}\u0000${j.tag}`
+          byAddress.set(key, (byAddress.get(key) ?? 0) + 1)
+        }
+        const resolvable = joins.filter(j => j.path !== '' && j.unresolved === 0)
+        const unique = resolvable.filter(j => byAddress.get(`${j.anchor}\u0000${j.path}\u0000${j.tag}`) === 1)
+        const emptyPath = joins.filter(j => j.path === '').length
+        const wrapperGaps = joins.filter(j => j.unresolved > 0).length
+
+        console.log(`  N4 name join        ${unique.length} of ${joins.length} unstamped nodes get a UNIQUE, fully`)
+        console.log(`                      resolved address from anchor+owner-names ${pct(unique.length, joins.length).trim()}`)
+        console.log(`                      ${resolvable.length} resolvable · ${resolvable.length - unique.length} resolvable but COLLIDING`)
+        console.log(`                      ${emptyPath} had no owner names · ${wrapperGaps} hit an unnamed wrapper (forwardRef/memo)`)
+        console.log('                      A COLLIDING address is a MISS: two nodes under one anchor with')
+        console.log('                      the same component path cannot be told apart, so nothing')
+        console.log('                      downstream could verify a write to either.')
+
+        // N4+ — the same address WITH the shipped per-instance discriminator.
+        const withDisc = joins.filter(j => j.disc !== null && j.disc !== undefined)
+        if (withDisc.length === 0) {
+          console.log('  N4+ discriminator   n/a — childDiscriminator could not be injected (CSP?).')
+        } else {
+          const byBoth = new Map()
+          for (const j of withDisc) {
+            const k = `${j.anchor}\u0000${j.path}\u0000${j.tag}\u0000${j.disc}`
+            byBoth.set(k, (byBoth.get(k) ?? 0) + 1)
+          }
+          const res2 = withDisc.filter(j => j.path !== '' && j.unresolved === 0)
+          const uniq2 = res2.filter(j => byBoth.get(`${j.anchor}\u0000${j.path}\u0000${j.tag}\u0000${j.disc}`) === 1)
+          console.log(`  N4+ discriminator   ${uniq2.length} of ${withDisc.length} unique once COR-35's per-instance`)
+          console.log(`                      childDiscriminator is appended        ${pct(uniq2.length, withDisc.length).trim()}`)
+          console.log('                      The name path names a CALL SITE, so siblings from one call site')
+          console.log('                      collide by construction. This is whether the discriminator that')
+          console.log('                      already ships closes that gap.')
+        }
+      }
+
+  console.log(`  N3 containers       ${uniqueContainers} of ${containers} multi-child containers carry a UNIQUE`)
       console.log(`                      stamp                                     ${pct(uniqueContainers, containers).trim()}`)
       console.log('                      UNIQUENESS ONLY — not verified correct. A uniformly offset stamp')
       console.log('                      (the COR-28 bug this harness exists to catch) is still unique, so')
