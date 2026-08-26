@@ -45,21 +45,103 @@
 import { chromium } from '@playwright/test'
 import * as esbuild from 'esbuild'
 import fs from 'node:fs'
+import path from 'node:path'
+
+/** A positive integer, or throw. `Number()` alone accepts NaN, Infinity and
+ *  negatives: `--limit NaN` never caps collection, and `--limit -1` writes an
+ *  EMPTY corpus and exits 0, which reads as a successful run of nothing. */
+function positiveInt(raw, flag) {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`${flag} must be a positive integer, got ${JSON.stringify(raw)}`)
+  }
+  return n
+}
 
 function parseArgs(argv) {
-  const out = { base: null, routes: [], out: null, limit: 40, settleMs: 1500, label: 'unknown' }
+  const out = {
+    base: null, routes: [], out: null, limit: 40, settleMs: 1500,
+    label: 'unknown', verifyRoot: null,
+    // Fixed default so a plain re-run reproduces the published corpus. The
+    // shuffle is NOT optional — see the note where it is applied.
+    seed: 20260814,
+  }
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--base') out.base = argv[++i]
     else if (a === '--out') out.out = argv[++i]
-    else if (a === '--limit') out.limit = Number(argv[++i])
-    else if (a === '--settle') out.settleMs = Number(argv[++i])
+    else if (a === '--limit') out.limit = positiveInt(argv[++i], '--limit')
+    else if (a === '--settle') out.settleMs = positiveInt(argv[++i], '--settle')
+    else if (a === '--seed') out.seed = positiveInt(argv[++i], '--seed')
+    else if (a === '--verify-root') out.verifyRoot = path.resolve(argv[++i])
     else if (a === '--label') out.label = argv[++i]
     else if (a === '--routes') { while (argv[i + 1] && !argv[i + 1].startsWith('--')) out.routes.push(argv[++i]) }
   }
   if (!out.base) throw new Error('--base is required')
   if (!out.out) throw new Error('--out is required')
   if (out.routes.length === 0) out.routes.push('/')
+  return out
+}
+
+/**
+ * Bundle `anchor-verify.ts` for use from Node, exactly as `anchor-coverage.mjs`
+ * does. Emitted INSIDE the package: Node resolves a bare specifier by walking
+ * node_modules up from the importing FILE, so an out-of-tree bundle has no path
+ * back to `ts-morph`.
+ */
+async function loadVerifier() {
+  const outfile = new URL('../node_modules/.cache/cortex/anchor-verify.mjs', import.meta.url).pathname
+  fs.mkdirSync(path.dirname(outfile), { recursive: true })
+  await esbuild.build({
+    entryPoints: [new URL('../src/core/anchor-verify.ts', import.meta.url).pathname],
+    outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node20',
+    external: ['ts-morph'],
+    logLevel: 'silent',
+  })
+  return import(outfile)
+}
+
+/** Read a file named by an anchor, resolving relative paths against the app root. */
+function makeReader(verifyRoot) {
+  const cache = new Map()
+  return (filePath) => {
+    if (cache.has(filePath)) return cache.get(filePath)
+    const abs = path.isAbsolute(filePath) ? filePath : path.join(verifyRoot, filePath)
+    let text = null
+    try { text = fs.readFileSync(abs, 'utf8') } catch { text = null }
+    cache.set(filePath, text)
+    return text
+  }
+}
+
+/**
+ * Deterministic shuffle — mulberry32, seeded, so a re-run reproduces the corpus.
+ *
+ * NOT optional, and not cosmetic. The first run of this experiment scored 100%
+ * on BOTH packets because the cases were emitted in `querySelectorAll` document
+ * order: agents resolved the ambiguous ones by triangulating from neighbours
+ * ("case ids 16-31 map 1:1 onto DOM preorder"). In production Claude receives
+ * one intent at a time with no neighbours. The fix lived in ad-hoc scripting and
+ * so was not reproducible — shuffling HERE is what makes the corpus honest for
+ * anyone who runs it.
+ */
+function shuffled(list, seed) {
+  let a = seed >>> 0
+  const rand = () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const out = list.slice()
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
   return out
 }
 
@@ -106,10 +188,21 @@ const PROBE = ({ limit }) => {
     const tag = el.tagName.toLowerCase()
     if (NON_VISUAL.has(tag)) continue
     if (el.closest('[data-cortex-host]')) continue
+    // The SAME predicate `anchor-coverage.mjs` uses (:161, :167). Diverging
+    // from it produced a corrupted published figure: a Next root layout
+    // authors <html> and <body> in JSX, so the transform stamps them and both
+    // have nonzero rects — two of six zerofog-web cases were those two
+    // elements. `selection.ts` returns null for both, so neither can EVER
+    // produce an agent-resolve gesture; scoring them measured a population the
+    // product cannot reach.
+    if (el === document.documentElement || el === document.body) continue
     const r = el.getBoundingClientRect()
     if (r.width === 0 || r.height === 0) continue
     const cs = getComputedStyle(el)
-    if (cs.visibility === 'hidden' || cs.display === 'none') continue
+    // `opacity: 0` keeps a nonzero box, so hidden tabs, mounted modals and
+    // mid-transition trees pass a rect check and consume the --limit ahead of
+    // elements a designer can actually see.
+    if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue
 
     const truth = el.getAttribute('data-cortex-source')
 
@@ -152,8 +245,6 @@ const PROBE = ({ limit }) => {
       }
     } catch { discriminator = null }
 
-    // The nearest stamped ANCESTOR — never self, or the answer leaks.
-    const anchorEl = el.parentElement?.closest('[data-cortex-source]') ?? null
     const parent = el.parentElement
 
     cases.push({
@@ -166,14 +257,13 @@ const PROBE = ({ limit }) => {
         siblingDiscriminator: discriminator,
         siblingIndex: parent ? Array.prototype.indexOf.call(parent.children, el) : -1,
         siblingCount: parent ? parent.children.length : 0,
-        nearestAnnotatedAncestor: anchorEl?.getAttribute('data-cortex-source') ?? null,
       },
     })
   }
   return cases
 }
 
-const { base, routes, out, limit, settleMs, label } = parseArgs(process.argv)
+const { base, routes, out, limit, settleMs, label, verifyRoot, seed } = parseArgs(process.argv)
 const [previewSrc, discSrc] = await Promise.all([
   bundle('preview-source.ts', 'PS'),
   bundle('child-discriminator.ts', 'CD'),
@@ -195,13 +285,57 @@ await browser.close()
 // A case with no Packet A is a harness failure, not a data point — the shipped
 // hint builder threw. Drop it loudly rather than scoring an empty packet as a
 // miss and blaming the evidence.
-const usable = all.filter(c => c.packetA)
-const dropped = all.length - usable.length
-fs.writeFileSync(out, JSON.stringify(usable, null, 2))
-console.log(`${usable.length} oracle cases (${label}) -> ${out}`)
-if (dropped) console.log(`  WARNING: ${dropped} dropped — getAgentResolveTarget threw`)
-console.log(`  ${usable.filter(c => c.packetB.componentPath).length} carry a React component path`)
-console.log(`  ${usable.filter(c => c.packetB.siblingDiscriminator).length} carry a sibling discriminator`)
+const withPacket = all.filter(c => c.packetA)
+const droppedNoPacket = all.length - withPacket.length
+
+// ── Ground truth must be VERIFIED, not assumed ───────────────────────────────
+//
+// Every case here is scored against a `data-cortex-source` the transform wrote.
+// Annotation presence is not correctness: COR-28 was a regression where every
+// anchor was 19 lines off, and this package ships `anchor-verify.ts` precisely
+// because of it. An unverified oracle scores an agent WRONG for finding the
+// RIGHT JSX — the experiment then drives a decision from invalid truth, which
+// is worse than having no experiment.
+//
+// A stamp that cannot be verified is DROPPED and counted. `tag-only` is kept:
+// it means the source tag agrees but nothing further discriminates, which is
+// weak corroboration rather than evidence of a wrong stamp. Only
+// `silently-wrong` — the anchor points at different JSX — disqualifies a case.
+let usable = withPacket
+let droppedUnverified = 0
+let verdictCounts = null
+if (verifyRoot) {
+  const { verifyAnchor } = await loadVerifier()
+  const read = makeReader(verifyRoot)
+  const kept = []
+  verdictCounts = {}
+  for (const c of withPacket) {
+    const r = await verifyAnchor(
+      { source: c.truth, domTag: c.packetA.tagName, domClass: c.packetA.className || undefined },
+      read,
+    )
+    verdictCounts[r.verdict] = (verdictCounts[r.verdict] ?? 0) + 1
+    if (r.verdict === 'silently-wrong') { droppedUnverified++; continue }
+    kept.push({ ...c, truthVerdict: r.verdict })
+  }
+  usable = kept
+}
+
+// Shuffled HERE so the file on disk is already safe to batch from.
+const ordered = shuffled(usable, seed)
+fs.writeFileSync(out, JSON.stringify({ seed, corpus: label, verified: !!verifyRoot, cases: ordered }, null, 2))
+
+console.log(`${ordered.length} oracle cases (${label}) -> ${out}   [seed ${seed}]`)
+if (droppedNoPacket) console.log(`  WARNING: ${droppedNoPacket} dropped — getAgentResolveTarget threw`)
+if (verifyRoot) {
+  console.log(`  ground truth VERIFIED: ${JSON.stringify(verdictCounts)}`)
+  if (droppedUnverified) console.log(`  ${droppedUnverified} dropped as SILENTLY-WRONG stamps — not scored`)
+} else {
+  console.log('  ground truth UNVERIFIED — pass --verify-root <app> to check each stamp.')
+  console.log('  Without it a stale or offset stamp scores a correct agent as wrong.')
+}
+console.log(`  ${ordered.filter(c => c.packetB.componentPath).length} carry a React component path`)
+console.log(`  ${ordered.filter(c => c.packetB.siblingDiscriminator).length} carry a sibling discriminator`)
 
 // NOTE for whoever builds the blind batches from this file: the packets contain
 // an `id` field (the element's DOM id). Spreading a packet over a case-id key
