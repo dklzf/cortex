@@ -1,0 +1,40 @@
+cortex-editor/src/browser/styles.css
+  s_515b894c608172::t_4973378109044d 4560-4566
+cortex-editor/tests/e2e/resize-handles-render.spec.ts
+  s_515b894c608172::t_5f31b155bf1eb0 23,40-49,89-105,111-114
+  s_515b894c608172::t_a711d4ee5121cb 186-191
+  s_515b894c608172::t_cde0083f2a3516 167-185,192-195
+  s_515b894c608172::t_6a26e940f3279f 115,196-208,211,216,218,223,227-233
+  s_515b894c608172::t_e1be8a45976c8f 61,71-83,106-110,209-210
+  s_515b894c608172::t_fa681bdad68f24 212-215,217,219-222,224-226
+  s_515b894c608172::t_d8544c80fd0824 116
+cortex-editor/src/browser/components/SelectionOverlay.tsx
+  s_515b894c608172::t_f38e8460d2748d 6,57-60,62-69,313
+  s_515b894c608172::t_4973378109044d 33-45,48-49
+  s_515b894c608172::t_702689b1f1b5a0 2,61
+cortex-editor/src/browser/pointer-gesture.ts
+  s_515b894c608172::t_262f0255840a05 50-52,165
+cortex-editor/src/browser/resize-drag-listener.ts
+  s_515b894c608172::t_71acd81718d559 32
+cortex-editor/src/browser/resize-drag.ts
+  s_515b894c608172::t_d0565140a5283c 25-48
+cortex-editor/src/browser/components/CortexApp.tsx
+  s_515b894c608172::t_262f0255840a05 1574-1583
+  s_515b894c608172::t_721d203f062a32 1667-1678
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "38f6053125d00bfe0f2ef673cea2f75be523c6cb",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
