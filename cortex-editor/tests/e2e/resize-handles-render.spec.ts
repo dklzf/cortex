@@ -15,6 +15,7 @@
  */
 import { test, expect } from '@playwright/test'
 import { bootWithSendSpy, selectElement } from './helpers/panel.js'
+import { handleCentre } from './helpers/resize-handle.js'
 
 interface HandleReport {
   overlayPresent: boolean
@@ -137,17 +138,12 @@ test.describe('resize handles — the real overlay', () => {
     // cursors that do nothing at all. No error, no console output.
     await bootWithSendSpy(page)
     await selectElement(page, '#center')
-    await page.waitForTimeout(400)
 
-    const box = await page.evaluate(() => {
-      const host = document.querySelector('[data-cortex-host]')
-      const root = (host as HTMLElement & { shadowRoot: ShadowRoot | null }).shadowRoot
-      const h = root?.querySelector('[data-cortex-resize-edge="right"]')
-      if (!h) return null
-      const r = h.getBoundingClientRect()
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
-    })
-    expect(box).not.toBeNull()
+    // Was `waitForTimeout(400)` plus a bare measurement. That is a sleep tuned
+    // to one machine, and the same pattern flaked 1 run in 3 when a second spec
+    // copied it. `handleCentre` polls the condition — the handle has area and
+    // sits on the target's edge — so it is both faster and deterministic.
+    const box = await handleCentre(page, 'right', '#center')
 
     // Watch the OVERLAY for the probe's inline-style mutation. The probe is the
     // first thing `beginResize` does, so a single mutation on the target proves
@@ -160,9 +156,9 @@ test.describe('resize handles — the real overlay', () => {
         .observe(el, { attributes: true, attributeFilter: ['style'] })
     })
 
-    await page.mouse.move(box!.x, box!.y)
+    await page.mouse.move(box.x, box.y)
     await page.mouse.down()
-    await page.mouse.move(box!.x + 60, box!.y, { steps: 6 })
+    await page.mouse.move(box.x + 60, box.y, { steps: 6 })
     await page.mouse.up()
 
     // `measureConstraintOwner` writes and reverts an inline !important size at
