@@ -62,9 +62,22 @@ const isHorizontal = (edge: ResizeEdge): boolean => edge === 'left' || edge === 
  * number would be derived from a zero rect.
  */
 export function beginResize(el: Element, edge: ResizeEdge, pointer: Pointer): ResizeDragState {
-  const rect = el.getBoundingClientRect()
-  const startPx = isHorizontal(edge) ? rect.width : rect.height
-  if (startPx <= 0) return IDLE
+  // The COMPUTED width/height, not `getBoundingClientRect()`.
+  //
+  // They are different box models and the difference is a real bug, not a
+  // rounding detail: under the default `content-box`, the rect INCLUDES padding
+  // and border while a `width:` declaration sets only the content area. So a
+  // 200px-wide element with 20px padding and a 5px border reports a rect of 250,
+  // and writing `width: 250 + 60` grows it by 110 for a 60px drag — a
+  // confidently wrong number with no error anywhere.
+  //
+  // `constraint-owner.ts` was already burned by exactly this and says so around
+  // its `cssBase` read; measuring here independently reintroduced the mix one
+  // layer up. Reading the same value the write lands in is what keeps the
+  // gesture 1:1.
+  const cs = getComputedStyle(el)
+  const startPx = Number.parseFloat(isHorizontal(edge) ? cs.width : cs.height)
+  if (!Number.isFinite(startPx) || startPx <= 0) return IDLE
   return {
     phase: 'pressed',
     element: el,

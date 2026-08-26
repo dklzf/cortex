@@ -19,9 +19,11 @@ import * as co from '../../src/browser/constraint-owner.js'
 function el(w = 200, h = 100): Element {
   const node = document.createElement('div')
   document.body.appendChild(node)
-  node.getBoundingClientRect = () => ({
-    width: w, height: h, top: 0, left: 0, right: w, bottom: h, x: 0, y: 0, toJSON: () => ({}),
-  }) as DOMRect
+  // Inline width/height, because `beginResize` reads the COMPUTED size rather
+  // than the bounding rect — the two are different box models, and mixing them
+  // made a 60px drag grow a padded element by 110px. Stubbing the rect here
+  // would test a path the code no longer takes.
+  node.setAttribute('style', `width:${w}px;height:${h}px`)
   return node
 }
 

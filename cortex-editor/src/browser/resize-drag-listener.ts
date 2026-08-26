@@ -18,6 +18,16 @@ export interface ResizeDragOptions {
   getTarget: () => Element | null
   /** True for cortex's own chrome. Handles LIVE in that chrome, so see below. */
   isOwnUI: (event: Event) => boolean
+  /**
+   * Cortex's shadow root, held from bootstrap.
+   *
+   * Optional so a caller can install this gesture against light-DOM handles —
+   * which is what the synthetic gesture spec does, and what any future non-
+   * shadow embedding would need. When it IS supplied (the production case) it
+   * is the only way to resolve a press, because the root is CLOSED: the browser
+   * retargets `event.target` to the host and trims `composedPath()` there too.
+   */
+  shadowRoot?: ShadowRoot
   onStateChange?: (state: ResizeDragState) => void
   onResult?: (result: ResizeResult) => void
   target?: Window
@@ -42,9 +52,29 @@ export type ResizeDragHandle = PointerGestureHandle<ResizeDragState>
  * letting this one accept exactly the elements it owns.
  */
 export function installResizeDrag(options: ResizeDragOptions): ResizeDragHandle {
-  const { getTarget, isOwnUI, onStateChange, onResult, target } = options
+  const { getTarget, isOwnUI, shadowRoot, onStateChange, onResult, target } = options
 
   return installPointerGesture<ResizeDragState, ResizeResult>({
+    // `event.target` is the shadow HOST for any press inside a closed root, and
+    // `composedPath()` is trimmed there too — measured in Chromium: path length
+    // 5, handle absent. `elementFromPoint` on the retained root reference is
+    // what still resolves the real node, which is why the root is threaded in.
+    //
+    // FALLS BACK to `event.target` when no root is supplied. Not defensive
+    // padding: a shadow lookup that misses must not silently swallow a press
+    // that light DOM would have resolved, and returning null here would decline
+    // every gesture for a caller whose handles are not in a shadow tree.
+    resolvePressed: (event) => {
+      // Feature-detected, not assumed. `ShadowRoot.elementFromPoint` is part of
+      // the DocumentOrShadowRoot mixin and real browsers all have it, but
+      // happy-dom does not — and calling it blind threw inside the pointerdown
+      // handler, taking an UNRELATED panel-drag test down with it. A gesture
+      // module must not be able to break the page's other listeners.
+      const inner = typeof shadowRoot?.elementFromPoint === 'function'
+        ? shadowRoot.elementFromPoint(event.clientX, event.clientY)
+        : null
+      return inner ?? (event.target instanceof Element ? event.target : null)
+    },
     begin: (pressed, pointer) => {
       // `closest` rather than reading the attribute off `pressed` directly: a
       // handle may contain a hit-area child or an icon, and the press lands on

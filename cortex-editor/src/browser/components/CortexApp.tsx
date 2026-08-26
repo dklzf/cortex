@@ -1569,6 +1569,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
     const handle = installResizeDrag({
       getTarget: () => selectedElementRef.current,
       isOwnUI,
+      shadowRoot,
       onStateChange: setResizeState,
       onResult: (result) => {
         if (!result.ok) {
@@ -1595,7 +1596,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       },
     })
     return () => handle.cleanup()
-  }, [active])
+  }, [active, shadowRoot])
 
   // Clear a stale refusal when the selection changes — it described the
   // previous element and would otherwise sit there accusing the new one.

@@ -46,11 +46,19 @@ const FIXTURE = `<!doctype html><body style="margin:0">
     <div id="flexchild" style="flex:1;height:60px;background:#cde"></div>
     <div style="flex:1;height:60px;background:#edc"></div></div>
 
+  <!-- A PADDED, bordered, content-box element. The case that exposed the box
+       model bug: its bounding rect is 250 (200 content + 40 padding + 10
+       border) while a width declaration sets only the content area, so the rect
+       and writing it back grew a 60px drag into 110px of movement. -->
+  <div id="padded" style="position:absolute;top:320px;left:0;width:200px;padding:20px;border:5px solid;background:#dfd"></div>
+
   <!-- Handles, positioned over each target's right edge. -->
   <div id="h-box" data-cortex-resize-edge="right"
        style="position:absolute;top:95px;left:246px;width:9px;height:9px;background:#00f"></div>
   <div id="h-flex" data-cortex-resize-edge="right"
        style="position:absolute;top:225px;left:296px;width:9px;height:9px;background:#00f"></div>
+  <div id="h-padded" data-cortex-resize-edge="right"
+       style="position:absolute;top:355px;left:246px;width:9px;height:9px;background:#00f"></div>
 </body>`
 
 async function arm(page: Page, targetId: string): Promise<void> {
@@ -108,6 +116,26 @@ test.describe('resize gesture — real pointer events', () => {
     expect(rec.results[0]!.ok).toBe(true)
     // 200 + 60. Asserting the VALUE, not just that something was written —
     // a gesture that writes the wrong number still "works" by any weaker check.
+    expect(rec.results[0]!.writes).toEqual([{ property: 'width', value: '260px' }])
+  })
+
+  test('a PADDED element grows by exactly what the user dragged', async ({ page }) => {
+    // The bug this pins, found in architecture review and reproduced in a real
+    // browser before fixing: `getBoundingClientRect().width` is the BORDER box
+    // (250 here), while a `width:` declaration under the default `content-box`
+    // sets only the CONTENT area (200). Measuring the rect and writing it back
+    // re-adds the 50px of padding and border, so a 60px drag moved the edge
+    // 110px — a confidently wrong number, no error anywhere.
+    //
+    // `constraint-owner.ts` had already been burned by this exact mix and says
+    // so in a comment; measuring independently one layer up reintroduced it.
+    await arm(page, 'padded')
+    await dragHandle(page, 'h-padded', 60)
+
+    const rec = await recorded(page)
+    expect(rec.results).toHaveLength(1)
+    expect(rec.results[0]!.ok).toBe(true)
+    // 200 (authored content width) + 60, NOT 250 + 60.
     expect(rec.results[0]!.writes).toEqual([{ property: 'width', value: '260px' }])
   })
 

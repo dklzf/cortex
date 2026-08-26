@@ -33,6 +33,17 @@ export interface PointerGestureOptions<S extends GesturePhase, R> {
   onCancel: () => S
   /** True for cortex's own chrome, which must never start a page gesture. */
   isOwnUI: (event: Event) => boolean
+  /**
+   * Resolve the pressed element, when `event.target` is not it.
+   *
+   * A gesture whose targets live inside cortex's CLOSED shadow root cannot use
+   * `event.target`: the browser retargets it to the host, and `composedPath()`
+   * is trimmed at the host too, so neither can see the pressed node. Verified
+   * in Chromium — through a closed root the path has length 5 and contains no
+   * handle. A gesture that owns such targets supplies this; page gestures
+   * (reorder) leave it out and get `event.target`.
+   */
+  resolvePressed?: (event: PointerEvent) => Element | null
   /** The element to pin `touch-action` on, given the state `begin` returned. */
   touchTarget?: (state: S) => Element | null
   onStateChange?: (state: S) => void
@@ -49,7 +60,7 @@ export interface PointerGestureHandle<S> {
 export function installPointerGesture<S extends GesturePhase, R>(
   options: PointerGestureOptions<S, R>,
 ): PointerGestureHandle<S> {
-  const { begin, onMove, onUp, onCancel, isOwnUI, touchTarget, onStateChange, onResult } = options
+  const { begin, onMove, onUp, onCancel, isOwnUI, touchTarget, resolvePressed, onStateChange, onResult } = options
   const win = options.target ?? window
 
   const IDLE = onCancel()
@@ -85,7 +96,7 @@ export function installPointerGesture<S extends GesturePhase, R>(
     if (state.phase !== 'idle') return
     if (event.button !== 0) return // primary button only; right-click opens menus
     if (isOwnUI(event)) return
-    const pressed = event.target
+    const pressed = resolvePressed ? resolvePressed(event) : event.target
     if (!(pressed instanceof Element)) return
 
     const next = begin(pressed, { x: event.clientX, y: event.clientY })
