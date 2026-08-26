@@ -4528,3 +4528,36 @@ button.cortex-token-chip__body:focus-visible {
   font-size: var(--cx-text-md);
   line-height: 1.5;
 }
+
+/* Resize handles (COR-3 gesture).
+
+   `pointer-events: auto` is LOAD-BEARING, not styling. Both the shadow host
+   (index.tsx) and `.cortex-selection-overlay` are `pointer-events: none`, so
+   without this the pointerdown falls through to the page element underneath and
+   the REORDER listener fires instead — a resize press silently starting a drag
+   to reorder, which is invisible until source is wrong.
+
+   Flat squares in the selection accent, per DESIGN.md: no gradients, no glow,
+   no shadow. The white border is what keeps a handle legible against an element
+   whose own colour matches the accent. */
+.cortex-resize-handle {
+  position: absolute;
+  pointer-events: auto;
+  width: 9px;
+  height: 9px;
+  background: var(--cx-select);
+  border: 1.5px solid var(--cx-paper);
+  box-sizing: border-box;
+}
+
+/* Edge handles sit at the midpoint of each side. The -50% translate is what
+   centres them ON the border rather than beside it. */
+.cortex-resize-handle--top    { top: 0; left: 50%; transform: translate(-50%, -50%); cursor: ns-resize }
+.cortex-resize-handle--bottom { top: 100%; left: 50%; transform: translate(-50%, -50%); cursor: ns-resize }
+.cortex-resize-handle--left   { left: 0; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize }
+.cortex-resize-handle--right  { left: 100%; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize }
+
+.cortex-resize-handle--nw { top: 0; left: 0; transform: translate(-50%, -50%); cursor: nwse-resize }
+.cortex-resize-handle--ne { top: 0; left: 100%; transform: translate(-50%, -50%); cursor: nesw-resize }
+.cortex-resize-handle--sw { top: 100%; left: 0; transform: translate(-50%, -50%); cursor: nesw-resize }
+.cortex-resize-handle--se { top: 100%; left: 100%; transform: translate(-50%, -50%); cursor: nwse-resize }

@@ -2,6 +2,8 @@ import type { JSX } from 'preact'
 import { useEffect, useRef } from 'preact/hooks'
 import { getSelectionLabel } from '../label.js'
 import { onTransformUpdate } from '../transform-bus.js'
+import { RESIZE_EDGE_ATTR } from '../resize-drag-listener.js'
+import type { ResizeEdge } from '../constraint-owner.js'
 import { onOverrideChange } from '../override-bus.js'
 import type { StateDeclarations, InteractionState } from '../state-detector.js'
 
@@ -17,13 +19,24 @@ export interface SelectionOverlayProps {
    *  up. Without this dep, the loop's idle-until-change optimization
    *  leaves the overlay glued to the old position — ZF0-1292. */
   hmrAppliedVersion?: number
+  /** Show resize handles. Off by default so the overlay stays a pure outline
+   *  for callers that only want selection feedback — and so the SECONDARY
+   *  overlay, which reuses the class but not this component, cannot grow them. */
+  resizable?: boolean
 }
 
 /**
  * Persistent selection outline with transition. Uses RAF to track position
  * continuously (element may move from scroll/resize while selected).
  */
-export function SelectionOverlay({ element, availableStates, activeState, onStateChange, overlaysVisible = true, hmrAppliedVersion = 0 }: SelectionOverlayProps): JSX.Element | null {
+/** Four edges plus four corners. Corners map to ONE edge — see the render. */
+const RESIZE_HANDLES: { edge: ResizeEdge; corner?: string }[] = [
+  { edge: 'top' }, { edge: 'right' }, { edge: 'bottom' }, { edge: 'left' },
+  { edge: 'top', corner: 'nw' }, { edge: 'top', corner: 'ne' },
+  { edge: 'bottom', corner: 'sw' }, { edge: 'bottom', corner: 'se' },
+]
+
+export function SelectionOverlay({ element, availableStates, activeState, onStateChange, overlaysVisible = true, hmrAppliedVersion = 0, resizable = false }: SelectionOverlayProps): JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null)
   const lensRef = useRef<HTMLDivElement>(null)
   const labelRef = useRef<HTMLSpanElement>(null)
@@ -271,6 +284,18 @@ export function SelectionOverlay({ element, availableStates, activeState, onStat
       <span ref={labelRef} class="cortex-label cortex-label--below">
         {label}
       </span>
+      {resizable && RESIZE_HANDLES.map(({ edge, corner }) => (
+        <div
+          key={corner ?? edge}
+          class={`cortex-resize-handle cortex-resize-handle--${corner ?? edge}`}
+          // The edge this handle DRAGS. A corner carries one edge too: dragging
+          // a corner resizes along one axis at a time, which keeps the gesture
+          // honest — `measureConstraintOwner` answers per-edge, and pretending a
+          // corner is two simultaneous edges would need two probes and two
+          // ownership records that can disagree.
+          {...{ [RESIZE_EDGE_ATTR]: edge }}
+        />
+      ))}
       {showLens && (
         <div
           ref={lensRef}

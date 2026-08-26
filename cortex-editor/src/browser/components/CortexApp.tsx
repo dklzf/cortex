@@ -29,6 +29,8 @@ import { ErrorToast } from './ErrorToast.js'
 import { ReorderDropIndicator } from './ReorderDropIndicator.js'
 import { PropertyEditCommand } from '../edit-command.js'
 import { installReorderDrag } from '../reorder-drag-listener.js'
+import { installResizeDrag } from '../resize-drag-listener.js'
+import { IDLE as RESIZE_IDLE, type ResizeDragState } from '../resize-drag.js'
 import { IDLE, type ReorderDragState } from '../reorder-drag.js'
 import { CapabilityBanner } from './CapabilityBanner.js'
 import { InactiveTabBanner } from './InactiveTabBanner.js'
@@ -1494,6 +1496,9 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   // COR-7 — drag to reorder. Installed alongside selection because they wire
   // the same surface; kept as its own handle so its listeners detach with it.
   const [dragState, setDragState] = useState<ReorderDragState>(IDLE)
+  const [resizeState, setResizeState] = useState<ResizeDragState>(RESIZE_IDLE)
+  const [resizeRefusal, setResizeRefusal] = useState<string | null>(null)
+  const applyOverrideRef = useRef<((property: string, value: string, commitRender: boolean) => void) | null>(null)
   const [reorderRefusal, setReorderRefusal] = useState<string | null>(null)
   const selectedElementsRef = useRef(selectedElements)
   selectedElementsRef.current = selectedElements
@@ -1552,6 +1557,50 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
     return () => handle.cleanup()
   }, [active, buffer])
 
+  // COR-3 — drag an edge to resize. Installed beside the reorder gesture; the
+  // two are mutually exclusive by construction rather than by a race, because
+  // the reorder listener declines any press on cortex chrome and every resize
+  // handle IS cortex chrome.
+  // `selectedElementRef` is declared once near the top of this component and
+  // kept current there; reading it here rather than re-declaring means the
+  // gesture always sees the live selection without a second source of truth.
+  useEffect(() => {
+    if (!active) return
+    const handle = installResizeDrag({
+      getTarget: () => selectedElementRef.current,
+      isOwnUI,
+      onStateChange: setResizeState,
+      onResult: (result) => {
+        if (!result.ok) {
+          // A drag that silently does nothing is indistinguishable from a bug.
+          // `measureConstraintOwner` already writes this sentence for a person.
+          setResizeRefusal(result.reason)
+          return
+        }
+        const apply = applyOverrideRef.current
+        if (!apply) {
+          // Panel populates the ref in an effect, so it is null before first
+          // paint. Refusing loudly beats writing through a path that is not
+          // there — silently dropping the gesture is what this whole surface
+          // exists to avoid.
+          setResizeRefusal('The panel is still starting up — try that again in a moment.')
+          return
+        }
+        // Every write in ONE tick: `commitScrub` coalesces same-tick writes
+        // into a single undo entry, so a `flex: none` + `width` pin is one
+        // Cmd+Z, not two. The final `true` is what schedules that commit.
+        result.writes.forEach((w, i) =>
+          apply(w.property, w.value, i === result.writes.length - 1))
+        setResizeRefusal(null)
+      },
+    })
+    return () => handle.cleanup()
+  }, [active])
+
+  // Clear a stale refusal when the selection changes — it described the
+  // previous element and would otherwise sit there accusing the new one.
+  useEffect(() => { setResizeRefusal(null) }, [selectedElement])
+
   // Clear a stale refusal when the selection changes — it described the
   // previous element and would otherwise sit there accusing the new one.
   useEffect(() => { setReorderRefusal(null) }, [selectedElement])
@@ -1578,6 +1627,9 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         {reorderRefusal !== null && (
           <div class="cortex-reorder-refusal" role="status">{reorderRefusal}</div>
         )}
+        {resizeRefusal !== null && (
+          <div class="cortex-reorder-refusal" role="status">{resizeRefusal}</div>
+        )}
       </div>
       <TooltipLayer shadowRoot={shadowRoot} />
       {/* Wrapper shifts toolbar + every position:fixed UI down by the
@@ -1602,6 +1654,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       <HoverOverlay element={hoverEnabled ? hoveredElement : null} />
       <ReorderDropIndicator state={dragState} />
       <SelectionOverlay
+        resizable
         element={selectedElement}
         availableStates={availableStates}
         activeState={activeState}
@@ -1626,6 +1679,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
           overrideManager={overrideRef.current}
           commandStack={commandStackRef.current}
           flushCommitRef={flushCommitRef}
+      applyOverrideRef={applyOverrideRef}
           stageEditRef={__CORTEX_TEST_BUILD__ ? stageEditRef : undefined}
           commitEditRef={__CORTEX_TEST_BUILD__ ? commitEditRef : undefined}
           undoInProgressRef={undoInProgressRef}

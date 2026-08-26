@@ -236,6 +236,16 @@ export interface PanelProps {
   /** Ref written by Panel — CortexApp calls it to flush pending coalesced commits
    *  before undo (microtask commits haven't fired yet when blur+undo runs synchronously). */
   flushCommitRef?: { current: (() => void) | null }
+  /** Ref written by Panel so a window-level gesture (the resize drag) can stage
+   *  through the SAME path the panel uses when the user types a value.
+   *
+   *  Not test-gated, unlike stageEditRef/commitEditRef below: this is a
+   *  production seam. Routing the drag through `applyOverride` is what makes
+   *  drag-resize and type-resize produce the same edit — shared-class fan-out
+   *  ("Editing all N", COR-12), multi-select, pseudo handling, phantom guards,
+   *  and same-tick coalescing into ONE undo entry. Re-implementing any of that
+   *  is how the two paths silently diverge. */
+  applyOverrideRef?: { current: ((property: string, value: string, commitRender: boolean) => void) | null }
   /** TEST-ONLY ref written by Panel — allows the e2e test bridge to directly
    *  append a PendingEdit to the staging buffer without going through the scrub UI.
    *  Only populated when __CORTEX_TEST_BUILD__ is true (DCE'd from prod bundles).
@@ -321,6 +331,7 @@ export function Panel({
   panelPointerCancel,
   commandStack,
   flushCommitRef,
+  applyOverrideRef,
   undoInProgressRef,
   channel,
   agentConnected,
@@ -1103,6 +1114,7 @@ export function Panel({
     }
   }, [flushCommitRef, commitScrub])
 
+
   // TEST-ONLY: expose buffer.append via stageEditRef so e2e specs can seed
   // the staging buffer directly (Apply button lifecycle tests). Follows the
   // same pattern as flushCommitRef — Panel owns the assignment, CortexApp
@@ -1294,6 +1306,17 @@ export function Panel({
     }
   // applyOverride is stable (useCallback) — safe dep.
   }, [commitEditRef, applyOverride])
+
+  // Expose applyOverride so the resize gesture stages through the SAME path as
+  // typing a value. Mirrors flushCommitRef exactly, including nulling on
+  // cleanup — a stale ref would let a gesture write through a Panel that has
+  // unmounted, against an element that is no longer selected.
+  useEffect(() => {
+    if (applyOverrideRef) {
+      applyOverrideRef.current = applyOverride
+      return () => { applyOverrideRef.current = null }
+    }
+  }, [applyOverrideRef, applyOverride])
 
   /**
    * Dispatch a className mutation (classOp) to the server, optionally followed
