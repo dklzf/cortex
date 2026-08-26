@@ -1,6 +1,6 @@
 import type { JSX } from 'preact'
 import { render as preactRender } from 'preact'
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import type { CortexChannel, ConnectionDisplay, Annotation, StyleCapability } from '../../adapters/types.js'
 import type { EditError } from './EditErrorCard.js'
 import { CSSOverrideManager } from '../override.js'
@@ -1497,6 +1497,23 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   // the same surface; kept as its own handle so its listeners detach with it.
   const [dragState, setDragState] = useState<ReorderDragState>(IDLE)
   const [resizeState, setResizeState] = useState<ResizeDragState>(RESIZE_IDLE)
+
+  // The gesture's ONLY feedback before release.
+  //
+  // Nothing applies `currentPx` during the drag — the element does not move
+  // until pointerup — so without this the user drags against a static page and
+  // finds out afterwards whether anything happened. Deriving it here rather
+  // than writing a style keeps the preview out of the override manager's way:
+  // no MutationRecords, no fight with the RAF loop, nothing to undo.
+  //
+  // This is also what makes `resizeState` a READ. It was write-only, so every
+  // pointermove re-rendered CortexApp to produce no output at all.
+  const resizePreview = useMemo(
+    () => (resizeState.phase === 'dragging'
+      ? { label: `${resizeState.edge === 'left' || resizeState.edge === 'right' ? 'W' : 'H'} ${Math.round(resizeState.currentPx)}` }
+      : null),
+    [resizeState],
+  )
   const [resizeRefusal, setResizeRefusal] = useState<string | null>(null)
   const applyOverrideRef = useRef<((property: string, value: string, commitRender: boolean) => boolean) | null>(null)
   const [reorderRefusal, setReorderRefusal] = useState<string | null>(null)
@@ -1687,6 +1704,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // shipping the version that silently no-ops on half the selection.
         // Typed values still fan out — only the GESTURE is gated.
         resizable={selectedElements.length === 1}
+        resizePreview={resizePreview}
         element={selectedElement}
         availableStates={availableStates}
         activeState={activeState}

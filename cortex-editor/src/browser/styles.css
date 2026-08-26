@@ -256,6 +256,29 @@
   margin-top: var(--cx-sp-2);
 }
 
+/* Live size readout during a resize drag.
+   Deliberately the same shape as `.cortex-label` — it is the same kind of
+   thing (a caption on the selection) and inventing a second visual language
+   for it would read as a different system. Sits ABOVE so it never collides
+   with the source label below.
+   `pointer-events: none` matters: the overlay is inside cortex chrome, where
+   the resize listener's gate is INVERTED, so anything hit-testable here can
+   swallow a press meant for the element. */
+.cortex-resize-readout {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  margin-bottom: 4px;
+  padding: 2px 6px;
+  background: var(--cx-select);
+  color: var(--cx-on-select);
+  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
 /* ── Layer tree ──────────────────────────────── */
 
 .cortex-layer-tree {

@@ -24,6 +24,16 @@ export interface SelectionOverlayProps {
    *  for callers that only want selection feedback — and so the SECONDARY
    *  overlay, which reuses the class but not this component, cannot grow them. */
   resizable?: boolean
+  /**
+   * Live size readout while a resize drag is in flight; `null` when idle.
+   *
+   * The drag does NOT move the element — the write happens on release — so
+   * without this the entire gesture has no feedback at all, and a drag that
+   * gets refused looks exactly like a drag that worked. A number that tracks
+   * the pointer is the cheapest honest signal: it needs no style write, so it
+   * cannot fight the override manager or the MutationObserver watching it.
+   */
+  resizePreview?: { label: string } | null
 }
 
 /**
@@ -49,7 +59,7 @@ const RESIZE_HANDLES: { edge: ResizeEdge; corner?: string }[] = [
   { edge: 'left', corner: 'sw' }, { edge: 'right', corner: 'se' },
 ]
 
-export function SelectionOverlay({ element, availableStates, activeState, onStateChange, overlaysVisible = true, hmrAppliedVersion = 0, resizable = false }: SelectionOverlayProps): JSX.Element | null {
+export function SelectionOverlay({ element, availableStates, activeState, onStateChange, overlaysVisible = true, hmrAppliedVersion = 0, resizable = false, resizePreview = null }: SelectionOverlayProps): JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null)
   const lensRef = useRef<HTMLDivElement>(null)
   const labelRef = useRef<HTMLSpanElement>(null)
@@ -322,6 +332,12 @@ export function SelectionOverlay({ element, availableStates, activeState, onStat
           {...{ [RESIZE_EDGE_ATTR]: edge }}
         />
       ))}
+      {resizePreview && (
+        // Sits with the label rather than following the dragged edge: the edge
+        // is where the pointer already is, and a badge under the cursor is the
+        // one thing guaranteed to be occluded by it.
+        <span class="cortex-resize-readout">{resizePreview.label}</span>
+      )}
       {showLens && (
         <div
           ref={lensRef}
