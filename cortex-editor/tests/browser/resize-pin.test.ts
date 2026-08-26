@@ -97,3 +97,37 @@ describe('pinToFixed — refusals', () => {
     expect(r.ok).toBe(false)
   })
 })
+
+describe('pinToFixed — numbers that must never become CSS', () => {
+  const owns = (over: Partial<ConstraintOwnership> = {}): ConstraintOwnership => ({
+    target: 'element', edgeResponse: 1, reason: 'ok', ...over,
+  } as ConstraintOwnership)
+
+  // `VALID_VALUE` is a charset allowlist, so every one of these is a valid CSS
+  // value as far as the fence is concerned. The guard has to be here.
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+  ])('refuses %s rather than writing it as a length', (_label, px) => {
+    const r = pinToFixed(owns(), 'right', px)
+    expect(r.ok).toBe(false)
+    expect(r.ok === false && r.reason).toMatch(/impossible size/)
+  })
+
+  it('refuses a size the amplification produced rather than the user', () => {
+    // What a 100px drag becomes at the bottom of the accepted edgeResponse
+    // band: 100 / 0.021 ≈ 4762. Scaled up here to cross the bound.
+    const r = pinToFixed(owns(), 'right', 250_000)
+    expect(r.ok).toBe(false)
+    expect(r.ok === false && r.reason).toMatch(/unreasonable number/)
+  })
+
+  it('still writes an ordinary large size', () => {
+    // The bound must not refuse a real one — a wide scrolling canvas is a
+    // legitimate thing to drag to.
+    const r = pinToFixed(owns(), 'right', 8000)
+    expect(r.ok).toBe(true)
+    expect(r.ok === true && r.writes).toEqual([{ property: 'width', value: '8000px' }])
+  })
+})

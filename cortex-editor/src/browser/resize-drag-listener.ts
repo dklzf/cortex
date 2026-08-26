@@ -30,6 +30,14 @@ export interface ResizeDragOptions {
   shadowRoot?: ShadowRoot
   onStateChange?: (state: ResizeDragState) => void
   onResult?: (result: ResizeResult, state: ResizeDragState) => void
+  /**
+   * The measurement probe threw, so no drag started.
+   *
+   * Separate from `onResult` because there is no result: the gesture never
+   * began. The caller shows this to the user, because the alternative is a
+   * press that does nothing for a reason nobody can see.
+   */
+  onProbeError?: (message: string) => void
   target?: Window
 }
 
@@ -52,7 +60,7 @@ export type ResizeDragHandle = PointerGestureHandle<ResizeDragState>
  * letting this one accept exactly the elements it owns.
  */
 export function installResizeDrag(options: ResizeDragOptions): ResizeDragHandle {
-  const { getTarget, isOwnUI, shadowRoot, onStateChange, onResult, target } = options
+  const { getTarget, isOwnUI, shadowRoot, onStateChange, onResult, onProbeError, target } = options
 
   return installPointerGesture<ResizeDragState, ResizeResult>({
     // `event.target` is the shadow HOST for any press inside a closed root, and
@@ -87,7 +95,33 @@ export function installResizeDrag(options: ResizeDragOptions): ResizeDragHandle 
 
       const el = getTarget()
       if (!el) return null
-      return beginResize(el, raw as ResizeEdge, pointer)
+
+      // `beginResize` PROBES: `getComputedStyle`, then `measureConstraintOwner`
+      // writing and reverting an inline size, reading rects, and walking the
+      // parent chain. Every one of those is page-reachable and page-overridable
+      // — a cross-origin frame in the ancestry throws `SecurityError`, a page
+      // that redefines `HTMLElement.prototype.style` throws `TypeError`, and a
+      // node detached between selection and press throws from the rect read.
+      //
+      // `SelectionOverlay` already wraps the SAME probe (`canResizeEdge`) in a
+      // try/catch. This path did not. Hardening the render path and leaving the
+      // event path bare is the sibling-branch miss CLAUDE.md rule 3 names.
+      //
+      // Not a blanket swallow: `catch { return null }` would reproduce the
+      // silent press this whole surface exists to avoid. Log for the developer,
+      // surface for the user, decline the gesture.
+      //
+      // (On the DoS question — in Chromium a listener exception is reported and
+      // dispatch continues, so other listeners survive. In happy-dom it does
+      // take them down, which is how this class of bug was found here before.
+      // The SILENT failure is the part that is real in every environment.)
+      try {
+        return beginResize(el, raw as ResizeEdge, pointer)
+      } catch (err) {
+        console.warn('[cortex] resize measurement failed on', el, err)
+        onProbeError?.('cortex could not measure this element, so the drag did not start.')
+        return null
+      }
     },
     onMove: onResizeMove,
     onUp: onResizeUp,

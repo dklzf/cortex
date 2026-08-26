@@ -153,3 +153,56 @@ describe('installPointerGesture — declines it should make', () => {
     handle.cleanup()
   })
 })
+
+describe('installPointerGesture — the state handed to onResult', () => {
+  /**
+   * `onResult` promises the state that PRODUCED the result, and consumers act
+   * on that promise: the resize gesture compares `state.element` against the
+   * current selection to refuse a write whose measurement went stale mid-drag.
+   *
+   * The promise was broken. `setState(next)` reassigns the closure variable,
+   * and the call below it passed `state` — the variable, re-read after the
+   * transition — so every consumer received the POST state. Since `onResizeUp`
+   * always transitions to idle, the guard read `phase: 'idle'` every time and
+   * could not fire, and `state.element` was gone.
+   *
+   * Nothing caught it because no test had ever inspected this argument.
+   */
+  function resultHarness() {
+    const got: S[] = []
+    const marker = el('<li>Row</li>')
+    const handle = installPointerGesture<S, string>({
+      begin: (pressed) => ({ phase: 'pressed', el: pressed }),
+      onMove: (s) => ({ ...s, phase: 'dragging' }),
+      // The shape that exposed the bug: the reducer discards its own state on
+      // release, exactly as `onResizeUp` does.
+      onUp: (s) => ({ state: { phase: 'idle' }, result: s.phase === 'dragging' ? 'done' : undefined }),
+      onCancel: () => ({ phase: 'idle' }),
+      isOwnUI: () => false,
+      onResult: (_r, s) => got.push(s),
+      target: window,
+    })
+    return { got, handle, marker }
+  }
+
+  const move = (x: number) => window.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, clientX: x, clientY: 10, pointerId: 1,
+  }))
+  const up = () => window.dispatchEvent(new PointerEvent('pointerup', {
+    bubbles: true, cancelable: true, clientX: 99, clientY: 10, pointerId: 1,
+  }))
+
+  it('is the state that produced the result, not the state after it', () => {
+    const { got, handle, marker } = resultHarness()
+    down(marker)
+    move(99)
+    up()
+
+    expect(got).toHaveLength(1)
+    // Both halves matter. The phase proves the pre-transition state was
+    // captured; the element proves the payload a consumer needs survived.
+    expect(got[0]!.phase).toBe('dragging')
+    expect(got[0]!.el).toBe(marker)
+    handle.cleanup()
+  })
+})

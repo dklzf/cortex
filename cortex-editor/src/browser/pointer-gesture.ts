@@ -145,8 +145,14 @@ export function installPointerGesture<S extends GesturePhase, R>(
   function handlePointerUp(event: PointerEvent): void {
     if (state.phase === 'idle') return
     if (event.pointerId !== activePointerId) return
-    const wasDragging = state.phase === 'dragging'
-    const { state: next, result } = onUp(state)
+    // Captured BEFORE the transition, because `setState` reassigns `state`
+    // and `onResult` promises the state that produced the result. Reading the
+    // variable after the transition silently handed every consumer the POST
+    // state — and since a reducer typically returns idle on release, that made
+    // any `state.phase !== 'idle'` guard downstream unreachable.
+    const producing = state
+    const wasDragging = producing.phase === 'dragging'
+    const { state: next, result } = onUp(producing)
     setState(next)
     activePointerId = null
     restoreTouchAction()
@@ -162,7 +168,7 @@ export function installPointerGesture<S extends GesturePhase, R>(
       event.stopPropagation()
       swallowNextClick = true
     }
-    if (result) onResult?.(result, state)
+    if (result) onResult?.(result, producing)
   }
 
   function handleClick(event: MouseEvent): void {

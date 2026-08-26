@@ -1571,6 +1571,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       isOwnUI,
       shadowRoot,
       onStateChange: setResizeState,
+      onProbeError: setResizeRefusal,
       onResult: (result, state) => {
         // The reducer measured `state.element`; `applyOverride` writes to whatever
         // Panel currently has selected. They agree at pointerdown, and nothing

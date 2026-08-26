@@ -26,6 +26,24 @@ import type { ConstraintOwnership, ResizeEdge } from './constraint-owner.js'
  * step rather than unpicking three declarations.
  */
 
+/**
+ * Beyond this, the number is a symptom rather than an intent.
+ *
+ * `pointerDeltaToSizeDelta` divides pointer travel by `edgeResponse`, and the
+ * engine accepts any response at or above `EDGE_EPSILON` (0.02). At the bottom
+ * of that band the division amplifies 50x, so a 100px drag asks for ~5000px of
+ * width — and responses in the 0.02-0.1 range are ordinary output from
+ * sub-pixel alignment and partial-absorption layouts, not a hostile page.
+ *
+ * The engine's threshold answers "does this edge respond at all". It cannot
+ * answer "is the amplified number still something a person meant", because
+ * that depends on the drag. This is where that question belongs.
+ *
+ * 100,000px is ~26x a 4K viewport: past any real layout, short of the range
+ * where CSS itself gives up, and deliberately not tight enough to argue about.
+ */
+const MAX_PX = 100_000
+
 export interface PinWrite {
   property: string
   value: string
@@ -58,6 +76,25 @@ export function pinToFixed(
   px: number,
 ): PinResult {
   const size = SIZE_PROPERTY[edge]
+
+  // Refuse a number before it becomes a string, because after that it is
+  // indistinguishable from an intentional one.
+  //
+  // `VALID_VALUE` (css-validation.ts) is a CHARSET allowlist, not a grammar —
+  // `NaNpx` and `Infinitypx` are pure letters and pass it cleanly. They would
+  // reach the staging buffer and be handed to the agent as the value to write
+  // into source. `NaN` arrives whenever a rect read yields a non-number, and
+  // it survives every arithmetic guard upstream: `Math.max(1, NaN)` is `NaN`,
+  // and the `edgeResponse === 0` check does not fire because `NaN !== 0`.
+  if (!Number.isFinite(px)) {
+    return { ok: false, reason: 'cortex measured an impossible size for this element, so nothing was changed.' }
+  }
+  if (px > MAX_PX) {
+    return {
+      ok: false,
+      reason: 'This edge barely moves when its size changes, so cortex would have to write an unreasonable number to follow your drag. Nothing was changed.',
+    }
+  }
 
   // Rounded to whole pixels. A drag produces sub-pixel floats, and writing
   // `width: 300.4px` into someone's source is noise in a diff for a precision
