@@ -68,15 +68,49 @@ export function SelectionOverlay({ element, availableStates, activeState, onStat
   // selection. `canResizeEdge` probes, so this must not run per render or per
   // pointermove — the memo key is the element plus the HMR counter, which is
   // exactly when layout can have changed underneath us.
-  const usableHandles = useMemo<{ edge: ResizeEdge; corner?: string }[]>(
-    () => (element && resizable
-      ? RESIZE_HANDLES.filter(h => {
-          try { return canResizeEdge(element, h.edge) } catch { return false }
-        })
-      : []),
-    [element, resizable, hmrAppliedVersion],
-  )
+  //
+  // A THROWN probe is not an inert edge, and collapsing the two hid the only
+  // report of it. `catch { return false }` dropped every handle, so the press
+  // that would have reached `installResizeDrag`'s `onProbeError` could never
+  // happen — the event path was hardened to explain this exact failure and the
+  // explanation was unreachable through the UI. Kept separate and reported.
+  const { handles: usableHandles, probeError } = useMemo<{
+    handles: { edge: ResizeEdge; corner?: string }[]
+    probeError: string | null
+  }>(() => {
+    if (!element || !resizable) return { handles: [], probeError: null }
+    const handles: { edge: ResizeEdge; corner?: string }[] = []
+    let failed = false
+    for (const h of RESIZE_HANDLES) {
+      try {
+        if (canResizeEdge(element, h.edge)) handles.push(h)
+      } catch (err) {
+        // One warning per failing edge is noise; the first one carries the
+        // diagnostic and the rest are the same page lying the same way.
+        if (!failed) console.warn('[cortex] resize capability probe failed on', element, err)
+        failed = true
+      }
+    }
+    return {
+      handles,
+      // Only when NOTHING is measurable. A page that breaks one edge's probe
+      // while the others answer leaves usable handles, and a banner over a
+      // working affordance is worse than no banner.
+      probeError: failed && handles.length === 0
+        ? 'cortex could not measure this element, so it cannot offer resize handles for it.'
+        : null,
+    }
+  }, [element, resizable, hmrAppliedVersion])
 
+  // Reported through an effect, not during render — calling a parent's setState
+  // mid-render is a Preact warning and an update-depth risk.
+  //
+  // Only NON-null values are pushed. The memo re-evaluates on every re-render
+  // that changes its deps, and any pass where `resizable` is momentarily false
+  // yields `probeError: null` — pushing that would immediately erase a real
+  // error reported milliseconds earlier, which is exactly what happened.
+  // Clearing belongs to the parent, on selection change, because that is the
+  // scope a probe error actually has.
   // Cached lens dimensions — only re-measured when availableStates changes
   const cachedLensWRef = useRef(120)
   const cachedLensHRef = useRef(24)
@@ -332,6 +366,17 @@ export function SelectionOverlay({ element, availableStates, activeState, onStat
           {...{ [RESIZE_EDGE_ATTR]: edge }}
         />
       ))}
+      {probeError && (
+        // Rendered HERE rather than reported to CortexApp for it to render.
+        //
+        // Three attempts at the callback version each died on effect ordering:
+        // a child's reporting effect runs before the parent's clearing effect,
+        // so the message was set and erased in the same commit. The round trip
+        // bought nothing — this is a fact the overlay computes, about the
+        // element the overlay is drawing, shown where the overlay already is.
+        // Keeping it local deletes the state, the effect, and the ordering.
+        <span class="cortex-resize-readout cortex-resize-readout--error">{probeError}</span>
+      )}
       {resizePreview && (
         // Sits with the label rather than following the dragged edge: the edge
         // is where the pointer already is, and a badge under the cursor is the

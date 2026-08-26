@@ -159,6 +159,30 @@ export type ResizeResult =
  */
 export function onResizeUp(state: ResizeDragState): { state: ResizeDragState; result?: ResizeResult } {
   if (state.phase !== 'dragging') return { state: IDLE }
+
+  // Dragging out and back is not an edit.
+  //
+  // Crossing the threshold makes it a drag permanently — there is no path back
+  // to `pressed` — so releasing at the size you started from still reached
+  // `pinToFixed` and wrote an explicit pixel size. For an auto-sized block, a
+  // flex child, or a grid item that ALSO means `flex: none` or a self-alignment
+  // override, permanently replacing responsive behaviour after a gesture the
+  // user watched change nothing.
+  //
+  // Compared at the ROUNDED value, because that is what gets written: a
+  // sub-pixel difference the user cannot see must not count as intent either.
+  //
+  // Gated on the edge being CAPABLE, which is not a detail. An inert edge
+  // (`edgeResponse === 0`) deliberately holds `currentPx` at `startPx` so the
+  // release can report WHY nothing moved — see `onResizeMove`. Without this
+  // condition the two cases are numerically identical and the shortcut
+  // swallows the refusal, turning "this element cannot be resized, here is the
+  // reason" back into the silent no-op the refusal exists to replace.
+  if (state.ownership.edgeResponse !== 0
+    && Math.round(state.currentPx) === Math.round(state.startPx)) {
+    return { state: IDLE }
+  }
+
   return { state: IDLE, result: pinToFixed(state.ownership, state.edge, state.currentPx) }
 }
 

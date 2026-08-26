@@ -279,6 +279,16 @@
   pointer-events: none;
 }
 
+/* Same shape as the readout — it occupies the same slot and says the reason
+   there is no readout. Warning colour, because it reports a failure rather
+   than a value. */
+.cortex-resize-readout--error {
+  background: var(--cx-warning);
+  color: var(--cx-paper);
+  max-width: 320px;
+  white-space: normal;
+}
+
 /* ── Layer tree ──────────────────────────────── */
 
 .cortex-layer-tree {

@@ -579,7 +579,7 @@ const siblingsDiffer = (a: DOMRect[], b: DOMRect[]): boolean =>
  * changed the layout it was trying to measure (a crossed flex-wrap boundary).
  * Both mean "unknown", never "no response".
  */
-export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintProbe | 'inert' | null {
+export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintProbe | 'inert' | 'transformed' | null {
   const el = element as HTMLElement
   if (!el.style || typeof el.getBoundingClientRect !== 'function') return null
 
@@ -623,7 +623,14 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
   // HEIGHT, so the ratio measures the wrong dimension entirely. Detect any
   // non-axis-aligned matrix and refuse rather than report a confident number
   // built from the other axis. Raised in review.
-  if (hasNonAxisAlignedTransform(own)) return null
+  // A REAL answer, not a missing one — same distinction `'inert'` makes.
+  //
+  // Returning `null` here sent the caller to the predictive fallback, which
+  // reports element-owned at a 1:1 ratio. So a rotated box grew usable handles
+  // and committed a CSS width, while the physical axis the user dragged is not
+  // the axis that width controls: on a 90deg-rotated element, dragging the
+  // right edge changes its VERTICAL extent. Confidently wrong, silently.
+  if (hasNonAxisAlignedTransform(own)) return 'transformed'
   const offsetSize = inline ? el.offsetWidth : el.offsetHeight
   const scale = offsetSize > 0 ? baseSize / offsetSize : 1
   const cssBase = Number.parseFloat(own.getPropertyValue(sizeProperty))
@@ -781,6 +788,19 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
       reason:
         `${sizeProp} does not apply to a non-replaced inline element, so no ${sizeProp} value can ` +
         `move this edge. Give it display: inline-block or block first.`,
+    }
+  }
+  if (probe === 'transformed') {
+    const sizeProp = INLINE_EDGES.has(edge) ? 'width' : 'height'
+    return {
+      target: 'element',
+      property: sizeProp,
+      appliesTo: 'self',
+      edgeResponse: 0,
+      screenPxPerCssPx: 1,
+      reason:
+        `This element is rotated or skewed, so the edge you dragged is not the edge ` +
+        `${sizeProp} controls. cortex cannot tell which way to resize it.`,
     }
   }
   if (!probe) return resolveConstraintOwner(element, edge)

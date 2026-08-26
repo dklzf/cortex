@@ -217,7 +217,22 @@ describe('installPointerGesture — the click swallow cannot outlive its gesture
    * that gets reported as "the app randomly ignores me".
    */
   it('does not eat a click belonging to a later, separate interaction', () => {
-    const { handle } = harness()
+    // A THRESHOLD-AWARE stub, unlike the shared harness. The shared one
+    // promotes to `dragging` on any move at all, which stopped being usable
+    // here once the release coordinates began flowing through `onMove`: a
+    // motionless press-and-release would register as a drag and re-arm the
+    // very flag this test is checking gets cleared. Real reducers require
+    // travel; the stub has to as well or the test asserts a fiction.
+    const seen: string[] = []
+    const handle = installPointerGesture<S, string>({
+      begin: (pressed) => ({ phase: 'pressed', el: pressed }),
+      onMove: (st, p) => (Math.abs(p.x - 10) >= 3 ? { ...st, phase: 'dragging' } : st),
+      onUp: (st) => ({ state: { phase: 'idle' }, result: st.phase === 'dragging' ? 'done' : undefined }),
+      onCancel: () => ({ phase: 'idle' }),
+      isOwnUI: () => false,
+      onStateChange: (st) => seen.push(st.phase),
+      target: window,
+    })
     const row = el('<li>Row</li>')
 
     // A complete drag, with no click delivered afterwards.
@@ -239,6 +254,79 @@ describe('installPointerGesture — the click swallow cannot outlive its gesture
     const later = new MouseEvent('click', { bubbles: true, cancelable: true })
     window.dispatchEvent(later)
     expect(later.defaultPrevented).toBe(false)
+    handle.cleanup()
+  })
+})
+
+describe('installPointerGesture — the release position is the one that counts', () => {
+  /**
+   * Browsers coalesce pointer events under load, so the last `pointermove`
+   * delivered is not always where the pointer actually was at `pointerup`.
+   * Committing from the stale value writes a size the user did not release at.
+   *
+   * The sharper case: a press whose travel only crosses the threshold ON
+   * RELEASE never became a drag at all. It was silently treated as a click and
+   * did nothing — a real gesture, discarded, with no feedback.
+   */
+  function thresholdHarness() {
+    const got: [string, S][] = []
+    const handle = installPointerGesture<S, string>({
+      begin: (pressed) => ({ phase: 'pressed', el: pressed }),
+      // Threshold-aware, like the real reducer: 3px of travel or it stays a press.
+      onMove: (st, p) => (Math.abs(p.x - 10) >= 3
+        ? { ...st, phase: 'dragging', x: p.x } as S & { x: number }
+        : st),
+      onUp: (st) => ({
+        state: { phase: 'idle' },
+        result: st.phase === 'dragging' ? `at:${(st as S & { x: number }).x}` : undefined,
+      }),
+      onCancel: () => ({ phase: 'idle' }),
+      isOwnUI: () => false,
+      onResult: (r, st) => got.push([r, st]),
+      target: window,
+    })
+    return { got, handle }
+  }
+
+  const upAt = (x: number) => window.dispatchEvent(new PointerEvent('pointerup', {
+    bubbles: true, cancelable: true, clientX: x, clientY: 10, pointerId: 1,
+  }))
+
+  it('commits the release position, not the last delivered move', () => {
+    const { got, handle } = thresholdHarness()
+    down(el('<li>Row</li>'))
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, clientX: 40, clientY: 10, pointerId: 1,
+    }))
+    // Released 60px further on than the last move that arrived.
+    upAt(100)
+
+    expect(got).toHaveLength(1)
+    expect(got[0]![0]).toBe('at:100')
+    handle.cleanup()
+  })
+
+  it('a press that crosses the threshold only on release still becomes a drag', () => {
+    const { got, handle } = thresholdHarness()
+    down(el('<li>Row</li>'))
+    // No pointermove at all — the entire travel arrives with the release.
+    upAt(60)
+
+    // Previously this produced nothing: the state was still `pressed`, so
+    // `onUp` returned no result and the gesture was discarded as a click.
+    expect(got).toHaveLength(1)
+    expect(got[0]![0]).toBe('at:60')
+    expect(got[0]![1].phase).toBe('dragging')
+    handle.cleanup()
+  })
+
+  it('still treats a motionless press as a click, not a drag', () => {
+    // The other half: feeding release coordinates through `onMove` must not
+    // turn every click into a gesture.
+    const { got, handle } = thresholdHarness()
+    down(el('<li>Row</li>'))
+    upAt(10)
+    expect(got).toEqual([])
     handle.cleanup()
   })
 })

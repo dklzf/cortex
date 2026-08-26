@@ -449,6 +449,39 @@ test.describe('round-1 review: the probe must not be fooled by the page', () => 
     })
     expect(probe).toBeNull()
   })
+
+  test('a SKEWED element isolates the transform guard — the case rotation cannot', async ({ page }) => {
+    // Builds the fixture the note above says was missing.
+    //
+    // Under `rotate(90deg)` the measured size delta is zero, so the
+    // size-did-not-move path refuses even with the guard deleted — the test
+    // above cannot tell the two mechanisms apart. `skewX` keeps the axes
+    // distinct while leaving the delta NON-zero, so only the transform guard
+    // can produce the refusal. Mutation-verified: deleting the guard fails this
+    // test and not the one above.
+    const r = await page.evaluate(() => {
+      const wrap = document.createElement('div')
+      wrap.style.cssText = 'display:block;width:600px'
+      const el = document.createElement('div')
+      el.style.cssText = 'width:200px;height:60px;transform:skewX(30deg)'
+      wrap.appendChild(el)
+      document.body.appendChild(wrap)
+      const CO = (window as unknown as { CO: {
+        probeConstraint: (n: Element, e: string) => unknown
+        measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number; reason: string }
+      } }).CO
+      const probe = CO.probeConstraint(el, 'right')
+      const owner = CO.measureConstraintOwner(el, 'right')
+      wrap.remove()
+      return { probe, edgeResponse: owner.edgeResponse, reason: owner.reason }
+    })
+    expect(r.probe).toBe('transformed')
+    // And the refusal must survive the trip through `measureConstraintOwner`,
+    // which is where it used to be lost: `null` fell through to the predictive
+    // fallback and came back element-owned at 1:1.
+    expect(r.edgeResponse).toBe(0)
+    expect(r.reason).toMatch(/rotated or skewed/)
+  })
 })
 
 test.describe('round-2 review: box models, bases, and axes', () => {
@@ -537,21 +570,56 @@ test.describe('round-3 review: the page can still lie in eleven more ways', () =
     // Under rotate(90deg) the bounding WIDTH comes from the element's HEIGHT, so
     // rect/offset is not an axis scale — it measures the other dimension.
     //
-    // HONEST NOTE, verified by mutation: this refusal is currently
-    // over-determined. Removing the transform guard leaves the test passing,
-    // because a 90-degree rotation also makes the measured size delta zero (the
-    // bounding width tracks the unchanged height), which the size-did-not-move
-    // path catches anyway. The guard is therefore defence-in-depth here rather
-    // than the thing under test — it exists for partial rotations and skews
-    // where the delta is NON-zero and the scale would be silently wrong. I have
-    // not built a fixture that isolates it, so this asserts the behaviour and
-    // says plainly what it does and does not prove.
+    // The note that used to live here said this refusal was over-determined:
+    // removing the transform guard left it passing, because a 90-degree
+    // rotation also zeroes the measured size delta and the size-did-not-move
+    // path catches it anyway. It asked for a fixture isolating the guard, and
+    // the skew test below is it — mutation-verified, deleting the guard now
+    // fails both.
+    //
+    // This one also tightened from `toBeNull()` to the named sentinel, which is
+    // what closed the remaining gap: `null` means "no measurement available"
+    // and falls through to the predictive fallback, while `'transformed'` is a
+    // refusal the caller must honour. Asserting the NAME distinguishes them.
     const probe = await page.evaluate(() => {
       const el = document.getElementById('rotChild')!
       return (window as unknown as { CO: { probeConstraint: (n: Element, e: string) => unknown } })
         .CO.probeConstraint(el, 'right')
     })
-    expect(probe).toBeNull()
+    expect(probe).toBe('transformed')
+  })
+
+  test('a SKEWED element isolates the transform guard — the case rotation cannot', async ({ page }) => {
+    // Builds the fixture the note above says was missing.
+    //
+    // Under `rotate(90deg)` the measured size delta is zero, so the
+    // size-did-not-move path refuses even with the guard deleted — the test
+    // above cannot tell the two mechanisms apart. `skewX` keeps the axes
+    // distinct while leaving the delta NON-zero, so only the transform guard
+    // can produce the refusal. Mutation-verified: deleting the guard fails this
+    // test and not the one above.
+    const r = await page.evaluate(() => {
+      const wrap = document.createElement('div')
+      wrap.style.cssText = 'display:block;width:600px'
+      const el = document.createElement('div')
+      el.style.cssText = 'width:200px;height:60px;transform:skewX(30deg)'
+      wrap.appendChild(el)
+      document.body.appendChild(wrap)
+      const CO = (window as unknown as { CO: {
+        probeConstraint: (n: Element, e: string) => unknown
+        measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number; reason: string }
+      } }).CO
+      const probe = CO.probeConstraint(el, 'right')
+      const owner = CO.measureConstraintOwner(el, 'right')
+      wrap.remove()
+      return { probe, edgeResponse: owner.edgeResponse, reason: owner.reason }
+    })
+    expect(r.probe).toBe('transformed')
+    // And the refusal must survive the trip through `measureConstraintOwner`,
+    // which is where it used to be lost: `null` fell through to the predictive
+    // fallback and came back element-owned at 1:1.
+    expect(r.edgeResponse).toBe(0)
+    expect(r.reason).toMatch(/rotated or skewed/)
   })
 
   test('an element with no style attribute does not gain style=""', async ({ page }) => {
@@ -648,5 +716,52 @@ test.describe('measureConstraintOwner — the probe always cleans up after itsel
     expect(result.thrown).toBe(true)
     expect(result.threwOut).toBe(false)
     expect(result.leftover).toBe('')
+  })
+})
+
+test.describe('measureConstraintOwner — a rotated element refuses instead of guessing', () => {
+  /**
+   * `probeConstraint` refuses on a non-axis-aligned transform because the
+   * rect-to-offset ratio measures the wrong dimension: under `rotate(90deg)`
+   * the bounding WIDTH is derived from the element's HEIGHT.
+   *
+   * That refusal used to be returned as `null`, which the caller treats as "no
+   * measurement available" and answers from the predictive fallback — element
+   * owned, 1:1. So a rotated box grew working handles and committed a CSS width
+   * while the physical edge the user dragged is controlled by height. Now it is
+   * a distinct sentinel, and `edgeResponse: 0` means `canResizeEdge` hides the
+   * handle and `pinToFixed` refuses with the reason.
+   */
+  test('rotate(90deg) yields edgeResponse 0 and says why', async ({ page }) => {
+    const r = await page.evaluate(() => {
+      const el = document.createElement('div')
+      el.style.cssText = 'width:200px;height:60px;transform:rotate(90deg)'
+      document.body.appendChild(el)
+      const out = (window as unknown as { CO: { measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number; reason: string } } })
+        .CO.measureConstraintOwner(el, 'right')
+      el.remove()
+      return out
+    })
+    expect(r.edgeResponse).toBe(0)
+    expect(r.reason).toMatch(/rotated or skewed/)
+  })
+
+  test('an axis-aligned scale still measures normally', async ({ page }) => {
+    // The refusal must be narrow. `scale()` and `translate()` keep the axes
+    // aligned, so they stay measurable — refusing them would hide handles on
+    // any element with a hover-zoom.
+    const r = await page.evaluate(() => {
+      const wrap = document.createElement('div')
+      wrap.style.cssText = 'display:block;width:600px'
+      const el = document.createElement('div')
+      el.style.cssText = 'width:200px;height:60px;transform:scale(1.5) translateX(10px)'
+      wrap.appendChild(el)
+      document.body.appendChild(wrap)
+      const out = (window as unknown as { CO: { measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number } } })
+        .CO.measureConstraintOwner(el, 'right')
+      wrap.remove()
+      return out
+    })
+    expect(r.edgeResponse).toBeGreaterThan(0)
   })
 })

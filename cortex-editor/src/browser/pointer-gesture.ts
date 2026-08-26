@@ -154,12 +154,29 @@ export function installPointerGesture<S extends GesturePhase, R>(
   function handlePointerUp(event: PointerEvent): void {
     if (state.phase === 'idle') return
     if (event.pointerId !== activePointerId) return
-    // Captured BEFORE the transition, because `setState` reassigns `state`
-    // and `onResult` promises the state that produced the result. Reading the
-    // variable after the transition silently handed every consumer the POST
-    // state — and since a reducer typically returns idle on release, that made
-    // any `state.phase !== 'idle'` guard downstream unreachable.
-    const producing = state
+    // The RELEASE position counts, and it is not always the last `pointermove`.
+    //
+    // Browsers coalesce pointer events under load, so a fast drag can end
+    // several pixels past the last move that was delivered — committing from
+    // the stale value writes a size the user did not release at. Worse, a press
+    // that only crosses the threshold ON RELEASE never became a drag at all and
+    // was silently treated as a click, doing nothing.
+    //
+    // Feeding the release coordinates through `onMove` first fixes both: the
+    // reducer sees the true final position, and it can still promote
+    // `pressed` -> `dragging` in the same step.
+    const moved = onMove(state, { x: event.clientX, y: event.clientY })
+    setState(moved)
+
+    // Captured AFTER that move but BEFORE `onUp`'s transition, because
+    // `setState` reassigns `state` and `onResult` promises the state that
+    // produced the result. Reading the variable after the transition silently
+    // handed every consumer the POST state — and since a reducer typically
+    // returns idle on release, that made any `state.phase !== 'idle'` guard
+    // downstream unreachable.
+    const producing = moved
+    // Computed from the POST-move state on purpose: a press promoted to a drag
+    // by the release itself must still swallow the click that follows it.
     const wasDragging = producing.phase === 'dragging'
     const { state: next, result } = onUp(producing)
     setState(next)

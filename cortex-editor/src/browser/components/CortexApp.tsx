@@ -1499,6 +1499,8 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   const [dragState, setDragState] = useState<ReorderDragState>(IDLE)
   const [resizeState, setResizeState] = useState<ResizeDragState>(RESIZE_IDLE)
 
+
+
   // The gesture's ONLY feedback before release.
   //
   // Nothing applies `currentPx` during the drag — the element does not move
@@ -1518,7 +1520,13 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   const [resizeRefusal, setResizeRefusal] = useState<string | null>(null)
   const applyOverrideRef = useRef<((property: string, value: string, commitRender: boolean) => boolean) | null>(null)
   const fanOutTargetsRef = useRef<(() => Element[]) | null>(null)
+  /** The selection as it stood when the current resize press began, or null
+   *  when no press is in flight. */
+  const resizeSelectionAtPressRef = useRef<Element[] | null>(null)
   const [reorderRefusal, setReorderRefusal] = useState<string | null>(null)
+  // Mirrors the live selection for the gesture listeners, which are installed
+  // once and would otherwise close over a stale array. Also what the resize
+  // release compares against its press-time snapshot.
   const selectedElementsRef = useRef(selectedElements)
   selectedElementsRef.current = selectedElements
 
@@ -1589,7 +1597,27 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       getTarget: () => selectedElementRef.current,
       isOwnUI,
       shadowRoot,
-      onStateChange: setResizeState,
+      onStateChange: (next) => {
+        // Snapshot the FULL selection the moment a press begins, so the release
+        // can tell whether the write still reaches the set that was measured.
+        //
+        // Overwritten by each press and NEVER cleared on idle. Clearing there
+        // looked tidier and was wrong: `handlePointerUp` transitions to idle
+        // BEFORE it calls `onResult`, so the snapshot was gone by the time the
+        // comparison below ran, every release read `null`, and every drag
+        // refused with "the selection changed".
+        //
+        // A snapshot is only ever read during a gesture, and a gesture always
+        // begins with a press, so overwriting is sufficient and has no ordering
+        // to get wrong.
+        if (next.phase === 'pressed') {
+          resizeSelectionAtPressRef.current = selectedElementsRef.current.slice()
+          // A new gesture is the honest end of the previous one's message —
+          // see the note on the selection-change effect below.
+          setResizeRefusal(null)
+        }
+        setResizeState(next)
+      },
       onProbeError: setResizeRefusal,
       onResult: (result, state) => {
         // `onResizeUp` only produces a result from the dragging phase, and
@@ -1598,12 +1626,23 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // below, which needs `state.element` and `state.ownership`.
         if (state.phase === 'idle') return
 
-        // The reducer measured `state.element`; `applyOverride` writes to whatever
-        // Panel currently has selected. They agree at pointerdown, and nothing
-        // kept them agreeing across the drag — an HMR re-render or a
+        // The reducer measured `state.element`; `applyOverride` writes to
+        // whatever Panel currently has selected. They agree at pointerdown, and
+        // nothing keeps them agreeing across the drag — an HMR re-render or a
         // programmatic selection change mid-gesture would silently redirect the
-        // write to a different element, using a size measured from the first.
-        if (state.element !== selectedElementRef.current) {
+        // write, using a size measured from a different element.
+        //
+        // The WHOLE selection is compared, not just the primary. Checking
+        // identity alone left a hole: add an element to the selection while the
+        // pointer is held and the primary is unchanged, so the guard passes —
+        // but `applyOverride` fans the primary's pin out to the newcomer, whose
+        // ownership was never measured.
+        const atPress = resizeSelectionAtPressRef.current
+        const now = selectedElementsRef.current
+        const selectionChanged = atPress === null
+          || atPress.length !== now.length
+          || atPress.some((el, i) => el !== now[i])
+        if (state.element !== selectedElementRef.current || selectionChanged) {
           setResizeRefusal('The selection changed while you were resizing, so this was not applied. Try again.')
           return
         }
@@ -1690,9 +1729,18 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
     return () => handle.cleanup()
   }, [active, shadowRoot])
 
-  // Clear a stale refusal when the selection changes — it described the
-  // previous element and would otherwise sit there accusing the new one.
-  useEffect(() => { setResizeRefusal(null) }, [selectedElement])
+  // Cleared when the NEXT gesture starts, not when the selection changes.
+  //
+  // Clearing on `[selectedElement]` was self-defeating for the message that
+  // matters most here: "the selection changed while you were resizing" is
+  // RAISED BY a selection change, and Preact had not yet run that change's
+  // effect when the release set the refusal — so the pending effect fired
+  // afterwards and erased it. The user saw a drag that did nothing and said
+  // nothing, which is the exact failure the refusal exists to prevent.
+  //
+  // A refusal left standing after the user clicks elsewhere is the lesser
+  // problem: it is still the message they need to read, and the next drag
+  // replaces it.
 
   // Clear a stale refusal when the selection changes — it described the
   // previous element and would otherwise sit there accusing the new one.

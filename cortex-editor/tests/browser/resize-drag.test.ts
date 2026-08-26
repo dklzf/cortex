@@ -162,3 +162,55 @@ describe('release', () => {
     expect(onResizeMove(IDLE, { x: 5, y: 5 })).toEqual(IDLE)
   })
 })
+
+describe('onResizeUp — a drag that ends where it began', () => {
+  const owns = { target: 'element', edgeResponse: 1, reason: 'ok' } as ConstraintOwnership
+
+  const dragging = (startPx: number, currentPx: number): ResizeDragState => ({
+    phase: 'dragging', element: document.createElement('div'), edge: 'right',
+    ownership: owns, origin: { x: 0, y: 0 }, startPx, currentPx,
+  })
+
+  /**
+   * Crossing the threshold makes it a drag permanently — there is no path back
+   * to `pressed`. So a user who drags out, changes their mind, and returns to
+   * the original size used to get an explicit pixel pin anyway, plus
+   * `flex: none` or a self-alignment override where those apply. Responsive
+   * behaviour replaced by a gesture that visibly changed nothing.
+   */
+  it('writes nothing when the released size matches the starting size', () => {
+    expect(onResizeUp(dragging(300, 300)).result).toBeUndefined()
+  })
+
+  it('treats a sub-pixel difference as nothing, since the write is rounded', () => {
+    // `pinToFixed` rounds, so 300.4 and 300 produce the identical declaration.
+    // Calling that an edit would write `width: 300px` for no visible change.
+    expect(onResizeUp(dragging(300, 300.4)).result).toBeUndefined()
+  })
+
+  it('still writes for a real change of one pixel', () => {
+    // The bound must not swallow a deliberate nudge.
+    const r = onResizeUp(dragging(300, 301)).result
+    expect(r?.ok).toBe(true)
+    expect(r?.ok === true && r.writes).toEqual([{ property: 'width', value: '301px' }])
+  })
+})
+
+describe('onResizeUp — an inert edge is not a no-op', () => {
+  /**
+   * The two cases produce identical numbers: dragging back to the start, and
+   * an edge that never moved because it cannot. `onResizeMove` holds
+   * `currentPx` at `startPx` for the inert case precisely so the release can
+   * explain itself, so the zero-delta shortcut has to be gated on capability
+   * or it eats that explanation.
+   */
+  it('reports the refusal rather than treating an unchanged size as no edit', () => {
+    const inert = { target: 'element', edgeResponse: 0, reason: 'This element is pinned by its parent.' } as ConstraintOwnership
+    const r = onResizeUp({
+      phase: 'dragging', element: document.createElement('div'), edge: 'right',
+      ownership: inert, origin: { x: 0, y: 0 }, startPx: 300, currentPx: 300,
+    }).result
+    expect(r?.ok).toBe(false)
+    expect(r?.ok === false && r.reason).toMatch(/pinned by its parent/)
+  })
+})
