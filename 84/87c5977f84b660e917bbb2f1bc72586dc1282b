@@ -1,0 +1,23 @@
+cortex-editor/src/browser/reorder-drag-listener.ts
+  s_515b894c608172::t_7d3644652f6012 1-2,8-12,14-15,23,47,50-54,56-66
+cortex-editor/tests/browser/pointer-gesture.test.ts
+  s_515b894c608172::t_f57d0c8fa716f1 1-155
+cortex-editor/src/browser/pointer-gesture.ts
+  s_515b894c608172::t_fb5770888f72c2 1-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "8487c5977f84b660e917bbb2f1bc72586dc1282b",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
