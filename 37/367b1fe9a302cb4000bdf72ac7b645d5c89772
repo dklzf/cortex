@@ -1,0 +1,19 @@
+cortex-editor/tests/e2e/resize-handles-render.spec.ts
+  s_515b894c608172::t_0ce6571ce4e016 80-89,116-117,217-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "37367b1fe9a302cb4000bdf72ac7b645d5c89772",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
