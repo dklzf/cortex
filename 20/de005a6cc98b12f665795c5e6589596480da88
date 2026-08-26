@@ -1,0 +1,22 @@
+cortex-editor/scripts/resolve-oracle.mjs
+  s_515b894c608172::t_aa5346449a2bed 191-198,202-205
+  s_515b894c608172::t_7b6b4dbff5a1e9 48-59,62-68,73-76
+  s_515b894c608172::t_fe83873f2512ae 266,288-338
+  s_515b894c608172::t_306a9bcd636277 86-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "20de005a6cc98b12f665795c5e6589596480da88",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
