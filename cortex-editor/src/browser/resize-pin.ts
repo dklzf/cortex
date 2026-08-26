@@ -124,9 +124,39 @@ export function pinToFixed(
 
     case 'grid-track':
       // The item is stretched to fill its track. Un-stretching it along the
-      // dragged axis lets `width` take effect, and leaves the TRACK alone —
-      // editing `grid-template-columns` would resize the item's neighbours
-      // too, which is not what the user dragged.
+      // dragged axis is what lets `width` take effect at all.
+      //
+      // It does NOT leave the neighbours alone, and an earlier version of this
+      // comment claimed it did. Measured in Chromium 147 (and pinned by
+      // `resize-grid-neighbour.spec.ts`): in `grid-template-columns: 1fr 1fr`
+      // at 600px, pinning one item to 500px takes the sibling from 300 to 100.
+      //
+      // `1fr` is `minmax(auto, 1fr)`, and that `auto` minimum is content-based,
+      // so an explicit `width` RAISES it and the track grows to fit. In a
+      // fixed-width grid that space comes out of the neighbour.
+      // `justify-self` governs the item's alignment INSIDE its track; it has no
+      // say in how the track is sized. The two are separate mechanisms and the
+      // old comment conflated them.
+      //
+      // Kept anyway, because there is no better write available. Measured, all
+      // in the same spec — on a 600px `1fr 1fr` grid, pinning item A to 500px:
+      //
+      //   1fr 1fr                        -> A 500, B 100   (sibling absorbs it)
+      //   1fr 1fr + min-width: 0 on A    -> A 500, B 100   (no effect)
+      //   1fr 1fr + max-width on A       -> A 500, B 100   (no effect)
+      //   minmax(0,1fr) x2               -> A 500, B 300, A OVERFLOWS B
+      //
+      // So NO declaration on the item protects the sibling. The only lever is
+      // the track definition, which lives on the PARENT — and when an author has
+      // already written `minmax(0,1fr)`, the sibling is protected and the item
+      // overflows it instead, which is worse than moving it.
+      //
+      // That is COR-3's whole thesis arriving as a measurement: the parent owns
+      // the allocation, and no child declaration takes that back. The pin can
+      // neutralise the parent's ALIGNMENT control (`justify-self`); its
+      // ALLOCATION control is `grid-template-columns` and stays where it is.
+      // Rewriting that would resize every item in the row, which is not what
+      // the user dragged.
       return {
         ok: true,
         writes: [{ property: SELF_ALIGN[edge], value: 'start' }, { property: size, value }],
