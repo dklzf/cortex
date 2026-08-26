@@ -77,10 +77,16 @@ test.describe('resize handles — the real overlay', () => {
     // an error banner in engine language. Asserting a count of 8 would pin the
     // behaviour this fix removes, so the assertion is on the PROPERTY instead:
     // some handles, none of them inert.
-    expect(r.count).toBeGreaterThan(0)
-    expect(r.count).toBeLessThanOrEqual(8)
-    // Every rendered edge is one the engine said responds.
-    expect(r.edges.every(e => e !== null)).toBe(true)
+    // The EXACT set for this fixture, measured: a plain block element in normal
+    // flow responds on `right` and `bottom` only, so the two right-hand corners
+    // survive and the two left-hand ones do not.
+    //
+    // `toBeGreaterThan(0)` was the first version of this, and it was weaker than
+    // the facts allow: it passes for 1 handle, for 8, and for any wrong subset.
+    // A range assertion where an exact one is available is a test declining to
+    // check the thing it knows.
+    expect(r.count).toBe(4)
+    expect(r.edges.slice().sort()).toEqual(['bottom', 'right', 'right', 'right'])
     // THE assertion this file exists for.
     expect(r.pointerEvents).toEqual(['auto'])
     expect(r.zeroArea).toBe(0)
@@ -107,7 +113,8 @@ test.describe('resize handles — the real overlay', () => {
     // horizontal edge and SAY so. The pairing is the assertion — either half
     // alone can change without the test noticing, and it is the mismatch that
     // misleads a designer.
-    expect(r.corners.length).toBeGreaterThan(0)
+    // Both surviving corners, named. Same reasoning as the count above.
+    expect(r.corners.map(c => c.corner).sort()).toEqual(['ne', 'se'])
     for (const c of r.corners) {
       expect(['left', 'right']).toContain(c.edge)
       expect(c.cursor).toBe('ew-resize')
@@ -207,7 +214,10 @@ test.describe('resize handles — the real overlay', () => {
     await selectElement(page, '#center')
     await page.waitForTimeout(300)
     const single = await report(page)
-    expect('error' in single ? 0 : single.count).toBeGreaterThan(0)
+    // Control with a KNOWN value: if the single-selection case ever stops
+    // rendering 4, this test's premise is gone and the multi-select assertion
+    // below would pass vacuously.
+    expect('error' in single ? 0 : single.count).toBe(4)
 
     // `selectElements` is the multi-select entry point — the single-element
     // `selectElement` shim ignores an action argument, so passing 'add' to it
