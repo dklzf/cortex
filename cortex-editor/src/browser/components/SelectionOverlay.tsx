@@ -1,8 +1,9 @@
 import type { JSX } from 'preact'
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useRef, useMemo } from 'preact/hooks'
 import { getSelectionLabel } from '../label.js'
 import { onTransformUpdate } from '../transform-bus.js'
 import { RESIZE_EDGE_ATTR } from '../resize-drag-listener.js'
+import { canResizeEdge } from '../resize-drag.js'
 import type { ResizeEdge } from '../constraint-owner.js'
 import { onOverrideChange } from '../override-bus.js'
 import type { StateDeclarations, InteractionState } from '../state-detector.js'
@@ -29,17 +30,42 @@ export interface SelectionOverlayProps {
  * Persistent selection outline with transition. Uses RAF to track position
  * continuously (element may move from scroll/resize while selected).
  */
-/** Four edges plus four corners. Corners map to ONE edge — see the render. */
+/**
+ * Four edges plus four corners. Each corner drags ONE edge.
+ *
+ * `measureConstraintOwner` answers per-edge, so a true diagonal resize needs
+ * two probes and two ownership records that can disagree with each other. Until
+ * that is designed, a corner drags a single axis.
+ *
+ * Corners map to the HORIZONTAL edge, and the cursor says so. The first version
+ * mapped all four to a vertical edge while styling them `nwse-resize` — so the
+ * cursor promised a diagonal, dragging one sideways did nothing at all, and
+ * dragging it any direction changed only the height. A cursor that lies about
+ * what a control does is worse than a plain one; `ew-resize` is honest.
+ */
 const RESIZE_HANDLES: { edge: ResizeEdge; corner?: string }[] = [
   { edge: 'top' }, { edge: 'right' }, { edge: 'bottom' }, { edge: 'left' },
-  { edge: 'top', corner: 'nw' }, { edge: 'top', corner: 'ne' },
-  { edge: 'bottom', corner: 'sw' }, { edge: 'bottom', corner: 'se' },
+  { edge: 'left', corner: 'nw' }, { edge: 'right', corner: 'ne' },
+  { edge: 'left', corner: 'sw' }, { edge: 'right', corner: 'se' },
 ]
 
 export function SelectionOverlay({ element, availableStates, activeState, onStateChange, overlaysVisible = true, hmrAppliedVersion = 0, resizable = false }: SelectionOverlayProps): JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null)
   const lensRef = useRef<HTMLDivElement>(null)
   const labelRef = useRef<HTMLSpanElement>(null)
+
+  // Which handles can actually act on THIS element, measured once per
+  // selection. `canResizeEdge` probes, so this must not run per render or per
+  // pointermove — the memo key is the element plus the HMR counter, which is
+  // exactly when layout can have changed underneath us.
+  const usableHandles = useMemo<{ edge: ResizeEdge; corner?: string }[]>(
+    () => (element && resizable
+      ? RESIZE_HANDLES.filter(h => {
+          try { return canResizeEdge(element, h.edge) } catch { return false }
+        })
+      : []),
+    [element, resizable, hmrAppliedVersion],
+  )
 
   // Cached lens dimensions — only re-measured when availableStates changes
   const cachedLensWRef = useRef(120)
@@ -284,7 +310,7 @@ export function SelectionOverlay({ element, availableStates, activeState, onStat
       <span ref={labelRef} class="cortex-label cortex-label--below">
         {label}
       </span>
-      {resizable && RESIZE_HANDLES.map(({ edge, corner }) => (
+      {resizable && usableHandles.map(({ edge, corner }) => (
         <div
           key={corner ?? edge}
           class={`cortex-resize-handle cortex-resize-handle--${corner ?? edge}`}

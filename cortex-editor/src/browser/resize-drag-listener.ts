@@ -29,7 +29,7 @@ export interface ResizeDragOptions {
    */
   shadowRoot?: ShadowRoot
   onStateChange?: (state: ResizeDragState) => void
-  onResult?: (result: ResizeResult) => void
+  onResult?: (result: ResizeResult, state: ResizeDragState) => void
   target?: Window
 }
 

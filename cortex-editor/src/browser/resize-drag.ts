@@ -22,6 +22,30 @@ import { pinToFixed, type PinWrite } from './resize-pin.js'
 /** Pixels the pointer must travel before a press becomes a resize. */
 export const RESIZE_THRESHOLD_PX = 3
 
+/**
+ * Can this edge be dragged at all?
+ *
+ * Measured, not guessed — it runs the same probe the gesture would. In normal
+ * flow an element's top-left is anchored, so changing `width` moves the RIGHT
+ * edge and the left one does not respond: `edgeResponse` is 0 and the drag has
+ * nothing to write. Measured on ordinary layouts, that is 4 of 8 handles on a
+ * plain block element and on a grid item.
+ *
+ * Offering those handles anyway means half of them exist only to produce an
+ * error banner in engine language, on the most common element in any app. The
+ * caller uses this to render only the handles that can act, so the affordance
+ * tells the truth instead of the refusal explaining it afterwards.
+ *
+ * Costs one probe per edge, which is why it is a SELECTION-time question, never
+ * a per-move one — see the note on `beginResize`.
+ */
+export function canResizeEdge(el: Element, edge: ResizeEdge): boolean {
+  const cs = getComputedStyle(el)
+  const size = Number.parseFloat(isHorizontal(edge) ? cs.width : cs.height)
+  if (!Number.isFinite(size) || size <= 0) return false
+  return measureConstraintOwner(el, edge).edgeResponse !== 0
+}
+
 export interface Pointer { x: number; y: number }
 
 export type ResizeDragState =

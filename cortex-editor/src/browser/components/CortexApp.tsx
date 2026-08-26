@@ -1571,7 +1571,16 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       isOwnUI,
       shadowRoot,
       onStateChange: setResizeState,
-      onResult: (result) => {
+      onResult: (result, state) => {
+        // The reducer measured `state.element`; `applyOverride` writes to whatever
+        // Panel currently has selected. They agree at pointerdown, and nothing
+        // kept them agreeing across the drag — an HMR re-render or a
+        // programmatic selection change mid-gesture would silently redirect the
+        // write to a different element, using a size measured from the first.
+        if (state && state.phase !== 'idle' && state.element !== selectedElementRef.current) {
+          setResizeRefusal('The selection changed while you were resizing, so this was not applied. Try again.')
+          return
+        }
         if (!result.ok) {
           // A drag that silently does nothing is indistinguishable from a bug.
           // `measureConstraintOwner` already writes this sentence for a person.
@@ -1655,7 +1664,18 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       <HoverOverlay element={hoverEnabled ? hoveredElement : null} />
       <ReorderDropIndicator state={dragState} />
       <SelectionOverlay
-        resizable
+        // Handles ONLY on a single selection. `beginResize` probes the primary
+        // element and `applyOverride` then fans the result out to every selected
+        // element — so a secondary that is a stretched flex child would receive
+        // `width` alone, the declaration would land in source, and the element
+        // would NOT move. That is precisely the failure the pin design exists to
+        // prevent, arriving through the fan-out door.
+        //
+        // A correct multi-select resize probes per target, which means N
+        // DOM-mutating probes at release. Worth doing deliberately; not worth
+        // shipping the version that silently no-ops on half the selection.
+        // Typed values still fan out — only the GESTURE is gated.
+        resizable={selectedElements.length === 1}
         element={selectedElement}
         availableStates={availableStates}
         activeState={activeState}

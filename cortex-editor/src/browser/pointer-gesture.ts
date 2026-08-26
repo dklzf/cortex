@@ -47,7 +47,9 @@ export interface PointerGestureOptions<S extends GesturePhase, R> {
   /** The element to pin `touch-action` on, given the state `begin` returned. */
   touchTarget?: (state: S) => Element | null
   onStateChange?: (state: S) => void
-  onResult?: (result: R) => void
+  /** Receives the result AND the state that produced it, so a caller can
+   *  verify the gesture still describes what it measured. */
+  onResult?: (result: R, state: S) => void
   /** Injectable for tests; defaults to the real window. */
   target?: Window
 }
@@ -160,7 +162,7 @@ export function installPointerGesture<S extends GesturePhase, R>(
       event.stopPropagation()
       swallowNextClick = true
     }
-    if (result) onResult?.(result)
+    if (result) onResult?.(result, state)
   }
 
   function handleClick(event: MouseEvent): void {

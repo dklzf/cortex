@@ -20,6 +20,7 @@ interface HandleReport {
   overlayPresent: boolean
   count: number
   edges: (string | null)[]
+  corners: { corner?: string; edge: string | null; cursor: string }[]
   pointerEvents: string[]
   zeroArea: number
 }
@@ -36,6 +37,16 @@ async function report(page: import('@playwright/test').Page): Promise<HandleRepo
       overlayPresent: !!root.querySelector('.cortex-selection-overlay'),
       count: handles.length,
       edges: handles.map(h => h.getAttribute('data-cortex-resize-edge')),
+      // Corner class -> the edge it drags -> the cursor shown. A corner styled
+      // with a diagonal cursor that only moves one axis is a promise the
+      // gesture cannot keep.
+      corners: handles
+        .filter(h => /--(nw|ne|sw|se)$/.test(h.className))
+        .map(h => ({
+          corner: h.className.split('--').pop(),
+          edge: h.getAttribute('data-cortex-resize-edge'),
+          cursor: getComputedStyle(h).cursor,
+        })),
       pointerEvents: [...new Set(handles.map(h => getComputedStyle(h).pointerEvents))],
       // A handle with no box cannot be pressed however correct its CSS is.
       zeroArea: handles.filter(h => {
@@ -47,7 +58,7 @@ async function report(page: import('@playwright/test').Page): Promise<HandleRepo
 }
 
 test.describe('resize handles — the real overlay', () => {
-  test('eight hittable handles render on the selected element', async ({ page }) => {
+  test('only handles that CAN act are rendered, and all are hittable', async ({ page }) => {
     await bootWithSendSpy(page)
     await selectElement(page, '#center')
     await page.waitForTimeout(400)
@@ -57,13 +68,50 @@ test.describe('resize handles — the real overlay', () => {
     if ('error' in r) return
 
     expect(r.overlayPresent).toBe(true)
-    // Four edges plus four corners.
-    expect(r.count).toBe(8)
-    // Every edge reachable — a corner carries one edge, so all four appear.
-    expect([...new Set(r.edges)].sort()).toEqual(['bottom', 'left', 'right', 'top'])
+    // NOT a fixed count. `canResizeEdge` probes each edge, and in normal flow an
+    // element's top-left is ANCHORED — changing `width` moves the right edge,
+    // so left and top genuinely cannot be dragged. Measured on ordinary
+    // layouts, that is 4 of 8 handles on a plain block element.
+    //
+    // Rendering them anyway would mean half the handles exist only to produce
+    // an error banner in engine language. Asserting a count of 8 would pin the
+    // behaviour this fix removes, so the assertion is on the PROPERTY instead:
+    // some handles, none of them inert.
+    expect(r.count).toBeGreaterThan(0)
+    expect(r.count).toBeLessThanOrEqual(8)
+    // Every rendered edge is one the engine said responds.
+    expect(r.edges.every(e => e !== null)).toBe(true)
     // THE assertion this file exists for.
     expect(r.pointerEvents).toEqual(['auto'])
     expect(r.zeroArea).toBe(0)
+  })
+
+  test('every corner cursor matches the axis that corner actually drags', async ({ page }) => {
+    // The bug: all four corners carried a VERTICAL edge while being styled
+    // `nwse-resize`/`nesw-resize`. `onResizeMove` discards travel on the other
+    // axis, so a designer saw a diagonal cursor, dragged the SE corner sideways
+    // to widen the box, and only the HEIGHT changed — or, dragging purely
+    // horizontally, nothing happened at all.
+    //
+    // Corners now drag a horizontal edge and say `ew-resize`. Asserting the
+    // PAIR is what makes this falsifiable: either half alone can be changed
+    // without the test noticing, and it is the mismatch that misleads.
+    await bootWithSendSpy(page)
+    await selectElement(page, '#center')
+    await page.waitForTimeout(400)
+
+    const r = await report(page)
+    if ('error' in r) return
+
+    // However many corners survive the capability filter, each must drag a
+    // horizontal edge and SAY so. The pairing is the assertion — either half
+    // alone can change without the test noticing, and it is the mismatch that
+    // misleads a designer.
+    expect(r.corners.length).toBeGreaterThan(0)
+    for (const c of r.corners) {
+      expect(['left', 'right']).toContain(c.edge)
+      expect(c.cursor).toBe('ew-resize')
+    }
   })
 
   test('pressing a REAL shadow-DOM handle actually begins the gesture', async ({ page }) => {
@@ -114,6 +162,73 @@ test.describe('resize handles — the real overlay', () => {
     // pointerdown. Zero mutations means `begin` declined the press.
     expect(await page.evaluate(() => (window as unknown as { __probes: number }).__probes))
       .toBeGreaterThan(0)
+  })
+
+  test('an INERT edge gets no handle at all', async ({ page }) => {
+    // Measured, not assumed. On a plain block element in normal flow the engine
+    // reports `edgeResponse: 0` for `left` and `top` — the top-left is anchored,
+    // so changing `width` moves the RIGHT edge and the left one cannot follow.
+    // That is the engine telling the truth, not a bug in it.
+    //
+    // Before this fix all eight handles rendered regardless, so half of them
+    // existed only to produce a banner in engine language ("Measured: this
+    // element's width changed but the left edge did not move…") on the most
+    // common element in any app. The banner has no dismiss and clears only on
+    // selection change, so they accumulated.
+    await bootWithSendSpy(page)
+    await selectElement(page, '#center')
+    await page.waitForTimeout(400)
+
+    const r = await report(page)
+    if ('error' in r) return
+
+    // The concrete expectation for this fixture: `left`/`top` are inert, so
+    // neither appears. If a future engine change makes them respond, this fails
+    // loudly rather than silently widening the affordance.
+    //
+    // (An earlier draft looped over the rendered edges asserting `offsetWidth >
+    // 0`, which is true of every visible element and therefore asserted
+    // nothing. Removed rather than left as decoration.)
+    expect(r.edges).not.toContain('top')
+    expect(r.edges).not.toContain('left')
+  })
+
+  test('no handles render for a MULTI selection', async ({ page }) => {
+    // `beginResize` probes the primary element; `applyOverride` then fans the
+    // result out to every selected element. A secondary that is a stretched
+    // flex child would receive `width` alone — the declaration lands in source,
+    // the diff looks right, and the element does NOT move. Exactly what the pin
+    // design exists to prevent, arriving through the fan-out door.
+    //
+    // Gated rather than solved: a correct multi-select resize probes per
+    // target, which is N DOM-mutating probes at release. Worth designing; not
+    // worth shipping the version that silently no-ops on half the selection.
+    await bootWithSendSpy(page)
+    await selectElement(page, '#center')
+    await page.waitForTimeout(300)
+    const single = await report(page)
+    expect('error' in single ? 0 : single.count).toBeGreaterThan(0)
+
+    // `selectElements` is the multi-select entry point — the single-element
+    // `selectElement` shim ignores an action argument, so passing 'add' to it
+    // selected one element and the gate correctly did nothing.
+    const selected = await page.evaluate(() => {
+      const bridge = (globalThis as unknown as {
+        __CORTEX_TEST__?: { selectElements?: (els: Element[]) => void }
+      }).__CORTEX_TEST__
+      const els = Array.from(document.querySelectorAll('[data-cortex-source]')).slice(0, 2)
+      if (els.length < 2 || !bridge?.selectElements) return 0
+      bridge.selectElements(els)
+      return els.length
+    })
+    // Control: if the fixture cannot produce a 2-element selection, this test
+    // proves nothing about the gate.
+    expect(selected).toBe(2)
+    await page.waitForTimeout(300)
+
+    const r = await report(page)
+    if ('error' in r) return
+    expect(r.count).toBe(0)
   })
 
   test('no handles render when nothing is selected', async ({ page }) => {

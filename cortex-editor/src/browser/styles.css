@@ -4557,7 +4557,10 @@ button.cortex-token-chip__body:focus-visible {
 .cortex-resize-handle--left   { left: 0; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize }
 .cortex-resize-handle--right  { left: 100%; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize }
 
-.cortex-resize-handle--nw { top: 0; left: 0; transform: translate(-50%, -50%); cursor: nwse-resize }
-.cortex-resize-handle--ne { top: 0; left: 100%; transform: translate(-50%, -50%); cursor: nesw-resize }
-.cortex-resize-handle--sw { top: 100%; left: 0; transform: translate(-50%, -50%); cursor: nesw-resize }
-.cortex-resize-handle--se { top: 100%; left: 100%; transform: translate(-50%, -50%); cursor: nwse-resize }
+/* Corners drag ONE axis (see RESIZE_HANDLES), so the cursor says `ew-resize`
+   rather than a diagonal. A diagonal cursor over a control that resizes one
+   axis is a promise the gesture cannot keep. */
+.cortex-resize-handle--nw { top: 0; left: 0; transform: translate(-50%, -50%); cursor: ew-resize }
+.cortex-resize-handle--ne { top: 0; left: 100%; transform: translate(-50%, -50%); cursor: ew-resize }
+.cortex-resize-handle--sw { top: 100%; left: 0; transform: translate(-50%, -50%); cursor: ew-resize }
+.cortex-resize-handle--se { top: 100%; left: 100%; transform: translate(-50%, -50%); cursor: ew-resize }
