@@ -246,6 +246,9 @@ export interface PanelProps {
    *  and same-tick coalescing into ONE undo entry. Re-implementing any of that
    *  is how the two paths silently diverge. */
   applyOverrideRef?: { current: ((property: string, value: string, commitRender: boolean) => boolean) | null }
+  /** The elements `applyOverride` would currently write to. Same non-gated
+   *  shape as `applyOverrideRef`; see `resolveFanOutTargets`. */
+  fanOutTargetsRef?: { current: (() => Element[]) | null }
   /** TEST-ONLY ref written by Panel — allows the e2e test bridge to directly
    *  append a PendingEdit to the staging buffer without going through the scrub UI.
    *  Only populated when __CORTEX_TEST_BUILD__ is true (DCE'd from prod bundles).
@@ -332,6 +335,7 @@ export function Panel({
   commandStack,
   flushCommitRef,
   applyOverrideRef,
+  fanOutTargetsRef,
   undoInProgressRef,
   channel,
   agentConnected,
@@ -1193,6 +1197,36 @@ export function Panel({
   // Scrub phase: captures previousValue on first touch per property, applies override.
   // On commit (commitRender=true): delegates to commitScrub() for atomic command creation.
   /**
+   * Who this gesture writes to.
+   *
+   * Extracted from `applyOverride` so the resize gesture can see the SAME set
+   * BEFORE it writes. It measured constraint ownership for one element; if the
+   * write is about to reach five, whether that measurement describes them too
+   * is a question only answerable with this list in hand.
+   */
+  const resolveFanOutTargets = useCallback((): Element[] => {
+    const isMulti = selectedElements.length > 1
+    const isAll = sharedInfo && editScope === 'all'
+    if (isMulti && isAll) {
+      const seen = new Set<Element>()
+      for (const sel of selectedElements) {
+        if (!seen.has(sel)) seen.add(sel)
+        try {
+          const shared = detectSharedClasses(sel)
+          if (shared) for (const sib of shared.elements) seen.add(sib)
+        } catch {
+          // detectSharedClasses can throw DOMException SecurityError on
+          // cross-origin querySelector — fall through with just selectedElements.
+        }
+      }
+      return Array.from(seen)
+    }
+    if (isMulti) return selectedElements
+    if (isAll) return sharedInfo!.elements
+    return element ? [element] : []
+  }, [selectedElements, sharedInfo, editScope, element])
+
+  /**
    * Returns whether `element` now carries `value` for `property`.
    *
    * NOT "did I execute a write" — the phantom-recommit guard below returns
@@ -1255,27 +1289,7 @@ export function Panel({
     // nothing until release — can tell "applied" from "silently discarded".
     let applied = true
 
-    const fanOutTargets: Element[] = (() => {
-      const isMulti = selectedElements.length > 1
-      const isAll = sharedInfo && editScope === 'all'
-      if (isMulti && isAll) {
-        const seen = new Set<Element>()
-        for (const sel of selectedElements) {
-          if (!seen.has(sel)) seen.add(sel)
-          try {
-            const shared = detectSharedClasses(sel)
-            if (shared) for (const sib of shared.elements) seen.add(sib)
-          } catch {
-            // detectSharedClasses can throw DOMException SecurityError on
-            // cross-origin querySelector — fall through with just selectedElements.
-          }
-        }
-        return Array.from(seen)
-      }
-      if (isMulti) return selectedElements
-      if (isAll) return sharedInfo!.elements
-      return element ? [element] : []
-    })()
+    const fanOutTargets = resolveFanOutTargets()
 
     for (const el of fanOutTargets) {
       const elSource = getElementEditTarget(el).source
@@ -1306,7 +1320,7 @@ export function Panel({
       }
     }
     return applied
-  }, [selectedElements, element, overrideManager, activePseudo, sharedInfo, editScope, commitScrub, capturePrevious])
+  }, [selectedElements, element, overrideManager, activePseudo, sharedInfo, editScope, commitScrub, capturePrevious, resolveFanOutTargets])
 
   const handleCommit = useCallback((c: SectionChange) => applyOverride(c.property, c.value, true), [applyOverride])
   const handleScrub = useCallback((c: SectionChange) => applyOverride(c.property, c.value, false), [applyOverride])
@@ -1340,6 +1354,16 @@ export function Panel({
       return () => { applyOverrideRef.current = null }
     }
   }, [applyOverrideRef, applyOverride])
+
+  // Same non-gated ref pattern, for the same reason: the resize gesture needs
+  // the fan-out set at release, and capturing it once would go stale the moment
+  // the selection or the scope changed.
+  useEffect(() => {
+    if (fanOutTargetsRef) {
+      fanOutTargetsRef.current = resolveFanOutTargets
+      return () => { fanOutTargetsRef.current = null }
+    }
+  }, [fanOutTargetsRef, resolveFanOutTargets])
 
   /**
    * Dispatch a className mutation (classOp) to the server, optionally followed

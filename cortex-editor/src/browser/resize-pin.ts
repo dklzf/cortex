@@ -1,4 +1,4 @@
-import type { ConstraintOwnership, ResizeEdge } from './constraint-owner.js'
+import { measureConstraintOwner, type ConstraintOwnership, type ResizeEdge } from './constraint-owner.js'
 
 /**
  * What to write so a dragged element ends up at a FIXED size it owns itself.
@@ -162,4 +162,56 @@ export function pinToFixed(
         writes: [{ property: SELF_ALIGN[edge], value: 'start' }, { property: size, value }],
       }
   }
+}
+
+
+/**
+ * Do the other elements this write will reach have the SAME constraint owner?
+ *
+ * A drag measures ONE element. `applyOverride` fans the result out to every
+ * selected element and — when the scope is `all`, which is the default the
+ * moment a shared class exists — to every element sharing that class. So a
+ * single-handle drag on one card routinely writes to several.
+ *
+ * Usually that is fine, because shared-class elements usually sit in the same
+ * container and therefore share a layout context. It stops being fine when the
+ * same class is reused across DIFFERENT containers: `.card` in a flex row here
+ * and a plain block there. The pin for a plain block is `width` alone, and a
+ * stretched flex child receiving `width` alone does not move — the declaration
+ * lands in source and nothing happens, which is exactly the failure
+ * `pinToFixed` exists to prevent, arriving through the fan-out door.
+ *
+ * Costs one probe per target, at release only — never per pointermove. `others`
+ * should exclude the measured element; probing it again would only re-derive
+ * `measured`.
+ */
+export function fanOutOwnershipConflicts(
+  measured: ConstraintOwnership,
+  others: Element[],
+  edge: ResizeEdge,
+): { element: Element; ownership: ConstraintOwnership }[] {
+  const conflicts: { element: Element; ownership: ConstraintOwnership }[] = []
+  for (const el of others) {
+    let owner: ConstraintOwnership
+    try {
+      owner = measureConstraintOwner(el, edge)
+    } catch {
+      // A target we cannot measure is a target we cannot vouch for. Counting it
+      // as a conflict is the conservative read, and it keeps a cross-origin or
+      // detached element from being silently treated as agreeing — "I could not
+      // check" and "I checked and it is fine" are different answers.
+      conflicts.push({
+        element: el,
+        ownership: { ...measured, target: 'element', edgeResponse: 0, reason: 'cortex could not measure this element.' },
+      })
+      continue
+    }
+    // `target` is what decides WHICH declarations the pin writes, so it is the
+    // field that has to agree. `edgeResponse` is a magnitude and will differ by
+    // a few percent between siblings without changing what gets written.
+    if (owner.target !== measured.target || owner.edgeResponse === 0) {
+      conflicts.push({ element: el, ownership: owner })
+    }
+  }
+  return conflicts
 }

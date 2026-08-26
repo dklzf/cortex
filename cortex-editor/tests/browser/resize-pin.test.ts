@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pinToFixed } from '../../src/browser/resize-pin.js'
+import { pinToFixed, fanOutOwnershipConflicts } from '../../src/browser/resize-pin.js'
 import type { ConstraintOwnership } from '../../src/browser/constraint-owner.js'
 
 /**
@@ -129,5 +129,40 @@ describe('pinToFixed — numbers that must never become CSS', () => {
     const r = pinToFixed(owns(), 'right', 8000)
     expect(r.ok).toBe(true)
     expect(r.ok === true && r.writes).toEqual([{ property: 'width', value: '8000px' }])
+  })
+})
+
+describe('fanOutOwnershipConflicts — the write reaches more than was measured', () => {
+  const own = (over: Partial<ConstraintOwnership> = {}): ConstraintOwnership => ({
+    target: 'element', edgeResponse: 1, reason: 'ok', ...over,
+  } as ConstraintOwnership)
+
+  function block(css: string, parentCss = ''): HTMLElement {
+    const parent = document.createElement('div')
+    parent.setAttribute('style', parentCss)
+    const el = document.createElement('div')
+    el.setAttribute('style', css)
+    parent.appendChild(el)
+    document.body.appendChild(parent)
+    return el
+  }
+
+  it('reports nothing when there is nobody else to write to', () => {
+    // The single-selection, scope-instance case: no fan-out, no question.
+    expect(fanOutOwnershipConflicts(own(), [], 'right')).toEqual([])
+  })
+
+  it('counts an element it cannot measure as a conflict, not as agreement', () => {
+    // The conservative read. A cross-origin or detached sibling that throws
+    // must not be silently treated as agreeing — "I could not check" and
+    // "I checked and it is fine" are different answers.
+    const hostile = block('width:100px;height:40px')
+    Object.defineProperty(hostile, 'getBoundingClientRect', {
+      value: () => { throw new TypeError('nope') },
+    })
+    const conflicts = fanOutOwnershipConflicts(own(), [hostile], 'right')
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]!.element).toBe(hostile)
+    expect(conflicts[0]!.ownership.reason).toMatch(/could not measure/)
   })
 })

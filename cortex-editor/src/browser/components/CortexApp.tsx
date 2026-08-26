@@ -30,6 +30,7 @@ import { ReorderDropIndicator } from './ReorderDropIndicator.js'
 import { PropertyEditCommand } from '../edit-command.js'
 import { installReorderDrag } from '../reorder-drag-listener.js'
 import { installResizeDrag } from '../resize-drag-listener.js'
+import { fanOutOwnershipConflicts } from '../resize-pin.js'
 import { IDLE as RESIZE_IDLE, type ResizeDragState } from '../resize-drag.js'
 import { IDLE, type ReorderDragState } from '../reorder-drag.js'
 import { CapabilityBanner } from './CapabilityBanner.js'
@@ -1516,6 +1517,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   )
   const [resizeRefusal, setResizeRefusal] = useState<string | null>(null)
   const applyOverrideRef = useRef<((property: string, value: string, commitRender: boolean) => boolean) | null>(null)
+  const fanOutTargetsRef = useRef<(() => Element[]) | null>(null)
   const [reorderRefusal, setReorderRefusal] = useState<string | null>(null)
   const selectedElementsRef = useRef(selectedElements)
   selectedElementsRef.current = selectedElements
@@ -1590,12 +1592,18 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       onStateChange: setResizeState,
       onProbeError: setResizeRefusal,
       onResult: (result, state) => {
+        // `onResizeUp` only produces a result from the dragging phase, and
+        // `pointer-gesture` hands over the state that PRODUCED the result — so
+        // this is unreachable. It is here to narrow the union for everything
+        // below, which needs `state.element` and `state.ownership`.
+        if (state.phase === 'idle') return
+
         // The reducer measured `state.element`; `applyOverride` writes to whatever
         // Panel currently has selected. They agree at pointerdown, and nothing
         // kept them agreeing across the drag — an HMR re-render or a
         // programmatic selection change mid-gesture would silently redirect the
         // write to a different element, using a size measured from the first.
-        if (state && state.phase !== 'idle' && state.element !== selectedElementRef.current) {
+        if (state.element !== selectedElementRef.current) {
           setResizeRefusal('The selection changed while you were resizing, so this was not applied. Try again.')
           return
         }
@@ -1614,6 +1622,51 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
           setResizeRefusal('The panel is still starting up — try that again in a moment.')
           return
         }
+        // Held rather than shown immediately: the success path below ends in
+        // `setResizeRefusal(null)`, so setting it here would put the warning on
+        // screen and wipe it two statements later. The message is only true if
+        // the writes actually land, which is not known yet.
+        let mixedFanOutWarning: string | null = null
+
+        // The measurement covered ONE element; the write may reach several.
+        // See `fanOutOwnershipConflicts` for why they can disagree.
+        const targets = fanOutTargetsRef.current?.() ?? []
+        const others = targets.filter(t => t !== state.element)
+        const conflicts = others.length
+          ? fanOutOwnershipConflicts(state.ownership, others, state.edge)
+          : []
+
+        if (conflicts.length > 0) {
+          // Write anyway, and say so at once.
+          //
+          // Chosen over refusing because fan-out is a deliberate product
+          // decision, not an accident: dragging one card is MEANT to resize the
+          // set. Refusing the gesture because one member of the set is laid out
+          // differently would make the common case pay for the uncommon one,
+          // and a drag that does nothing is the failure this whole surface
+          // exists to avoid.
+          //
+          // Chosen over writing silently because the write genuinely is partly
+          // wrong: a stretched flex child receiving `width` alone does not move,
+          // and the declaration still reaches its source. The user would see
+          // most of the group resize, one hold still, and have no way to tell
+          // whether that was cortex or their own CSS.
+          //
+          // So the honest report is a COUNT — how many, out of how many — plus
+          // the escape hatch that already exists. Not a list of elements: the
+          // user is looking at the page mid-gesture, and naming DOM nodes in a
+          // banner is not something anyone can act on from there. The scope
+          // toggle is, and it is one click away.
+          //
+          // Deliberately does NOT return: the writes below still run.
+          const n = conflicts.length
+          mixedFanOutWarning =
+            `Resized ${targets.length} elements that share this class. `
+            + `${n === 1 ? 'One of them is' : `${n} of them are`} laid out differently `
+            + `and may not move — switch this edit to a single element if that is wrong. `
+            + `Undo puts all of it back in one step.`
+        }
+
         // Every write in ONE tick: `commitScrub` coalesces same-tick writes
         // into a single undo entry, so a `flex: none` + `width` pin is one
         // Cmd+Z, not two. The final `true` is what schedules that commit.
@@ -1629,7 +1682,9 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
           setResizeRefusal('cortex could not apply that size, so nothing was changed.')
           return
         }
-        setResizeRefusal(null)
+        // The fan-out warning, if any, describes writes that just succeeded —
+        // so it belongs here, after they did, and not before.
+        setResizeRefusal(mixedFanOutWarning)
       },
     })
     return () => handle.cleanup()
@@ -1666,7 +1721,12 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
           <div class="cortex-reorder-refusal" role="status">{reorderRefusal}</div>
         )}
         {resizeRefusal !== null && (
-          <div class="cortex-reorder-refusal" role="status">{resizeRefusal}</div>
+          // Keeps `cortex-reorder-refusal` for the styling, which is shared on
+          // purpose — the two banners are the same kind of message and should
+          // not look like different systems. The second class exists so the two
+          // are TELLABLE APART: with one class, a test asserting "the resize
+          // banner says X" would pass just as happily on a reorder banner.
+          <div class="cortex-reorder-refusal cortex-resize-refusal" role="status">{resizeRefusal}</div>
         )}
       </div>
       <TooltipLayer shadowRoot={shadowRoot} />
@@ -1730,6 +1790,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
           commandStack={commandStackRef.current}
           flushCommitRef={flushCommitRef}
       applyOverrideRef={applyOverrideRef}
+      fanOutTargetsRef={fanOutTargetsRef}
           stageEditRef={__CORTEX_TEST_BUILD__ ? stageEditRef : undefined}
           commitEditRef={__CORTEX_TEST_BUILD__ ? commitEditRef : undefined}
           undoInProgressRef={undoInProgressRef}
