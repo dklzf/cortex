@@ -78,10 +78,30 @@ export function installResizeDrag(options: ResizeDragOptions): ResizeDragHandle 
       // happy-dom does not — and calling it blind threw inside the pointerdown
       // handler, taking an UNRELATED panel-drag test down with it. A gesture
       // module must not be able to break the page's other listeners.
-      const inner = typeof shadowRoot?.elementFromPoint === 'function'
-        ? shadowRoot.elementFromPoint(event.clientX, event.clientY)
+      const canProbeRoot = typeof shadowRoot?.elementFromPoint === 'function'
+      const inner = canProbeRoot
+        ? shadowRoot!.elementFromPoint(event.clientX, event.clientY)
         : null
-      return inner ?? (event.target instanceof Element ? event.target : null)
+
+      // When a shadow root IS available, its answer is the ONLY answer.
+      //
+      // Falling back to `event.target` here made a confused deputy. Both gates
+      // this gesture passes through are page-settable ATTRIBUTES: `isOwnUI`
+      // looks for `[data-cortex-host]` on the composed path, and `begin` does
+      // `closest('[data-cortex-resize-edge]')`. Two attributes in
+      // server-rendered HTML — no script needed — would arm a working resize
+      // handle in light DOM, and a user's ordinary 3px drag on an
+      // ordinary-looking element would silently resize whatever cortex had
+      // selected, writing to their source.
+      //
+      // In production the root is always supplied and the handles are always
+      // inside it, so this costs nothing real. The fallback stays for callers
+      // with light-DOM handles (the synthetic e2e fixture) and for happy-dom,
+      // which has no `ShadowRoot.elementFromPoint` — but it is now reachable
+      // only when there is no root to ask, rather than whenever the root's
+      // answer is inconvenient.
+      if (canProbeRoot) return inner
+      return event.target instanceof Element ? event.target : null
     },
     begin: (pressed, pointer) => {
       // `closest` rather than reading the attribute off `pressed` directly: a

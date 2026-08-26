@@ -598,3 +598,55 @@ test.describe('round-3 review: the page can still lie in eleven more ways', () =
     expect(o.target).toBe('grid-track')
   })
 })
+
+test.describe('measureConstraintOwner — the probe always cleans up after itself', () => {
+  /**
+   * The probe writes an inline `!important` size AND `transition: none` before
+   * measuring, then restores both in a `finally`.
+   *
+   * Those restores were a bare sequence, which defeated the point of the
+   * `finally`: a throw in the size restore skipped the transition restore, and
+   * the element kept `transition: none !important` permanently — the probe's
+   * scaffolding left on the user's page as an invisible style change nothing
+   * would ever undo.
+   *
+   * Has to be a browser test. In happy-dom the probe returns from a zero-rect
+   * early exit before writing anything, so the same assertions would pass
+   * without the fix and prove nothing.
+   */
+  test('restores the transition even when the size restore throws', async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const el = document.createElement('div')
+      // Height only, deliberately: with NO inline width, the size restore takes
+      // the `removeProperty` branch, which is the one poisoned below. An inline
+      // width would send it through `setProperty` instead and the poison would
+      // never fire — the first version of this test passed for that reason.
+      el.style.cssText = 'height:60px'
+      document.body.appendChild(el)
+
+      // Throw on the FIRST restore only.
+      const realRemove = el.style.removeProperty.bind(el.style)
+      let thrown = false
+      el.style.removeProperty = ((prop: string) => {
+        if (!thrown && prop === 'width') { thrown = true; throw new TypeError('poisoned') }
+        return realRemove(prop)
+      }) as typeof el.style.removeProperty
+
+      let threwOut = false
+      try {
+        (window as unknown as { CO: { measureConstraintOwner: (n: Element, e: string) => unknown } })
+          .CO.measureConstraintOwner(el, 'right')
+      } catch { threwOut = true }
+
+      const leftover = el.style.getPropertyValue('transition')
+      el.remove()
+      // `thrown` proves the probe actually reached the restore — without it
+      // this test could pass on an early exit and assert nothing.
+      return { thrown, threwOut, leftover }
+    })
+
+    expect(result.thrown).toBe(true)
+    expect(result.threwOut).toBe(false)
+    expect(result.leftover).toBe('')
+  })
+})

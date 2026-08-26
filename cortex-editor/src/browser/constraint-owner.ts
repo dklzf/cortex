@@ -365,6 +365,18 @@ const EPSILON = 0.5
  *  zero disables the edge outright. Raised in review. */
 const EDGE_EPSILON = 0.02
 
+/**
+ * Run one probe-cleanup step, absorbing its failure so the next one still runs.
+ *
+ * Only reachable through a page that has poisoned `CSSStyleDeclaration`, which
+ * is why this warns rather than surfacing: there is no user action to take, and
+ * the caller has already been handed a measurement. What matters is that a
+ * failure here cannot strand the probe's scaffolding on the element.
+ */
+function restore(step: () => void): void {
+  try { step() } catch (err) { console.warn('[cortex] probe cleanup step failed:', err) }
+}
+
 export interface ConstraintProbe {
   /** Used-size change actually obtained, in the same (possibly transformed)
    *  space as `edgeDelta`, so their ratio is unit-consistent. */
@@ -716,11 +728,27 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
       scale,
     }
   } finally {
-    if (priorValue) el.style.setProperty(sizeProperty, priorValue, priorPriority)
-    else el.style.removeProperty(sizeProperty)
-    if (priorTransition) el.style.setProperty('transition', priorTransition, priorTransitionPriority)
-    else el.style.removeProperty('transition')
-    if (!hadStyleAttr && el.getAttribute('style') === '') el.removeAttribute('style')
+    // Each restore stands alone.
+    //
+    // These ran as a bare sequence, which quietly defeated the point of the
+    // `finally`: if the size restore threw, the TRANSITION restore never ran
+    // and the element kept `transition: none !important` forever — the probe's
+    // scaffolding left behind as a permanent, invisible style change on the
+    // user's page.
+    //
+    // A `finally` exists to guarantee cleanup runs. Cleanup steps that can
+    // cancel each other are not that guarantee, they only look like it.
+    restore(() => {
+      if (priorValue) el.style.setProperty(sizeProperty, priorValue, priorPriority)
+      else el.style.removeProperty(sizeProperty)
+    })
+    restore(() => {
+      if (priorTransition) el.style.setProperty('transition', priorTransition, priorTransitionPriority)
+      else el.style.removeProperty('transition')
+    })
+    restore(() => {
+      if (!hadStyleAttr && el.getAttribute('style') === '') el.removeAttribute('style')
+    })
   }
 }
 

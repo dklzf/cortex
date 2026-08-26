@@ -201,3 +201,9 @@ describe('pointerDeltaToSizeDelta', () => {
     expect(pointerDeltaToSizeDelta(own(1), edge, pointer)).toBe(expected)
   })
 })
+
+// The probe's cleanup guarantee is tested in real Chromium, not here — see
+// `constraint-owner-measured.spec.ts`. happy-dom does not lay out, so
+// `measureConstraintOwner` returns from one of its zero-rect early exits
+// before it ever writes the scaffolding this would be checking. A version of
+// this test living here would pass without the fix and prove nothing.

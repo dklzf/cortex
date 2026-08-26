@@ -101,3 +101,77 @@ describe('installResizeDrag — when the measurement probe throws', () => {
     knob.remove()
   })
 })
+
+describe('installResizeDrag — a page cannot arm its own handle', () => {
+  /**
+   * Both gates are page-settable ATTRIBUTES: `isOwnUI` looks for
+   * `[data-cortex-host]` on the composed path, and `begin` does
+   * `closest('[data-cortex-resize-edge]')`. So two attributes in
+   * server-rendered HTML — from a CMS, no script required — used to be enough
+   * to arm a real resize handle in light DOM. A user's ordinary drag on an
+   * ordinary-looking element would then resize whatever cortex had selected
+   * and write that to their source.
+   *
+   * With a shadow root supplied, its hit-test is the only answer.
+   */
+  it('declines a light-DOM element wearing the handle attribute', () => {
+    const target = document.createElement('div')
+    target.style.width = '200px'
+    target.style.height = '100px'
+    document.body.appendChild(target)
+
+    // The impostor: exactly what a page can write into its own markup.
+    const impostor = document.createElement('div')
+    impostor.setAttribute('data-cortex-host', '')
+    impostor.setAttribute(RESIZE_EDGE_ATTR, 'right')
+    document.body.appendChild(impostor)
+
+    // A root that answers "nothing of mine is there" — the truthful answer for
+    // a press that landed on the page.
+    const root = { elementFromPoint: () => null } as unknown as ShadowRoot
+
+    const states: string[] = []
+    const handle = installResizeDrag({
+      getTarget: () => target,
+      isOwnUI: () => true,
+      shadowRoot: root,
+      onStateChange: (s) => states.push(s.phase),
+      target: window,
+    })
+
+    press(impostor)
+    // No gesture began. Before the fix, `event.target` was the impostor and
+    // `closest` matched its attribute, so this armed a real drag.
+    expect(states).toEqual([])
+
+    handle.cleanup()
+    target.remove()
+    impostor.remove()
+  })
+
+  it('still resolves through event.target when there is no root to ask', () => {
+    // The fallback has a real caller — light-DOM handles in the synthetic e2e
+    // fixture, and happy-dom, which has no `ShadowRoot.elementFromPoint`.
+    // Narrowing it must not delete it.
+    const target = document.createElement('div')
+    target.style.width = '200px'
+    target.style.height = '100px'
+    document.body.appendChild(target)
+    const knob = handleFor('right')
+
+    const states: string[] = []
+    const handle = installResizeDrag({
+      getTarget: () => target,
+      isOwnUI: () => true,
+      onStateChange: (s) => states.push(s.phase),
+      target: window,
+    })
+
+    press(knob)
+    expect(states).toEqual(['pressed'])
+
+    handle.cleanup()
+    target.remove()
+    knob.remove()
+  })
+})

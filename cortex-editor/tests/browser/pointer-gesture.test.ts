@@ -206,3 +206,39 @@ describe('installPointerGesture — the state handed to onResult', () => {
     handle.cleanup()
   })
 })
+
+describe('installPointerGesture — the click swallow cannot outlive its gesture', () => {
+  /**
+   * A completed drag arms `swallowNextClick` so the synthetic click that
+   * follows does not ALSO change the selection. But the browser does not always
+   * send that click — a pointerup outside the window, an interrupted touch
+   * sequence — and `click` was the only thing that cleared the flag. It would
+   * then sit armed and eat an unrelated click later, which is the kind of bug
+   * that gets reported as "the app randomly ignores me".
+   */
+  it('does not eat a click belonging to a later, separate interaction', () => {
+    const { handle } = harness()
+    const row = el('<li>Row</li>')
+
+    // A complete drag, with no click delivered afterwards.
+    down(row)
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, clientX: 99, clientY: 10, pointerId: 1,
+    }))
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, cancelable: true, clientX: 99, clientY: 10, pointerId: 1,
+    }))
+
+    // A NEW press — proof the previous gesture's click is never arriving.
+    down(row)
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, cancelable: true, clientX: 10, clientY: 10, pointerId: 1,
+    }))
+
+    // This click belongs to the second interaction and must reach the page.
+    const later = new MouseEvent('click', { bubbles: true, cancelable: true })
+    window.dispatchEvent(later)
+    expect(later.defaultPrevented).toBe(false)
+    handle.cleanup()
+  })
+})

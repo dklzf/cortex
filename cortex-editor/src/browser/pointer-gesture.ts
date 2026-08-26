@@ -95,6 +95,15 @@ export function installPointerGesture<S extends GesturePhase, R>(
   }
 
   function handlePointerDown(event: PointerEvent): void {
+    // Disarm here as well as on `click`.
+    //
+    // The flag is set on every completed drag to eat the synthetic click that
+    // follows. But the browser does not always send one — a pointerup outside
+    // the window, an interrupted touch sequence — and with `click` as the only
+    // way to clear it, the flag would sit armed indefinitely and swallow some
+    // unrelated click minutes later. A press starting a NEW interaction proves
+    // the old one's click is never coming.
+    swallowNextClick = false
     if (state.phase !== 'idle') return
     if (event.button !== 0) return // primary button only; right-click opens menus
     if (isOwnUI(event)) return
