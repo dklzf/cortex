@@ -245,7 +245,7 @@ export interface PanelProps {
    *  ("Editing all N", COR-12), multi-select, pseudo handling, phantom guards,
    *  and same-tick coalescing into ONE undo entry. Re-implementing any of that
    *  is how the two paths silently diverge. */
-  applyOverrideRef?: { current: ((property: string, value: string, commitRender: boolean) => void) | null }
+  applyOverrideRef?: { current: ((property: string, value: string, commitRender: boolean) => boolean) | null }
   /** TEST-ONLY ref written by Panel — allows the e2e test bridge to directly
    *  append a PendingEdit to the staging buffer without going through the scrub UI.
    *  Only populated when __CORTEX_TEST_BUILD__ is true (DCE'd from prod bundles).
@@ -1192,12 +1192,24 @@ export function Panel({
 
   // Scrub phase: captures previousValue on first touch per property, applies override.
   // On commit (commitRender=true): delegates to commitScrub() for atomic command creation.
-  const applyOverride = useCallback((property: string, value: string, commitRender: boolean) => {
+  /**
+   * Returns whether `element` now carries `value` for `property`.
+   *
+   * NOT "did I execute a write" — the phantom-recommit guard below returns
+   * early having VERIFIED the value is already in place, and that is a success
+   * for any caller asking "did my edit land". Only the genuine drops (undo in
+   * flight, no element, a value the override manager rejects) are `false`.
+   *
+   * The distinction is load-bearing for the resize gesture, which is the first
+   * caller to read this: treating the phantom guard as failure would show a
+   * refusal every time a user dragged back to a size they had already set.
+   */
+  const applyOverride = useCallback((property: string, value: string, commitRender: boolean): boolean => {
     // Suppress phantom re-edits triggered by Preact re-renders after undo/redo.
     // Preact's setTimeout-based batching fires AFTER the keyboard handler completes,
     // causing section inputs to re-render with new values and fire onChange.
-    if (undoInProgressRef?.current) return
-    if (!element) return
+    if (undoInProgressRef?.current) return false
+    if (!element) return false
     const primaryTarget = getElementEditTarget(element)
     const source = primaryTarget.source
     const pseudo = activePseudo !== 'element' ? activePseudo : undefined
@@ -1215,7 +1227,9 @@ export function Panel({
         const currentOverride = overrideManager.get(source, property, pseudo)
         if (currentOverride === value) {
           scrubPreviousRef.current.delete(prevKey)
-          return
+          // Already there — see this callback's doc comment on why this is
+          // reported as success rather than a drop.
+          return true
         }
         // Override was removed externally — stale guard entry, clear it
         lastCommitValueRef.current.delete(prevKey)
@@ -1236,6 +1250,11 @@ export function Panel({
     //   the live preview misses what `commitScrub`'s instanceSources will dispatch
     //   to the server, producing preview/apply divergence.
     // Single-select + scope='instance': apply to the primary element only.
+    // Set false by any target the override manager rejects. Returned at the
+    // end so a caller with no other feedback channel — a drag, which shows
+    // nothing until release — can tell "applied" from "silently discarded".
+    let applied = true
+
     const fanOutTargets: Element[] = (() => {
       const isMulti = selectedElements.length > 1
       const isAll = sharedInfo && editScope === 'all'
@@ -1268,7 +1287,10 @@ export function Panel({
       // `sharedInfo.elements`, a flat-query snapshot that need not contain a
       // shadow-hosted `element`.
       capturePrevious(el, elSource, property, pseudo, elPrevKey)
-      overrideManager.set(elSource, property, value, pseudo)
+      // EVERY target must land, not just the primary. A fan-out where one
+      // sibling's write is rejected leaves the group visibly inconsistent, and
+      // that is precisely the state a caller needs to hear about.
+      if (!overrideManager.set(elSource, property, value, pseudo)) applied = false
     }
 
     if (commitRender) {
@@ -1283,6 +1305,7 @@ export function Panel({
         })
       }
     }
+    return applied
   }, [selectedElements, element, overrideManager, activePseudo, sharedInfo, editScope, commitScrub, capturePrevious])
 
   const handleCommit = useCallback((c: SectionChange) => applyOverride(c.property, c.value, true), [applyOverride])

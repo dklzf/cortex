@@ -1498,7 +1498,7 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   const [dragState, setDragState] = useState<ReorderDragState>(IDLE)
   const [resizeState, setResizeState] = useState<ResizeDragState>(RESIZE_IDLE)
   const [resizeRefusal, setResizeRefusal] = useState<string | null>(null)
-  const applyOverrideRef = useRef<((property: string, value: string, commitRender: boolean) => void) | null>(null)
+  const applyOverrideRef = useRef<((property: string, value: string, commitRender: boolean) => boolean) | null>(null)
   const [reorderRefusal, setReorderRefusal] = useState<string | null>(null)
   const selectedElementsRef = useRef(selectedElements)
   selectedElementsRef.current = selectedElements
@@ -1600,8 +1600,18 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         // Every write in ONE tick: `commitScrub` coalesces same-tick writes
         // into a single undo entry, so a `flex: none` + `width` pin is one
         // Cmd+Z, not two. The final `true` is what schedules that commit.
-        result.writes.forEach((w, i) =>
+        const landed = result.writes.map((w, i) =>
           apply(w.property, w.value, i === result.writes.length - 1))
+
+        // Declaring success unconditionally was the gesture's worst failure
+        // mode. There is NO in-drag preview — the element does not move until
+        // release — so the only feedback for the whole gesture is what happens
+        // now. A dropped write and a landed one looked identical, and clearing
+        // the refusal actively asserted the drag had worked.
+        if (landed.some(ok => !ok)) {
+          setResizeRefusal('cortex could not apply that size, so nothing was changed.')
+          return
+        }
         setResizeRefusal(null)
       },
     })
