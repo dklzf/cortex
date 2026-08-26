@@ -2,8 +2,11 @@ cortex-editor/src/version.ts
   s_bbde566b990012::t_b196b17f079f40 4
 cortex-editor/package.json
   s_bbde566b990012::t_b196b17f079f40 3
+  s_e149370edac404::t_a347abebec940b 4
 cortex-editor/CHANGELOG.md
   s_bbde566b990012::t_77577e52b075f2 5-18
+.gitignore
+  s_e149370edac404::t_b2a31cf9dc7222 44-48
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -18,6 +21,14 @@ cortex-editor/CHANGELOG.md
         "model": "claude-opus-4-8"
       },
       "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    },
+    "s_e149370edac404": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4ebdef96-b790-4995-aa78-abaa802d962e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
     }
   }
 }

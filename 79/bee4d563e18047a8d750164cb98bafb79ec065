@@ -90,6 +90,7 @@ cortex-editor/src/adapters/next-dev-scripts.ts
   s_bbde566b990012::t_2b92afdcf01f7d 131-150
 cortex-editor/README.md
   s_bbde566b990012::t_0d9aa1bc8386e9 56
+  s_e149370edac404::t_391297cc5c9653 7,9-15,22-35,37-43,45-47,49-52,58,63,67,77
 dev-app-next/package.json
   s_bbde566b990012::t_57d5a232f16a8c 11
 cortex-editor/src/adapters/atomic-write.ts
@@ -106,6 +107,8 @@ cortex-editor/tests/e2e/next-config-inspector-exit.spec.ts
   s_bbde566b990012::t_be2a71ceaddc5d 50
 dev-app-next/package-lock.json
   s_bbde566b990012::t_f8a6ae91b2bc27 11,24,44,51,62,74-76,565-567,571-573,587-589,603-605,619-621,635-637,651-653,667-669,683-685,815-817,820,822,834-842
+README.md
+  s_e149370edac404::t_ef8f645bad4595 19-26,29-30,32-38,40-46,48-56,58-66,68,70,72-74,76-84,86,88-90,92,94-100,104-106
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -118,6 +121,14 @@ dev-app-next/package-lock.json
         "tool": "claude",
         "id": "b0f4fb44-6981-42bb-810b-9f8c930540f4",
         "model": "claude-fable-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    },
+    "s_e149370edac404": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4ebdef96-b790-4995-aa78-abaa802d962e",
+        "model": "claude-opus-4-7"
       },
       "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
     }
