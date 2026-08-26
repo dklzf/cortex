@@ -1,0 +1,23 @@
+cortex-editor/src/browser/resize-pin.ts
+  s_515b894c608172::t_76b9b70610805c 127-140
+  s_515b894c608172::t_0e9436e0bc2bc1 141-159
+cortex-editor/tests/e2e/resize-grid-neighbour.spec.ts
+  s_515b894c608172::t_0e9436e0bc2bc1 38-42,47-73,77-78,80
+  s_515b894c608172::t_76b9b70610805c 1-37,43-46,74-76,79,81-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "84baa7e7b921c5e2481e31d4d3e275433906bc40",
+  "prompts": {},
+  "sessions": {
+    "s_515b894c608172": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3faed161-0957-49e5-9eb2-d05dc9d660ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dklzf <213919963+dklzf@users.noreply.github.com>"
+    }
+  }
+}
