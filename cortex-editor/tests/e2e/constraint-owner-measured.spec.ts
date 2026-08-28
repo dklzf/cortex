@@ -838,3 +838,49 @@ test.describe('measureConstraintOwner — indeterminate probes must not become g
     expect(r.reason).toMatch(/animating/)
   })
 })
+
+test.describe('measureConstraintOwner — the root element counts as an ancestor', () => {
+  /**
+   * A page may rotate `html` itself, which transforms every element beneath it.
+   * The first ancestry walk stopped one short of the root, so that single
+   * ancestor — the one that transforms everything — was the one it skipped.
+   */
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => { document.documentElement.style.transform = '' })
+  })
+
+  test('a transform on <html> is caught', async ({ page }) => {
+    const r = await page.evaluate(() => {
+      document.documentElement.style.transform = 'rotate(20deg)'
+      const host = document.createElement('div')
+      host.style.cssText = 'display:block;width:600px'
+      const el = document.createElement('div')
+      el.style.cssText = 'width:200px;height:60px'
+      host.appendChild(el)
+      document.body.appendChild(host)
+      const out = (window as unknown as { CO: { measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number; reason: string } } })
+        .CO.measureConstraintOwner(el, 'right')
+      host.remove()
+      return out
+    })
+    expect(r.edgeResponse).toBe(0)
+    expect(r.reason).toMatch(/rotated or skewed/)
+  })
+
+  test('an untransformed root still measures normally', async ({ page }) => {
+    // Walking one element further must not make everything refuse.
+    const r = await page.evaluate(() => {
+      const host = document.createElement('div')
+      host.style.cssText = 'display:block;width:600px'
+      const el = document.createElement('div')
+      el.style.cssText = 'width:200px;height:60px'
+      host.appendChild(el)
+      document.body.appendChild(host)
+      const out = (window as unknown as { CO: { measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number } } })
+        .CO.measureConstraintOwner(el, 'right')
+      host.remove()
+      return out
+    })
+    expect(r.edgeResponse).toBeGreaterThan(0)
+  })
+})

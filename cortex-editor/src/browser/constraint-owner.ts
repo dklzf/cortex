@@ -513,11 +513,20 @@ function hasNonAxisAlignedTransform(style: CSSStyleDeclaration): boolean {
  * the same rect/offset confusion applies: the width of the bounding box is
  * derived from the element's height once the chain turns it 90 degrees.
  *
- * Walks to the document root. Cheap because it runs once, at press.
+ * Walks THROUGH the document root, `<html>` included.
+ *
+ * The first version stopped one short of it — `node !== document.documentElement`
+ * — which felt like a sensible boundary and was not one: a page is free to put
+ * `transform: rotate(...)` on `html`, and that rotates every element beneath
+ * it. Excluding the root excluded the one ancestor that transforms literally
+ * everything. `documentElement.parentElement` is null, so the plain walk
+ * terminates on its own and the special case bought nothing.
+ *
+ * Cheap because it runs once, at press.
  */
 function hasNonAxisAlignedAncestry(el: Element): boolean {
   let node: Element | null = el
-  while (node && node !== document.documentElement) {
+  while (node) {
     const style = getComputedStyle(node)
     if (hasNonAxisAlignedTransform(style)) return true
     node = node.parentElement
