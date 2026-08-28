@@ -1,6 +1,6 @@
 import type { JSX } from 'preact'
 import { render as preactRender } from 'preact'
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import type { CortexChannel, ConnectionDisplay, Annotation, StyleCapability } from '../../adapters/types.js'
 import type { EditError } from './EditErrorCard.js'
 import { CSSOverrideManager } from '../override.js'
@@ -29,6 +29,9 @@ import { ErrorToast } from './ErrorToast.js'
 import { ReorderDropIndicator } from './ReorderDropIndicator.js'
 import { PropertyEditCommand } from '../edit-command.js'
 import { installReorderDrag } from '../reorder-drag-listener.js'
+import { installResizeDrag } from '../resize-drag-listener.js'
+import { fanOutOwnershipConflicts } from '../resize-pin.js'
+import { IDLE as RESIZE_IDLE, type ResizeDragState } from '../resize-drag.js'
 import { IDLE, type ReorderDragState } from '../reorder-drag.js'
 import { CapabilityBanner } from './CapabilityBanner.js'
 import { InactiveTabBanner } from './InactiveTabBanner.js'
@@ -1494,7 +1497,36 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
   // COR-7 — drag to reorder. Installed alongside selection because they wire
   // the same surface; kept as its own handle so its listeners detach with it.
   const [dragState, setDragState] = useState<ReorderDragState>(IDLE)
+  const [resizeState, setResizeState] = useState<ResizeDragState>(RESIZE_IDLE)
+
+
+
+  // The gesture's ONLY feedback before release.
+  //
+  // Nothing applies `currentPx` during the drag — the element does not move
+  // until pointerup — so without this the user drags against a static page and
+  // finds out afterwards whether anything happened. Deriving it here rather
+  // than writing a style keeps the preview out of the override manager's way:
+  // no MutationRecords, no fight with the RAF loop, nothing to undo.
+  //
+  // This is also what makes `resizeState` a READ. It was write-only, so every
+  // pointermove re-rendered CortexApp to produce no output at all.
+  const resizePreview = useMemo(
+    () => (resizeState.phase === 'dragging'
+      ? { label: `${resizeState.edge === 'left' || resizeState.edge === 'right' ? 'W' : 'H'} ${Math.round(resizeState.currentPx)}` }
+      : null),
+    [resizeState],
+  )
+  const [resizeRefusal, setResizeRefusal] = useState<string | null>(null)
+  const applyOverrideRef = useRef<((property: string, value: string, commitRender: boolean) => boolean) | null>(null)
+  const fanOutTargetsRef = useRef<(() => Element[]) | null>(null)
+  /** The selection as it stood when the current resize press began, or null
+   *  when no press is in flight. */
+  const resizeSelectionAtPressRef = useRef<Element[] | null>(null)
   const [reorderRefusal, setReorderRefusal] = useState<string | null>(null)
+  // Mirrors the live selection for the gesture listeners, which are installed
+  // once and would otherwise close over a stale array. Also what the resize
+  // release compares against its press-time snapshot.
   const selectedElementsRef = useRef(selectedElements)
   selectedElementsRef.current = selectedElements
 
@@ -1552,6 +1584,164 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
     return () => handle.cleanup()
   }, [active, buffer])
 
+  // COR-3 — drag an edge to resize. Installed beside the reorder gesture; the
+  // two are mutually exclusive by construction rather than by a race, because
+  // the reorder listener declines any press on cortex chrome and every resize
+  // handle IS cortex chrome.
+  // `selectedElementRef` is declared once near the top of this component and
+  // kept current there; reading it here rather than re-declaring means the
+  // gesture always sees the live selection without a second source of truth.
+  useEffect(() => {
+    if (!active) return
+    const handle = installResizeDrag({
+      getTarget: () => selectedElementRef.current,
+      isOwnUI,
+      shadowRoot,
+      onStateChange: (next) => {
+        // Snapshot the FULL selection the moment a press begins, so the release
+        // can tell whether the write still reaches the set that was measured.
+        //
+        // Overwritten by each press and NEVER cleared on idle. Clearing there
+        // looked tidier and was wrong: `handlePointerUp` transitions to idle
+        // BEFORE it calls `onResult`, so the snapshot was gone by the time the
+        // comparison below ran, every release read `null`, and every drag
+        // refused with "the selection changed".
+        //
+        // A snapshot is only ever read during a gesture, and a gesture always
+        // begins with a press, so overwriting is sufficient and has no ordering
+        // to get wrong.
+        if (next.phase === 'pressed') {
+          resizeSelectionAtPressRef.current = selectedElementsRef.current.slice()
+          // A new gesture is the honest end of the previous one's message —
+          // see the note on the selection-change effect below.
+          setResizeRefusal(null)
+        }
+        setResizeState(next)
+      },
+      onProbeError: setResizeRefusal,
+      onResult: (result, state) => {
+        // `onResizeUp` only produces a result from the dragging phase, and
+        // `pointer-gesture` hands over the state that PRODUCED the result — so
+        // this is unreachable. It is here to narrow the union for everything
+        // below, which needs `state.element` and `state.ownership`.
+        if (state.phase === 'idle') return
+
+        // The reducer measured `state.element`; `applyOverride` writes to
+        // whatever Panel currently has selected. They agree at pointerdown, and
+        // nothing keeps them agreeing across the drag — an HMR re-render or a
+        // programmatic selection change mid-gesture would silently redirect the
+        // write, using a size measured from a different element.
+        //
+        // The WHOLE selection is compared, not just the primary. Checking
+        // identity alone left a hole: add an element to the selection while the
+        // pointer is held and the primary is unchanged, so the guard passes —
+        // but `applyOverride` fans the primary's pin out to the newcomer, whose
+        // ownership was never measured.
+        const atPress = resizeSelectionAtPressRef.current
+        const now = selectedElementsRef.current
+        const selectionChanged = atPress === null
+          || atPress.length !== now.length
+          || atPress.some((el, i) => el !== now[i])
+        if (state.element !== selectedElementRef.current || selectionChanged) {
+          setResizeRefusal('The selection changed while you were resizing, so this was not applied. Try again.')
+          return
+        }
+        if (!result.ok) {
+          // A drag that silently does nothing is indistinguishable from a bug.
+          // `measureConstraintOwner` already writes this sentence for a person.
+          setResizeRefusal(result.reason)
+          return
+        }
+        const apply = applyOverrideRef.current
+        if (!apply) {
+          // Panel populates the ref in an effect, so it is null before first
+          // paint. Refusing loudly beats writing through a path that is not
+          // there — silently dropping the gesture is what this whole surface
+          // exists to avoid.
+          setResizeRefusal('The panel is still starting up — try that again in a moment.')
+          return
+        }
+        // Held rather than shown immediately: the success path below ends in
+        // `setResizeRefusal(null)`, so setting it here would put the warning on
+        // screen and wipe it two statements later. The message is only true if
+        // the writes actually land, which is not known yet.
+        let mixedFanOutWarning: string | null = null
+
+        // The measurement covered ONE element; the write may reach several.
+        // See `fanOutOwnershipConflicts` for why they can disagree.
+        const targets = fanOutTargetsRef.current?.() ?? []
+        const others = targets.filter(t => t !== state.element)
+        const conflicts = others.length
+          ? fanOutOwnershipConflicts(state.ownership, others, state.edge)
+          : []
+
+        if (conflicts.length > 0) {
+          // Write anyway, and say so at once.
+          //
+          // Chosen over refusing because fan-out is a deliberate product
+          // decision, not an accident: dragging one card is MEANT to resize the
+          // set. Refusing the gesture because one member of the set is laid out
+          // differently would make the common case pay for the uncommon one,
+          // and a drag that does nothing is the failure this whole surface
+          // exists to avoid.
+          //
+          // Chosen over writing silently because the write genuinely is partly
+          // wrong: a stretched flex child receiving `width` alone does not move,
+          // and the declaration still reaches its source. The user would see
+          // most of the group resize, one hold still, and have no way to tell
+          // whether that was cortex or their own CSS.
+          //
+          // So the honest report is a COUNT — how many, out of how many — plus
+          // the escape hatch that already exists. Not a list of elements: the
+          // user is looking at the page mid-gesture, and naming DOM nodes in a
+          // banner is not something anyone can act on from there. The scope
+          // toggle is, and it is one click away.
+          //
+          // Deliberately does NOT return: the writes below still run.
+          const n = conflicts.length
+          mixedFanOutWarning =
+            `Resized ${targets.length} elements that share this class. `
+            + `${n === 1 ? 'One of them is' : `${n} of them are`} laid out differently `
+            + `and may not move — switch this edit to a single element if that is wrong. `
+            + `Undo puts all of it back in one step.`
+        }
+
+        // Every write in ONE tick: `commitScrub` coalesces same-tick writes
+        // into a single undo entry, so a `flex: none` + `width` pin is one
+        // Cmd+Z, not two. The final `true` is what schedules that commit.
+        const landed = result.writes.map((w, i) =>
+          apply(w.property, w.value, i === result.writes.length - 1))
+
+        // Declaring success unconditionally was the gesture's worst failure
+        // mode. There is NO in-drag preview — the element does not move until
+        // release — so the only feedback for the whole gesture is what happens
+        // now. A dropped write and a landed one looked identical, and clearing
+        // the refusal actively asserted the drag had worked.
+        if (landed.some(ok => !ok)) {
+          setResizeRefusal('cortex could not apply that size, so nothing was changed.')
+          return
+        }
+        // The fan-out warning, if any, describes writes that just succeeded —
+        // so it belongs here, after they did, and not before.
+        setResizeRefusal(mixedFanOutWarning)
+      },
+    })
+    return () => handle.cleanup()
+  }, [active, shadowRoot])
+
+  // Cleared when the NEXT gesture starts, not when the selection changes.
+  //
+  // Clearing on `[selectedElement]` was self-defeating for the message that
+  // matters most here: "the selection changed while you were resizing" is
+  // RAISED BY a selection change, and Preact had not yet run that change's
+  // effect when the release set the refusal — so the pending effect fired
+  // afterwards and erased it. The user saw a drag that did nothing and said
+  // nothing, which is the exact failure the refusal exists to prevent.
+  //
+  // A refusal left standing after the user clicks elsewhere is the lesser
+  // problem: it is still the message they need to read, and the next drag
+  // replaces it.
+
   // Clear a stale refusal when the selection changes — it described the
   // previous element and would otherwise sit there accusing the new one.
   useEffect(() => { setReorderRefusal(null) }, [selectedElement])
@@ -1578,6 +1768,14 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
         {reorderRefusal !== null && (
           <div class="cortex-reorder-refusal" role="status">{reorderRefusal}</div>
         )}
+        {resizeRefusal !== null && (
+          // Keeps `cortex-reorder-refusal` for the styling, which is shared on
+          // purpose — the two banners are the same kind of message and should
+          // not look like different systems. The second class exists so the two
+          // are TELLABLE APART: with one class, a test asserting "the resize
+          // banner says X" would pass just as happily on a reorder banner.
+          <div class="cortex-reorder-refusal cortex-resize-refusal" role="status">{resizeRefusal}</div>
+        )}
       </div>
       <TooltipLayer shadowRoot={shadowRoot} />
       {/* Wrapper shifts toolbar + every position:fixed UI down by the
@@ -1602,6 +1800,19 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
       <HoverOverlay element={hoverEnabled ? hoveredElement : null} />
       <ReorderDropIndicator state={dragState} />
       <SelectionOverlay
+        // Handles ONLY on a single selection. `beginResize` probes the primary
+        // element and `applyOverride` then fans the result out to every selected
+        // element — so a secondary that is a stretched flex child would receive
+        // `width` alone, the declaration would land in source, and the element
+        // would NOT move. That is precisely the failure the pin design exists to
+        // prevent, arriving through the fan-out door.
+        //
+        // A correct multi-select resize probes per target, which means N
+        // DOM-mutating probes at release. Worth doing deliberately; not worth
+        // shipping the version that silently no-ops on half the selection.
+        // Typed values still fan out — only the GESTURE is gated.
+        resizable={selectedElements.length === 1}
+        resizePreview={resizePreview}
         element={selectedElement}
         availableStates={availableStates}
         activeState={activeState}
@@ -1626,6 +1837,8 @@ export function CortexApp({ channel, shadowRoot, initialActive }: CortexAppProps
           overrideManager={overrideRef.current}
           commandStack={commandStackRef.current}
           flushCommitRef={flushCommitRef}
+      applyOverrideRef={applyOverrideRef}
+      fanOutTargetsRef={fanOutTargetsRef}
           stageEditRef={__CORTEX_TEST_BUILD__ ? stageEditRef : undefined}
           commitEditRef={__CORTEX_TEST_BUILD__ ? commitEditRef : undefined}
           undoInProgressRef={undoInProgressRef}

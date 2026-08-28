@@ -365,6 +365,21 @@ const EPSILON = 0.5
  *  zero disables the edge outright. Raised in review. */
 const EDGE_EPSILON = 0.02
 
+/**
+ * Run one probe-cleanup step, absorbing its failure so the next one still runs.
+ *
+ * Only reachable through a page that has poisoned `CSSStyleDeclaration`, which
+ * is why this warns rather than surfacing: there is no user action to take, and
+ * the caller has already been handed a measurement. What matters is that a
+ * failure here cannot strand the probe's scaffolding on the element.
+ */
+function restore(step: () => void): Error | null {
+  try { step(); return null } catch (err) {
+    console.warn('[cortex] probe cleanup step failed:', err)
+    return err instanceof Error ? err : new Error(String(err))
+  }
+}
+
 export interface ConstraintProbe {
   /** Used-size change actually obtained, in the same (possibly transformed)
    *  space as `edgeDelta`, so their ratio is unit-consistent. */
@@ -470,6 +485,16 @@ function draggingFlexMainAxis(edge: ResizeEdge, containerStyle: CSSStyleDeclarat
  *  when b and c are both zero; `matrix3d` is rejected outright rather than
  *  decomposed, because getting that wrong is silent. */
 function hasNonAxisAlignedTransform(style: CSSStyleDeclaration): boolean {
+  // The INDIVIDUAL `rotate` property, which is not folded into `transform`.
+  //
+  // `rotate: 45deg` leaves `transform` reading `none`, so a check that looked
+  // only at `transform` passed it straight through and the rect/offset ratio
+  // was then measuring the wrong dimension. `scale` and `translate` are the
+  // other two individual properties and both keep the axes aligned, so only
+  // this one matters here.
+  const r = (style.rotate || 'none').trim()
+  if (r !== 'none' && r !== '' && !/^0(deg|rad|turn|grad)?$/.test(r)) return true
+
   const t = (style.transform || 'none').trim()
   if (t === 'none' || t === '') return false
   const m = /^matrix\(([^)]+)\)$/.exec(t)
@@ -478,6 +503,35 @@ function hasNonAxisAlignedTransform(style: CSSStyleDeclaration): boolean {
   const b = parts[1] ?? 0
   const c = parts[2] ?? 0
   return Math.abs(b) > 1e-6 || Math.abs(c) > 1e-6
+}
+
+/**
+ * Is this element rotated by anything — its own style OR an ancestor's?
+ *
+ * A rotation on an ancestor rotates this element too, and the element's own
+ * computed `transform` says nothing about it. The rect is in screen space, so
+ * the same rect/offset confusion applies: the width of the bounding box is
+ * derived from the element's height once the chain turns it 90 degrees.
+ *
+ * Walks THROUGH the document root, `<html>` included.
+ *
+ * The first version stopped one short of it — `node !== document.documentElement`
+ * — which felt like a sensible boundary and was not one: a page is free to put
+ * `transform: rotate(...)` on `html`, and that rotates every element beneath
+ * it. Excluding the root excluded the one ancestor that transforms literally
+ * everything. `documentElement.parentElement` is null, so the plain walk
+ * terminates on its own and the special case bought nothing.
+ *
+ * Cheap because it runs once, at press.
+ */
+function hasNonAxisAlignedAncestry(el: Element): boolean {
+  let node: Element | null = el
+  while (node) {
+    const style = getComputedStyle(node)
+    if (hasNonAxisAlignedTransform(style)) return true
+    node = node.parentElement
+  }
+  return false
 }
 
 /** The min/max property the element is sitting on, if the probe stopped there.
@@ -567,7 +621,7 @@ const siblingsDiffer = (a: DOMRect[], b: DOMRect[]): boolean =>
  * changed the layout it was trying to measure (a crossed flex-wrap boundary).
  * Both mean "unknown", never "no response".
  */
-export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintProbe | 'inert' | null {
+export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintProbe | 'inert' | 'transformed' | 'animating' | 'unstable' | null {
   const el = element as HTMLElement
   if (!el.style || typeof el.getBoundingClientRect !== 'function') return null
 
@@ -611,7 +665,14 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
   // HEIGHT, so the ratio measures the wrong dimension entirely. Detect any
   // non-axis-aligned matrix and refuse rather than report a confident number
   // built from the other axis. Raised in review.
-  if (hasNonAxisAlignedTransform(own)) return null
+  // A REAL answer, not a missing one — same distinction `'inert'` makes.
+  //
+  // Returning `null` here sent the caller to the predictive fallback, which
+  // reports element-owned at a 1:1 ratio. So a rotated box grew usable handles
+  // and committed a CSS width, while the physical axis the user dragged is not
+  // the axis that width controls: on a 90deg-rotated element, dragging the
+  // right edge changes its VERTICAL extent. Confidently wrong, silently.
+  if (hasNonAxisAlignedTransform(own) || hasNonAxisAlignedAncestry(el)) return 'transformed'
   const offsetSize = inline ? el.offsetWidth : el.offsetHeight
   const scale = offsetSize > 0 ? baseSize / offsetSize : 1
   const cssBase = Number.parseFloat(own.getPropertyValue(sizeProperty))
@@ -650,7 +711,12 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
     // were the probe's doing. Refusing is right — the element is mid-flight, so
     // there is no stable layout to measure and any number would describe a frame
     // rather than a constraint. Raised in review.
-    if (el.getAnimations && el.getAnimations().some(a => a.playState === 'running')) return null
+    // INDETERMINATE, not unavailable. A running animation means every rect read
+    // describes a frame the user is not dragging in, so the numbers are not
+    // wrong-but-close, they are meaningless. Returning `null` sent this to the
+    // predictive fallback, which answered element-owned at 1:1 and let the
+    // gesture commit a pin derived from geometry the probe had just rejected.
+    if (el.getAnimations && el.getAnimations().some(a => a.playState === 'running')) return 'animating'
     el.style.setProperty('transition', 'none', 'important')
 
     let after = perturb(PROBE_PX)
@@ -704,7 +770,12 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
           const b = before.siblings[i]
           return !!b && Math.abs(crossOf(a) - crossOf(b)) > EPSILON
         })
-      if (lineChanged) return null
+      // Same class as the animation case: the probe tipped the flex line into
+      // a different wrapping, so it measured an arrangement that does not exist
+      // at rest. Falling back to prediction here is the one thing that must not
+      // happen — the whole reason this branch detects wrapping is that the edge
+      // can jump tens of pixels the wrong way.
+      if (lineChanged) return 'unstable'
     }
 
     return {
@@ -716,11 +787,45 @@ export function probeConstraint(element: Element, edge: ResizeEdge): ConstraintP
       scale,
     }
   } finally {
-    if (priorValue) el.style.setProperty(sizeProperty, priorValue, priorPriority)
-    else el.style.removeProperty(sizeProperty)
-    if (priorTransition) el.style.setProperty('transition', priorTransition, priorTransitionPriority)
-    else el.style.removeProperty('transition')
-    if (!hadStyleAttr && el.getAttribute('style') === '') el.removeAttribute('style')
+    // Each restore stands alone.
+    //
+    // These ran as a bare sequence, which quietly defeated the point of the
+    // `finally`: if the size restore threw, the TRANSITION restore never ran
+    // and the element kept `transition: none !important` forever — the probe's
+    // scaffolding left behind as a permanent, invisible style change on the
+    // user's page.
+    //
+    // A `finally` exists to guarantee cleanup runs. Cleanup steps that can
+    // cancel each other are not that guarantee, they only look like it.
+    const failures = [
+      restore(() => {
+        if (priorValue) el.style.setProperty(sizeProperty, priorValue, priorPriority)
+        else el.style.removeProperty(sizeProperty)
+      }),
+      restore(() => {
+        if (priorTransition) el.style.setProperty('transition', priorTransition, priorTransitionPriority)
+        else el.style.removeProperty('transition')
+      }),
+      restore(() => {
+        if (!hadStyleAttr && el.getAttribute('style') === '') el.removeAttribute('style')
+      }),
+    ].filter((e): e is Error => e !== null)
+
+    // Every step ran; NOW the first failure propagates.
+    //
+    // Swallowing it entirely was the previous version's flaw, and a worse one
+    // than the bug it fixed. If the size restore throws, the probe's
+    // `width: ... !important` stays installed while `probeConstraint` returns a
+    // perfectly successful-looking measurement — so the element has been
+    // permanently resized, outside the override manager and outside undo, and
+    // the gesture proceeds as though nothing happened.
+    //
+    // Throwing from `finally` deliberately replaces the pending return. That is
+    // the semantics wanted: a corrupted probe must not be reported as a
+    // measurement. Both callers already handle it — `canResizeEdge` catches and
+    // hides the handle, and the listener's `begin` catches, warns, and surfaces
+    // a refusal.
+    if (failures[0]) throw failures[0]
   }
 }
 
@@ -753,6 +858,33 @@ export function measureConstraintOwner(element: Element, edge: ResizeEdge): Cons
       reason:
         `${sizeProp} does not apply to a non-replaced inline element, so no ${sizeProp} value can ` +
         `move this edge. Give it display: inline-block or block first.`,
+    }
+  }
+  if (probe === 'animating' || probe === 'unstable') {
+    const sizeProp = INLINE_EDGES.has(edge) ? 'width' : 'height'
+    return {
+      target: 'element',
+      property: sizeProp,
+      appliesTo: 'self',
+      edgeResponse: 0,
+      screenPxPerCssPx: 1,
+      reason: probe === 'animating'
+        ? 'This element is animating, so cortex cannot measure a stable size for it. Try again once it settles.'
+        : 'Resizing this element rearranges the row it sits in, so cortex cannot tell how far the edge would actually move.',
+    }
+  }
+  if (probe === 'transformed') {
+    const sizeProp = INLINE_EDGES.has(edge) ? 'width' : 'height'
+    return {
+      target: 'element',
+      property: sizeProp,
+      appliesTo: 'self',
+      edgeResponse: 0,
+      screenPxPerCssPx: 1,
+      reason:
+        `This element (or something it sits inside) is rotated or skewed, so the ` +
+        `edge you dragged is not the edge ${sizeProp} controls. cortex cannot tell ` +
+        `which way to resize it.`,
     }
   }
   if (!probe) return resolveConstraintOwner(element, edge)

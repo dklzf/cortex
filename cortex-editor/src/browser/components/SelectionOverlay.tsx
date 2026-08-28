@@ -1,7 +1,10 @@
 import type { JSX } from 'preact'
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useRef, useMemo } from 'preact/hooks'
 import { getSelectionLabel } from '../label.js'
 import { onTransformUpdate } from '../transform-bus.js'
+import { RESIZE_EDGE_ATTR } from '../resize-drag-listener.js'
+import { canResizeEdge } from '../resize-drag.js'
+import type { ResizeEdge } from '../constraint-owner.js'
 import { onOverrideChange } from '../override-bus.js'
 import type { StateDeclarations, InteractionState } from '../state-detector.js'
 
@@ -17,17 +20,97 @@ export interface SelectionOverlayProps {
    *  up. Without this dep, the loop's idle-until-change optimization
    *  leaves the overlay glued to the old position — ZF0-1292. */
   hmrAppliedVersion?: number
+  /** Show resize handles. Off by default so the overlay stays a pure outline
+   *  for callers that only want selection feedback — and so the SECONDARY
+   *  overlay, which reuses the class but not this component, cannot grow them. */
+  resizable?: boolean
+  /**
+   * Live size readout while a resize drag is in flight; `null` when idle.
+   *
+   * The drag does NOT move the element — the write happens on release — so
+   * without this the entire gesture has no feedback at all, and a drag that
+   * gets refused looks exactly like a drag that worked. A number that tracks
+   * the pointer is the cheapest honest signal: it needs no style write, so it
+   * cannot fight the override manager or the MutationObserver watching it.
+   */
+  resizePreview?: { label: string } | null
 }
 
 /**
  * Persistent selection outline with transition. Uses RAF to track position
  * continuously (element may move from scroll/resize while selected).
  */
-export function SelectionOverlay({ element, availableStates, activeState, onStateChange, overlaysVisible = true, hmrAppliedVersion = 0 }: SelectionOverlayProps): JSX.Element | null {
+/**
+ * Four edges plus four corners. Each corner drags ONE edge.
+ *
+ * `measureConstraintOwner` answers per-edge, so a true diagonal resize needs
+ * two probes and two ownership records that can disagree with each other. Until
+ * that is designed, a corner drags a single axis.
+ *
+ * Corners map to the HORIZONTAL edge, and the cursor says so. The first version
+ * mapped all four to a vertical edge while styling them `nwse-resize` — so the
+ * cursor promised a diagonal, dragging one sideways did nothing at all, and
+ * dragging it any direction changed only the height. A cursor that lies about
+ * what a control does is worse than a plain one; `ew-resize` is honest.
+ */
+const RESIZE_HANDLES: { edge: ResizeEdge; corner?: string }[] = [
+  { edge: 'top' }, { edge: 'right' }, { edge: 'bottom' }, { edge: 'left' },
+  { edge: 'left', corner: 'nw' }, { edge: 'right', corner: 'ne' },
+  { edge: 'left', corner: 'sw' }, { edge: 'right', corner: 'se' },
+]
+
+export function SelectionOverlay({ element, availableStates, activeState, onStateChange, overlaysVisible = true, hmrAppliedVersion = 0, resizable = false, resizePreview = null }: SelectionOverlayProps): JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null)
   const lensRef = useRef<HTMLDivElement>(null)
   const labelRef = useRef<HTMLSpanElement>(null)
 
+  // Which handles can actually act on THIS element, measured once per
+  // selection. `canResizeEdge` probes, so this must not run per render or per
+  // pointermove — the memo key is the element plus the HMR counter, which is
+  // exactly when layout can have changed underneath us.
+  //
+  // A THROWN probe is not an inert edge, and collapsing the two hid the only
+  // report of it. `catch { return false }` dropped every handle, so the press
+  // that would have reached `installResizeDrag`'s `onProbeError` could never
+  // happen — the event path was hardened to explain this exact failure and the
+  // explanation was unreachable through the UI. Kept separate and reported.
+  const { handles: usableHandles, probeError } = useMemo<{
+    handles: { edge: ResizeEdge; corner?: string }[]
+    probeError: string | null
+  }>(() => {
+    if (!element || !resizable) return { handles: [], probeError: null }
+    const handles: { edge: ResizeEdge; corner?: string }[] = []
+    let failed = false
+    for (const h of RESIZE_HANDLES) {
+      try {
+        if (canResizeEdge(element, h.edge)) handles.push(h)
+      } catch (err) {
+        // One warning per failing edge is noise; the first one carries the
+        // diagnostic and the rest are the same page lying the same way.
+        if (!failed) console.warn('[cortex] resize capability probe failed on', element, err)
+        failed = true
+      }
+    }
+    return {
+      handles,
+      // Only when NOTHING is measurable. A page that breaks one edge's probe
+      // while the others answer leaves usable handles, and a banner over a
+      // working affordance is worse than no banner.
+      probeError: failed && handles.length === 0
+        ? 'cortex could not measure this element, so it cannot offer resize handles for it.'
+        : null,
+    }
+  }, [element, resizable, hmrAppliedVersion])
+
+  // Reported through an effect, not during render — calling a parent's setState
+  // mid-render is a Preact warning and an update-depth risk.
+  //
+  // Only NON-null values are pushed. The memo re-evaluates on every re-render
+  // that changes its deps, and any pass where `resizable` is momentarily false
+  // yields `probeError: null` — pushing that would immediately erase a real
+  // error reported milliseconds earlier, which is exactly what happened.
+  // Clearing belongs to the parent, on selection change, because that is the
+  // scope a probe error actually has.
   // Cached lens dimensions — only re-measured when availableStates changes
   const cachedLensWRef = useRef(120)
   const cachedLensHRef = useRef(24)
@@ -271,6 +354,35 @@ export function SelectionOverlay({ element, availableStates, activeState, onStat
       <span ref={labelRef} class="cortex-label cortex-label--below">
         {label}
       </span>
+      {resizable && usableHandles.map(({ edge, corner }) => (
+        <div
+          key={corner ?? edge}
+          class={`cortex-resize-handle cortex-resize-handle--${corner ?? edge}`}
+          // The edge this handle DRAGS. A corner carries one edge too: dragging
+          // a corner resizes along one axis at a time, which keeps the gesture
+          // honest — `measureConstraintOwner` answers per-edge, and pretending a
+          // corner is two simultaneous edges would need two probes and two
+          // ownership records that can disagree.
+          {...{ [RESIZE_EDGE_ATTR]: edge }}
+        />
+      ))}
+      {probeError && (
+        // Rendered HERE rather than reported to CortexApp for it to render.
+        //
+        // Three attempts at the callback version each died on effect ordering:
+        // a child's reporting effect runs before the parent's clearing effect,
+        // so the message was set and erased in the same commit. The round trip
+        // bought nothing — this is a fact the overlay computes, about the
+        // element the overlay is drawing, shown where the overlay already is.
+        // Keeping it local deletes the state, the effect, and the ordering.
+        <span class="cortex-resize-readout cortex-resize-readout--error">{probeError}</span>
+      )}
+      {resizePreview && (
+        // Sits with the label rather than following the dragged edge: the edge
+        // is where the pointer already is, and a badge under the cursor is the
+        // one thing guaranteed to be occluded by it.
+        <span class="cortex-resize-readout">{resizePreview.label}</span>
+      )}
       {showLens && (
         <div
           ref={lensRef}

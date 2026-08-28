@@ -1,4 +1,5 @@
 import { isNonEditable } from './classify-non-editable.js'
+import { consumeClickSwallow } from './gesture-click-guard.js'
 
 export interface SelectionHandle {
   /** Remove all event listeners */
@@ -98,6 +99,23 @@ export function initSelection(
   }
 
   function handleClick(event: MouseEvent): void {
+    // FIRST, before every other gate.
+    //
+    // A completed drag arms this, and the click the browser synthesises
+    // afterwards is not a user click — acting on it would change the selection
+    // as a side effect of a resize or reorder. This listener is registered
+    // before either gesture's own click listener and fires first, so the
+    // gesture's `stopPropagation` cannot get here in time; the guard is shared
+    // precisely so ordering stops mattering. See gesture-click-guard.ts.
+    //
+    // Ahead of the `designMode` check too: a gesture can only have run in
+    // design mode, and if the mode flipped between pointerup and click the
+    // flag must still be spent rather than left armed for a later click.
+    if (consumeClickSwallow()) {
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     if (!designMode) return
     if (isOwnUI(event)) return
     if (!interceptClicks) return

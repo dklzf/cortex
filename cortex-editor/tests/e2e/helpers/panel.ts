@@ -425,6 +425,30 @@ export async function selectElement(page: Page, selector: string): Promise<void>
 }
 
 /**
+ * Select SEVERAL elements at once (multi-selection).
+ *
+ * The bridge has exposed `selectElements` all along; nothing wrapped it, so
+ * specs needing a multi-selection reached for `selectElement` with a second
+ * argument — which the bridge ignores, silently leaving a single selection and
+ * a test that asserts nothing about multi-select.
+ *
+ * @param page - Playwright `Page` instance.
+ * @param selectors - CSS selectors, in the order the selection should hold.
+ */
+export async function selectElements(page: Page, selectors: string[]): Promise<void> {
+  await page.evaluate((sels) => {
+    const els = sels.map((s) => {
+      const el = document.querySelector<HTMLElement>(s)
+      if (!el) throw new Error(`[selectElements] ${s} not found`)
+      return el
+    })
+    const bridge = (globalThis as unknown as { __CORTEX_TEST__?: CortexTestBridge }).__CORTEX_TEST__
+    if (!bridge?.selectElements) throw new Error('[selectElements] bridge.selectElements not present')
+    bridge.selectElements(els)
+  }, selectors)
+}
+
+/**
  * Wait until Panel has committed the element-state branch — the branch that
  * renders CSS section controls alongside the StagingDriftBanner (Panel.tsx line
  * 1442). Presence of `.cortex-section-group` in the shadow root is the stable

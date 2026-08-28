@@ -1,0 +1,192 @@
+import { measureConstraintOwner, pointerDeltaToSizeDelta, type ConstraintOwnership, type ResizeEdge } from './constraint-owner.js'
+import { pinToFixed, type PinWrite } from './resize-pin.js'
+
+/**
+ * The drag state machine for a resize gesture (COR-3's consumer).
+ *
+ * A reducer over pointer facts holding no listeners and rendering nothing —
+ * the same split `reorder-drag.ts` uses, for the same reason: the part that
+ * decides what reaches source is the part whose bugs are invisible in a
+ * screenshot.
+ *
+ * ## Why ownership is measured ONCE, at press
+ *
+ * `measureConstraintOwner` PROBES: it writes an inline `!important` size,
+ * reads where the edge went, and reverts (`constraint-owner.ts`). That enqueues
+ * MutationRecords which the override manager and the HMR pipeline both watch,
+ * and it forces layout. Doing it per pointermove would fight the very overrides
+ * the drag is writing and thrash the page at 60Hz. The parent's layout rules do
+ * not change mid-drag, so one measurement is also all the information there is.
+ */
+
+/** Pixels the pointer must travel before a press becomes a resize. */
+export const RESIZE_THRESHOLD_PX = 3
+
+/**
+ * Can this edge be dragged at all?
+ *
+ * Measured, not guessed — it runs the same probe the gesture would. In normal
+ * flow an element's top-left is anchored, so changing `width` moves the RIGHT
+ * edge and the left one does not respond: `edgeResponse` is 0 and the drag has
+ * nothing to write. Measured on ordinary layouts, that is 4 of 8 handles on a
+ * plain block element and on a grid item.
+ *
+ * Offering those handles anyway means half of them exist only to produce an
+ * error banner in engine language, on the most common element in any app. The
+ * caller uses this to render only the handles that can act, so the affordance
+ * tells the truth instead of the refusal explaining it afterwards.
+ *
+ * Costs one probe per edge, which is why it is a SELECTION-time question, never
+ * a per-move one — see the note on `beginResize`.
+ */
+export function canResizeEdge(el: Element, edge: ResizeEdge): boolean {
+  const cs = getComputedStyle(el)
+  const size = Number.parseFloat(isHorizontal(edge) ? cs.width : cs.height)
+  if (!Number.isFinite(size) || size <= 0) return false
+  return measureConstraintOwner(el, edge).edgeResponse !== 0
+}
+
+export interface Pointer { x: number; y: number }
+
+export type ResizeDragState =
+  | { phase: 'idle' }
+  | {
+      phase: 'pressed'
+      element: Element
+      edge: ResizeEdge
+      ownership: ConstraintOwnership
+      origin: Pointer
+      /** The element's size along the dragged axis when the press began. */
+      startPx: number
+    }
+  | {
+      phase: 'dragging'
+      element: Element
+      edge: ResizeEdge
+      ownership: ConstraintOwnership
+      origin: Pointer
+      startPx: number
+      /** Where the element would land if released now, in CSS px. */
+      currentPx: number
+    }
+
+export const IDLE: ResizeDragState = { phase: 'idle' }
+
+/** Smallest size a drag will write. Zero and negatives are not sizes a user
+ *  means; they are what happens when the pointer crosses the far edge. */
+const MIN_PX = 1
+
+const isHorizontal = (edge: ResizeEdge): boolean => edge === 'left' || edge === 'right'
+
+/**
+ * Begin a resize press on `el`'s `edge`.
+ *
+ * Measures ownership here and nowhere else. Returns `idle` when the element has
+ * no box to resize — a detached or non-rendered node, where every subsequent
+ * number would be derived from a zero rect.
+ */
+export function beginResize(el: Element, edge: ResizeEdge, pointer: Pointer): ResizeDragState {
+  // The COMPUTED width/height, not `getBoundingClientRect()`.
+  //
+  // They are different box models and the difference is a real bug, not a
+  // rounding detail: under the default `content-box`, the rect INCLUDES padding
+  // and border while a `width:` declaration sets only the content area. So a
+  // 200px-wide element with 20px padding and a 5px border reports a rect of 250,
+  // and writing `width: 250 + 60` grows it by 110 for a 60px drag — a
+  // confidently wrong number with no error anywhere.
+  //
+  // `constraint-owner.ts` was already burned by exactly this and says so around
+  // its `cssBase` read; measuring here independently reintroduced the mix one
+  // layer up. Reading the same value the write lands in is what keeps the
+  // gesture 1:1.
+  const cs = getComputedStyle(el)
+  const startPx = Number.parseFloat(isHorizontal(edge) ? cs.width : cs.height)
+  if (!Number.isFinite(startPx) || startPx <= 0) return IDLE
+  return {
+    phase: 'pressed',
+    element: el,
+    edge,
+    ownership: measureConstraintOwner(el, edge),
+    origin: { ...pointer },
+    startPx,
+  }
+}
+
+/**
+ * Advance on pointer movement.
+ *
+ * Crossing the threshold promotes `pressed` to `dragging`. Every move recomputes
+ * from the ORIGIN rather than accumulating deltas — an accumulator drifts as
+ * rounding errors compound over a long drag, and the pointer is the only input,
+ * so there is nothing to accumulate.
+ */
+export function onResizeMove(state: ResizeDragState, pointer: Pointer): ResizeDragState {
+  if (state.phase === 'idle') return state
+
+  const dx = pointer.x - state.origin.x
+  const dy = pointer.y - state.origin.y
+  // Only travel along the DRAGGED axis counts. A vertical wobble while dragging
+  // a left edge is not intent to resize, and folding it in would make the
+  // gesture feel like it fires early and by the wrong amount.
+  const travel = isHorizontal(state.edge) ? dx : dy
+  if (state.phase === 'pressed' && Math.abs(travel) < RESIZE_THRESHOLD_PX) return state
+
+  const sizeDelta = pointerDeltaToSizeDelta(state.ownership, state.edge, travel)
+  if (sizeDelta === null) {
+    // `edgeResponse` is 0 — the element cannot be resized by this write. Hold
+    // the state so the UI can keep showing the refusal, and let the release
+    // report the reason rather than silently doing nothing.
+    return { ...state, phase: 'dragging', currentPx: state.startPx }
+  }
+
+  return {
+    ...state,
+    phase: 'dragging',
+    currentPx: Math.max(MIN_PX, state.startPx + sizeDelta),
+  }
+}
+
+export type ResizeResult =
+  | { ok: true; writes: PinWrite[] }
+  | { ok: false; reason: string }
+
+/**
+ * Release the pointer.
+ *
+ * Returns the declarations to commit, or a refusal with a reason the UI shows.
+ * `result` is undefined for a press that never crossed the threshold — that is
+ * a CLICK on a handle and must not write anything.
+ */
+export function onResizeUp(state: ResizeDragState): { state: ResizeDragState; result?: ResizeResult } {
+  if (state.phase !== 'dragging') return { state: IDLE }
+
+  // Dragging out and back is not an edit.
+  //
+  // Crossing the threshold makes it a drag permanently — there is no path back
+  // to `pressed` — so releasing at the size you started from still reached
+  // `pinToFixed` and wrote an explicit pixel size. For an auto-sized block, a
+  // flex child, or a grid item that ALSO means `flex: none` or a self-alignment
+  // override, permanently replacing responsive behaviour after a gesture the
+  // user watched change nothing.
+  //
+  // Compared at the ROUNDED value, because that is what gets written: a
+  // sub-pixel difference the user cannot see must not count as intent either.
+  //
+  // Gated on the edge being CAPABLE, which is not a detail. An inert edge
+  // (`edgeResponse === 0`) deliberately holds `currentPx` at `startPx` so the
+  // release can report WHY nothing moved — see `onResizeMove`. Without this
+  // condition the two cases are numerically identical and the shortcut
+  // swallows the refusal, turning "this element cannot be resized, here is the
+  // reason" back into the silent no-op the refusal exists to replace.
+  if (state.ownership.edgeResponse !== 0
+    && Math.round(state.currentPx) === Math.round(state.startPx)) {
+    return { state: IDLE }
+  }
+
+  return { state: IDLE, result: pinToFixed(state.ownership, state.edge, state.currentPx) }
+}
+
+/** Abandon — Escape, `pointercancel`, blur. Never writes. */
+export function onResizeCancel(): ResizeDragState {
+  return IDLE
+}

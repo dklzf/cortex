@@ -108,15 +108,19 @@ export class CSSOverrideManager {
   }
 
   /** Apply an override (instant preview). Rejects invalid property names or values.
-   *  Pass `pseudo` ('::before' | '::after') to target a pseudo-element. */
-  set(source: string, property: string, value: string, pseudo?: '::before' | '::after'): void {
+   *  Pass `pseudo` ('::before' | '::after') to target a pseudo-element.
+   *
+   *  Returns whether the override was applied. A rejection used to be visible
+   *  only as a `console.warn`, so every caller — including gestures with no
+   *  other feedback channel — reported success for a write that never landed. */
+  set(source: string, property: string, value: string, pseudo?: '::before' | '::after'): boolean {
     if (!VALID_PROPERTY.test(property)) {
       console.warn('[cortex] Override rejected: invalid property name:', property)
-      return
+      return false
     }
     if (!VALID_VALUE.test(value) || REJECT_URL.test(value) || REJECT_COMMENT.test(value)) {
       console.warn('[cortex] Override rejected: invalid value for', property, ':', value)
-      return
+      return false
     }
 
     const key = `${source}${pseudo ?? ''}`
@@ -130,6 +134,7 @@ export class CSSOverrideManager {
     trace('set', { source, property, value, pseudo })
     this.isDirty = true
     this.scheduleRebuild()
+    return true
   }
 
   /** Ring-buffer the last N values set for this source+property+pseudo key.

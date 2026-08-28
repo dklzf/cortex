@@ -2000,3 +2000,36 @@ describe('OverrideManager dirty-flag short-circuit (ZF0-1835)', () => {
     expect(manager._isDirtyForTesting).toBe(false)
   })
 })
+
+describe('CSSOverrideManager.set — reporting rejection', () => {
+  let manager: CSSOverrideManager
+
+  beforeEach(() => { manager = new CSSOverrideManager() })
+  afterEach(() => { manager.dispose() })
+
+  /**
+   * `set` used to return void, so a rejected override was visible only as a
+   * `console.warn`. Every caller reported success for a write that never
+   * landed — including the resize gesture, which has no other feedback channel
+   * because the element does not move until pointerup.
+   */
+  it('returns false for a value the validator rejects, and writes nothing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(manager.set('a.tsx:1:1', 'width', 'url(javascript:alert(1))')).toBe(false)
+    // The report and the effect must agree — a `false` that still wrote would
+    // be worse than the silent version.
+    expect(manager.get('a.tsx:1:1', 'width')).toBeUndefined()
+    warn.mockRestore()
+  })
+
+  it('returns false for a property name the validator rejects', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(manager.set('a.tsx:1:1', 'width;color', '10px')).toBe(false)
+    warn.mockRestore()
+  })
+
+  it('returns true when the override is applied', () => {
+    expect(manager.set('a.tsx:1:1', 'width', '300px')).toBe(true)
+    expect(manager.get('a.tsx:1:1', 'width')).toBe('300px')
+  })
+})

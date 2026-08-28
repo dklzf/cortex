@@ -236,6 +236,19 @@ export interface PanelProps {
   /** Ref written by Panel — CortexApp calls it to flush pending coalesced commits
    *  before undo (microtask commits haven't fired yet when blur+undo runs synchronously). */
   flushCommitRef?: { current: (() => void) | null }
+  /** Ref written by Panel so a window-level gesture (the resize drag) can stage
+   *  through the SAME path the panel uses when the user types a value.
+   *
+   *  Not test-gated, unlike stageEditRef/commitEditRef below: this is a
+   *  production seam. Routing the drag through `applyOverride` is what makes
+   *  drag-resize and type-resize produce the same edit — shared-class fan-out
+   *  ("Editing all N", COR-12), multi-select, pseudo handling, phantom guards,
+   *  and same-tick coalescing into ONE undo entry. Re-implementing any of that
+   *  is how the two paths silently diverge. */
+  applyOverrideRef?: { current: ((property: string, value: string, commitRender: boolean) => boolean) | null }
+  /** The elements `applyOverride` would currently write to. Same non-gated
+   *  shape as `applyOverrideRef`; see `resolveFanOutTargets`. */
+  fanOutTargetsRef?: { current: (() => Element[]) | null }
   /** TEST-ONLY ref written by Panel — allows the e2e test bridge to directly
    *  append a PendingEdit to the staging buffer without going through the scrub UI.
    *  Only populated when __CORTEX_TEST_BUILD__ is true (DCE'd from prod bundles).
@@ -321,6 +334,8 @@ export function Panel({
   panelPointerCancel,
   commandStack,
   flushCommitRef,
+  applyOverrideRef,
+  fanOutTargetsRef,
   undoInProgressRef,
   channel,
   agentConnected,
@@ -1103,6 +1118,7 @@ export function Panel({
     }
   }, [flushCommitRef, commitScrub])
 
+
   // TEST-ONLY: expose buffer.append via stageEditRef so e2e specs can seed
   // the staging buffer directly (Apply button lifecycle tests). Follows the
   // same pattern as flushCommitRef — Panel owns the assignment, CortexApp
@@ -1180,12 +1196,54 @@ export function Panel({
 
   // Scrub phase: captures previousValue on first touch per property, applies override.
   // On commit (commitRender=true): delegates to commitScrub() for atomic command creation.
-  const applyOverride = useCallback((property: string, value: string, commitRender: boolean) => {
+  /**
+   * Who this gesture writes to.
+   *
+   * Extracted from `applyOverride` so the resize gesture can see the SAME set
+   * BEFORE it writes. It measured constraint ownership for one element; if the
+   * write is about to reach five, whether that measurement describes them too
+   * is a question only answerable with this list in hand.
+   */
+  const resolveFanOutTargets = useCallback((): Element[] => {
+    const isMulti = selectedElements.length > 1
+    const isAll = sharedInfo && editScope === 'all'
+    if (isMulti && isAll) {
+      const seen = new Set<Element>()
+      for (const sel of selectedElements) {
+        if (!seen.has(sel)) seen.add(sel)
+        try {
+          const shared = detectSharedClasses(sel)
+          if (shared) for (const sib of shared.elements) seen.add(sib)
+        } catch {
+          // detectSharedClasses can throw DOMException SecurityError on
+          // cross-origin querySelector — fall through with just selectedElements.
+        }
+      }
+      return Array.from(seen)
+    }
+    if (isMulti) return selectedElements
+    if (isAll) return sharedInfo!.elements
+    return element ? [element] : []
+  }, [selectedElements, sharedInfo, editScope, element])
+
+  /**
+   * Returns whether `element` now carries `value` for `property`.
+   *
+   * NOT "did I execute a write" — the phantom-recommit guard below returns
+   * early having VERIFIED the value is already in place, and that is a success
+   * for any caller asking "did my edit land". Only the genuine drops (undo in
+   * flight, no element, a value the override manager rejects) are `false`.
+   *
+   * The distinction is load-bearing for the resize gesture, which is the first
+   * caller to read this: treating the phantom guard as failure would show a
+   * refusal every time a user dragged back to a size they had already set.
+   */
+  const applyOverride = useCallback((property: string, value: string, commitRender: boolean): boolean => {
     // Suppress phantom re-edits triggered by Preact re-renders after undo/redo.
     // Preact's setTimeout-based batching fires AFTER the keyboard handler completes,
     // causing section inputs to re-render with new values and fire onChange.
-    if (undoInProgressRef?.current) return
-    if (!element) return
+    if (undoInProgressRef?.current) return false
+    if (!element) return false
     const primaryTarget = getElementEditTarget(element)
     const source = primaryTarget.source
     const pseudo = activePseudo !== 'element' ? activePseudo : undefined
@@ -1203,7 +1261,9 @@ export function Panel({
         const currentOverride = overrideManager.get(source, property, pseudo)
         if (currentOverride === value) {
           scrubPreviousRef.current.delete(prevKey)
-          return
+          // Already there — see this callback's doc comment on why this is
+          // reported as success rather than a drop.
+          return true
         }
         // Override was removed externally — stale guard entry, clear it
         lastCommitValueRef.current.delete(prevKey)
@@ -1224,27 +1284,12 @@ export function Panel({
     //   the live preview misses what `commitScrub`'s instanceSources will dispatch
     //   to the server, producing preview/apply divergence.
     // Single-select + scope='instance': apply to the primary element only.
-    const fanOutTargets: Element[] = (() => {
-      const isMulti = selectedElements.length > 1
-      const isAll = sharedInfo && editScope === 'all'
-      if (isMulti && isAll) {
-        const seen = new Set<Element>()
-        for (const sel of selectedElements) {
-          if (!seen.has(sel)) seen.add(sel)
-          try {
-            const shared = detectSharedClasses(sel)
-            if (shared) for (const sib of shared.elements) seen.add(sib)
-          } catch {
-            // detectSharedClasses can throw DOMException SecurityError on
-            // cross-origin querySelector — fall through with just selectedElements.
-          }
-        }
-        return Array.from(seen)
-      }
-      if (isMulti) return selectedElements
-      if (isAll) return sharedInfo!.elements
-      return element ? [element] : []
-    })()
+    // Set false by any target the override manager rejects. Returned at the
+    // end so a caller with no other feedback channel — a drag, which shows
+    // nothing until release — can tell "applied" from "silently discarded".
+    let applied = true
+
+    const fanOutTargets = resolveFanOutTargets()
 
     for (const el of fanOutTargets) {
       const elSource = getElementEditTarget(el).source
@@ -1256,7 +1301,10 @@ export function Panel({
       // `sharedInfo.elements`, a flat-query snapshot that need not contain a
       // shadow-hosted `element`.
       capturePrevious(el, elSource, property, pseudo, elPrevKey)
-      overrideManager.set(elSource, property, value, pseudo)
+      // EVERY target must land, not just the primary. A fan-out where one
+      // sibling's write is rejected leaves the group visibly inconsistent, and
+      // that is precisely the state a caller needs to hear about.
+      if (!overrideManager.set(elSource, property, value, pseudo)) applied = false
     }
 
     if (commitRender) {
@@ -1271,7 +1319,8 @@ export function Panel({
         })
       }
     }
-  }, [selectedElements, element, overrideManager, activePseudo, sharedInfo, editScope, commitScrub, capturePrevious])
+    return applied
+  }, [selectedElements, element, overrideManager, activePseudo, sharedInfo, editScope, commitScrub, capturePrevious, resolveFanOutTargets])
 
   const handleCommit = useCallback((c: SectionChange) => applyOverride(c.property, c.value, true), [applyOverride])
   const handleScrub = useCallback((c: SectionChange) => applyOverride(c.property, c.value, false), [applyOverride])
@@ -1294,6 +1343,27 @@ export function Panel({
     }
   // applyOverride is stable (useCallback) — safe dep.
   }, [commitEditRef, applyOverride])
+
+  // Expose applyOverride so the resize gesture stages through the SAME path as
+  // typing a value. Mirrors flushCommitRef exactly, including nulling on
+  // cleanup — a stale ref would let a gesture write through a Panel that has
+  // unmounted, against an element that is no longer selected.
+  useEffect(() => {
+    if (applyOverrideRef) {
+      applyOverrideRef.current = applyOverride
+      return () => { applyOverrideRef.current = null }
+    }
+  }, [applyOverrideRef, applyOverride])
+
+  // Same non-gated ref pattern, for the same reason: the resize gesture needs
+  // the fan-out set at release, and capturing it once would go stale the moment
+  // the selection or the scope changed.
+  useEffect(() => {
+    if (fanOutTargetsRef) {
+      fanOutTargetsRef.current = resolveFanOutTargets
+      return () => { fanOutTargetsRef.current = null }
+    }
+  }, [fanOutTargetsRef, resolveFanOutTargets])
 
   /**
    * Dispatch a className mutation (classOp) to the server, optionally followed
