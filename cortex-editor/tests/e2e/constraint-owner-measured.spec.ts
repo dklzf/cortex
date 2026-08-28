@@ -440,14 +440,19 @@ test.describe('round-1 review: the probe must not be fooled by the page', () => 
   test('a probe that tips a flex line into wrapping reports UNKNOWN, not a number', async ({ page }) => {
     // +16px pushes these two 145px items onto separate lines, and every
     // measurement after that describes an arrangement the user is not dragging
-    // in — the edge can jump tens of pixels the wrong way. `probeConstraint`
-    // returns null and the caller falls back rather than inventing a ratio.
+    // in — the edge can jump tens of pixels the wrong way.
+    //
+    // Was `null`, which meant "no measurement available" and sent the caller to
+    // the PREDICTIVE FALLBACK — a confident 1:1 answer built from geometry this
+    // branch had just rejected. Now a named sentinel the caller must honour, so
+    // the assertion is on the name: `null` and `'unstable'` are different
+    // instructions and only one of them is right here.
     const probe = await page.evaluate(() => {
       const el = document.getElementById('wrapChild')!
       return (window as unknown as { CO: { probeConstraint: (n: Element, e: string) => unknown } })
         .CO.probeConstraint(el, 'right')
     })
-    expect(probe).toBeNull()
+    expect(probe).toBe('unstable')
   })
 
   test('a SKEWED element isolates the transform guard — the case rotation cannot', async ({ page }) => {
@@ -714,7 +719,16 @@ test.describe('measureConstraintOwner — the probe always cleans up after itsel
     })
 
     expect(result.thrown).toBe(true)
-    expect(result.threwOut).toBe(false)
+    // PROPAGATES now, rather than being swallowed. A cleanup failure means the
+    // probe's `!important` size may still be installed — the element has been
+    // resized outside the override manager and outside undo. Reporting a
+    // successful measurement there would let the gesture build on a corrupted
+    // page. Both callers catch this: `canResizeEdge` hides the handle, and the
+    // listener's `begin` surfaces a refusal.
+    expect(result.threwOut).toBe(true)
+    // Every cleanup step still ran before the throw — that is the whole point
+    // of the `finally`, and it is what keeps a failed size restore from also
+    // stranding `transition: none !important` on the element.
     expect(result.leftover).toBe('')
   })
 })
@@ -763,5 +777,64 @@ test.describe('measureConstraintOwner — a rotated element refuses instead of g
       return out
     })
     expect(r.edgeResponse).toBeGreaterThan(0)
+  })
+})
+
+test.describe('measureConstraintOwner — indeterminate probes must not become guesses', () => {
+  const own = (page: import('@playwright/test').Page, build: string) => page.evaluate((src) => {
+    const host = document.createElement('div')
+    host.innerHTML = src
+    document.body.appendChild(host)
+    const target = host.querySelector('#t')!
+    const out = (window as unknown as { CO: { measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number; reason: string } } })
+      .CO.measureConstraintOwner(target, 'right')
+    host.remove()
+    return out
+  }, build)
+
+  test('the individual `rotate` property is caught, not just `transform`', async ({ page }) => {
+    // `rotate: 45deg` leaves computed `transform` reading "none", so a check
+    // that only read `transform` passed it through and measured the wrong axis.
+    const r = await own(page, `<div style="display:block;width:600px">
+      <div id="t" style="width:200px;height:60px;rotate:45deg"></div></div>`)
+    expect(r.edgeResponse).toBe(0)
+    expect(r.reason).toMatch(/rotated or skewed/)
+  })
+
+  test('a rotation on an ANCESTOR is caught', async ({ page }) => {
+    // The element's own transform says nothing about a parent's. The rect is in
+    // screen space, so the confusion is identical.
+    const r = await own(page, `<div style="display:block;width:600px;transform:rotate(30deg)">
+      <div id="t" style="width:200px;height:60px"></div></div>`)
+    expect(r.edgeResponse).toBe(0)
+    expect(r.reason).toMatch(/rotated or skewed/)
+  })
+
+  test('an axis-aligned ancestor transform still measures', async ({ page }) => {
+    // The refusal has to stay narrow: scale and translate keep the axes
+    // aligned, and refusing them would kill handles on any zoomed container.
+    const r = await own(page, `<div style="display:block;width:600px;transform:scale(1.2) translateY(4px)">
+      <div id="t" style="width:200px;height:60px"></div></div>`)
+    expect(r.edgeResponse).toBeGreaterThan(0)
+  })
+
+  test('a running animation refuses instead of falling back to prediction', async ({ page }) => {
+    const r = await page.evaluate(() => {
+      const host = document.createElement('div')
+      host.style.cssText = 'display:block;width:600px'
+      const el = document.createElement('div')
+      el.style.cssText = 'width:200px;height:60px'
+      host.appendChild(el)
+      document.body.appendChild(host)
+      el.animate([{ opacity: 1 }, { opacity: 0.5 }], { duration: 100000, iterations: Infinity })
+      const out = (window as unknown as { CO: { measureConstraintOwner: (n: Element, e: string) => { edgeResponse: number; reason: string } } })
+        .CO.measureConstraintOwner(el, 'right')
+      host.remove()
+      return out
+    })
+    // Previously this returned the predictive fallback: element-owned at 1:1,
+    // a confident number derived from frames the probe had already rejected.
+    expect(r.edgeResponse).toBe(0)
+    expect(r.reason).toMatch(/animating/)
   })
 })

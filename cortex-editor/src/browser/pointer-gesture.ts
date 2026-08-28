@@ -13,6 +13,8 @@
  * reducer decides that; this only decides when to call it.
  */
 
+import { armClickSwallow, consumeClickSwallow, disarmClickSwallow } from './gesture-click-guard.js'
+
 /** A gesture's own state. Only `phase: 'idle'` is interpreted here. */
 export interface GesturePhase { phase: string }
 
@@ -74,7 +76,6 @@ export function installPointerGesture<S extends GesturePhase, R>(
   let activePointerId: number | null = null
   // Set between a completed drag and the click the browser synthesises after
   // it, so that click can be swallowed exactly once.
-  let swallowNextClick = false
   // What the pressed element's inline `touch-action` was before we pinned it.
   let priorTouchAction: { el: HTMLElement; value: string } | null = null
 
@@ -103,7 +104,7 @@ export function installPointerGesture<S extends GesturePhase, R>(
     // way to clear it, the flag would sit armed indefinitely and swallow some
     // unrelated click minutes later. A press starting a NEW interaction proves
     // the old one's click is never coming.
-    swallowNextClick = false
+    disarmClickSwallow()
     if (state.phase !== 'idle') return
     if (event.button !== 0) return // primary button only; right-click opens menus
     if (isOwnUI(event)) return
@@ -192,14 +193,18 @@ export function installPointerGesture<S extends GesturePhase, R>(
       // (and only the next) get consumed.
       event.preventDefault()
       event.stopPropagation()
-      swallowNextClick = true
+      armClickSwallow()
     }
     if (result) onResult?.(result, producing)
   }
 
   function handleClick(event: MouseEvent): void {
-    if (!swallowNextClick) return
-    swallowNextClick = false
+    // May legitimately be false here: the SELECTION listener is registered
+    // earlier on the same target and in the same phase, so in the assembled app
+    // it usually consumes the flag first and swallows the click itself. This
+    // path still matters for callers that install a gesture without cortex's
+    // selection layer (unit harnesses, and any future embedder).
+    if (!consumeClickSwallow()) return
     event.preventDefault()
     event.stopPropagation()
   }
